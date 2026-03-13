@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "code-review-agent"
+version = "0.1.0"
+description = "Multi-agent code review CLI using NVIDIA Nemotron 3 Super"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.0",
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "httpx",
+    "openai",
+    "pygithub",
+    "structlog",
+]
+
+[project.scripts]
+code-review-agent = "code_review_agent.main:app"
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "mypy",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "pytest-asyncio",
+    "respx",
+    "detect-secrets",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/code_review_agent"]
+
+[tool.ruff]
+line-length = 99
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "UP",
+    "B",
+    "SIM",
+    "TCH",
+    "RUF",
+    "ANN",
+    "S",
+    "PT",
+]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S106"]
+"src/code_review_agent/main.py" = ["B008"]
+"src/code_review_agent/models.py" = ["TC003"]
+
+[tool.mypy]
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=code_review_agent --cov-report=term-missing"
