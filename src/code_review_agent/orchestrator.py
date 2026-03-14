@@ -35,6 +35,9 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+# Severity ordering: index 0 = lowest. Used for risk level validation.
+_SEVERITY_ORDER: list[Severity] = [Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL]
+
 _SYNTHESIS_SYSTEM_PROMPT = (
     "You are a senior engineering lead synthesizing code review results from "
     "multiple specialized review agents. You have received findings from security, "
@@ -112,13 +115,14 @@ class Orchestrator:
             )
 
         synthesis = self._synthesize(agent_results=agent_results)
+        validated_risk = self._validate_risk_level(synthesis.risk_level, agent_results)
 
         return ReviewReport(
             pr_url=review_input.pr_url,
             reviewed_at=datetime.now(tz=UTC),
             agent_results=agent_results,
             overall_summary=synthesis.overall_summary,
-            risk_level=synthesis.risk_level,
+            risk_level=validated_risk,
         )
 
     def _scan_for_injection(self, review_input: ReviewInput) -> list[Finding]:
@@ -336,6 +340,18 @@ class Orchestrator:
 
     def _synthesize(self, *, agent_results: list[AgentResult]) -> SynthesisResponse:
         """Use the LLM to produce an overall summary and risk level."""
+        all_findings = [f for r in agent_results for f in r.findings]
+
+        # Compute stats to ground the LLM and prevent hallucination
+        severity_counts = {s.value: 0 for s in Severity}
+        for finding in all_findings:
+            severity_counts[finding.severity.value] += 1
+
+        max_severity = max(
+            (f.severity for f in all_findings),
+            default=Severity.LOW,
+        )
+
         findings_summary_parts: list[str] = []
         for result in agent_results:
             findings_summary_parts.append(
@@ -345,8 +361,19 @@ class Orchestrator:
                 f"Findings: {json.dumps([f.model_dump() for f in result.findings], indent=2)}"
             )
 
-        user_prompt = "Here are the results from all review agents:\n\n" + "\n\n---\n\n".join(
-            findings_summary_parts
+        stats_block = (
+            f"\n\nFinding statistics:\n"
+            f"- Total findings: {len(all_findings)}\n"
+            f"- By severity: {severity_counts}\n"
+            f"- Maximum severity: {max_severity.value}\n"
+            f"- Your risk_level MUST NOT exceed '{max_severity.value}' "
+            f"unless multiple findings justify a one-level escalation."
+        )
+
+        user_prompt = (
+            "Here are the results from all review agents:\n\n"
+            + "\n\n---\n\n".join(findings_summary_parts)
+            + stats_block
         )
 
         return self._llm_client.complete(
@@ -354,3 +381,51 @@ class Orchestrator:
             user_prompt=user_prompt,
             response_model=SynthesisResponse,
         )
+
+    def _validate_risk_level(
+        self,
+        proposed_risk: Severity,
+        agent_results: list[AgentResult],
+    ) -> Severity:
+        """Validate the LLM-proposed risk level against actual findings.
+
+        Rules:
+        1. Zero findings -> LOW (always).
+        2. Proposed risk may exceed max finding severity by at most 1 level.
+        3. If proposed risk exceeds the allowed level, override and log.
+        """
+        all_findings = [f for r in agent_results for f in r.findings]
+
+        # Rule 1: no findings = LOW
+        if not all_findings:
+            if proposed_risk != Severity.LOW:
+                logger.warning(
+                    "overriding risk level, no findings",
+                    proposed=proposed_risk.value,
+                    validated=Severity.LOW.value,
+                )
+            return Severity.LOW
+
+        max_severity = max(
+            (f.severity for f in all_findings),
+            key=lambda s: _SEVERITY_ORDER.index(s),
+        )
+
+        max_index = _SEVERITY_ORDER.index(max_severity)
+        proposed_index = _SEVERITY_ORDER.index(proposed_risk)
+
+        # Rule 2: allow at most 1 level escalation
+        allowed_index = min(max_index + 1, len(_SEVERITY_ORDER) - 1)
+
+        if proposed_index <= allowed_index:
+            return proposed_risk
+
+        # Rule 3: override
+        allowed_risk = _SEVERITY_ORDER[allowed_index]
+        logger.warning(
+            "overriding hallucinated risk level",
+            proposed=proposed_risk.value,
+            max_finding_severity=max_severity.value,
+            validated=allowed_risk.value,
+        )
+        return allowed_risk
