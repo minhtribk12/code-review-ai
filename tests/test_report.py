@@ -8,6 +8,7 @@ from rich.console import Console
 
 from code_review_agent.models import (
     AgentResult,
+    AgentStatus,
     Finding,
     ReviewReport,
 )
@@ -196,3 +197,95 @@ class TestSaveReport:
         content = output_file.read_text()
         assert "old content" not in content
         assert "# Code Review Report" in content
+
+
+# ---------------------------------------------------------------------------
+# Failed agents in report (CRA-29)
+# ---------------------------------------------------------------------------
+
+
+def _make_report_with_failed_agent() -> ReviewReport:
+    """Build a report with 1 successful + 1 failed agent."""
+    return ReviewReport(
+        reviewed_at=datetime.now(tz=UTC),
+        agent_results=[
+            AgentResult(
+                agent_name="security",
+                findings=[
+                    Finding(
+                        severity="medium",
+                        category="test",
+                        title="Test finding",
+                        description="Desc.",
+                    ),
+                ],
+                summary="Found 1 issue.",
+                execution_time_seconds=1.0,
+            ),
+            AgentResult(
+                agent_name="performance",
+                findings=[],
+                summary="",
+                execution_time_seconds=0.5,
+                status=AgentStatus.FAILED,
+                error_message="LLM returned empty response",
+            ),
+        ],
+        overall_summary="Partial review.",
+        risk_level="medium",
+    )
+
+
+class TestFailedAgentsRich:
+    """Test failed agent rendering in Rich output."""
+
+    def test_header_shows_warning(self) -> None:
+        report = _make_report_with_failed_agent()
+        output = _capture_rich(report)
+        assert "WARNING" in output
+        assert "1 of 2 agents failed" in output
+
+    def test_failed_agent_shows_error(self) -> None:
+        report = _make_report_with_failed_agent()
+        output = _capture_rich(report)
+        assert "PERFORMANCE" in output
+        assert "FAILED" in output
+        assert "empty response" in output
+
+    def test_successful_agent_shows_normally(self) -> None:
+        report = _make_report_with_failed_agent()
+        output = _capture_rich(report)
+        assert "SECURITY" in output
+        assert "findings" in output
+
+    def test_no_failed_agents_no_warning(self, sample_review_report: ReviewReport) -> None:
+        output = _capture_rich(sample_review_report)
+        assert "WARNING" not in output
+        assert "FAILED" not in output
+
+
+class TestFailedAgentsMarkdown:
+    """Test failed agent rendering in markdown output."""
+
+    def test_header_shows_warning(self) -> None:
+        report = _make_report_with_failed_agent()
+        md = render_report_markdown(report)
+        assert "WARNING" in md
+        assert "1 of 2 agents failed" in md
+
+    def test_failed_agent_section(self) -> None:
+        report = _make_report_with_failed_agent()
+        md = render_report_markdown(report)
+        assert "Performance Agent (FAILED)" in md
+        assert "empty response" in md
+
+    def test_successful_agent_section(self) -> None:
+        report = _make_report_with_failed_agent()
+        md = render_report_markdown(report)
+        assert "Security Agent" in md
+        assert "1 findings" in md
+
+    def test_no_failed_agents_no_warning(self, sample_review_report: ReviewReport) -> None:
+        md = render_report_markdown(sample_review_report)
+        assert "WARNING" not in md
+        assert "FAILED" not in md

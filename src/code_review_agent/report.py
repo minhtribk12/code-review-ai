@@ -6,12 +6,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from code_review_agent.models import Severity
+from code_review_agent.models import AgentStatus, Severity
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from code_review_agent.models import ReviewReport
+    from code_review_agent.models import AgentResult, ReviewReport
 
 _SEVERITY_COLORS: dict[Severity, str] = {
     Severity.CRITICAL: "bold red",
@@ -23,9 +23,15 @@ _SEVERITY_COLORS: dict[Severity, str] = {
 _SEVERITY_ORDER: list[Severity] = list(Severity)
 
 
+def _failed_agents(report: ReviewReport) -> list[AgentResult]:
+    """Return agent results with status FAILED."""
+    return [r for r in report.agent_results if r.status == AgentStatus.FAILED]
+
+
 def render_report_rich(report: ReviewReport) -> None:
     """Print the review report to the terminal using Rich formatting."""
     console = Console()
+    failed = _failed_agents(report)
 
     # Header panel.
     header_lines: list[str] = [
@@ -38,6 +44,12 @@ def render_report_rich(report: ReviewReport) -> None:
     totals = report.total_findings
     counts_str = " | ".join(f"{sev}: {totals[sev]}" for sev in _SEVERITY_ORDER)
     header_lines.append(f"Findings: {counts_str}")
+
+    if failed:
+        total_agents = len(report.agent_results)
+        header_lines.append(
+            f"WARNING: {len(failed)} of {total_agents} agents failed. Review is incomplete."
+        )
 
     console.print(
         Panel(
@@ -52,12 +64,17 @@ def render_report_rich(report: ReviewReport) -> None:
 
     # Per-agent results.
     for result in report.agent_results:
-        console.print(
-            f"[bold]{result.agent_name.upper()} Agent[/bold] "
-            f"({len(result.findings)} findings, "
-            f"{result.execution_time_seconds:.1f}s)"
-        )
-        console.print(f"  {result.summary}\n")
+        if result.status == AgentStatus.FAILED:
+            console.print(f"[bold red]{result.agent_name.upper()} Agent (FAILED)[/bold red]")
+            error_msg = result.error_message or "Unknown error"
+            console.print(f"  [red]Error: {error_msg}[/red]\n")
+        else:
+            console.print(
+                f"[bold]{result.agent_name.upper()} Agent[/bold] "
+                f"({len(result.findings)} findings, "
+                f"{result.execution_time_seconds:.1f}s)"
+            )
+            console.print(f"  {result.summary}\n")
 
     # Findings table grouped by severity.
     all_findings = [
@@ -102,6 +119,7 @@ def render_report_rich(report: ReviewReport) -> None:
 def render_report_markdown(report: ReviewReport) -> str:
     """Render the review report as a markdown string."""
     lines: list[str] = ["# Code Review Report", ""]
+    failed = _failed_agents(report)
 
     if report.pr_url is not None:
         lines.append(f"**PR:** {report.pr_url}")
@@ -111,11 +129,28 @@ def render_report_markdown(report: ReviewReport) -> str:
     totals = report.total_findings
     counts_str = " | ".join(f"{sev}: {totals[sev]}" for sev in _SEVERITY_ORDER)
     lines.append(f"**Findings:** {counts_str}")
+
+    if failed:
+        total_agents = len(report.agent_results)
+        lines.append(
+            f"**WARNING:** {len(failed)} of {total_agents} agents failed. Review is incomplete."
+        )
+
     lines.extend(["", "## Overall Summary", "", report.overall_summary, ""])
 
     # Per-agent sections.
     for result in report.agent_results:
-        lines.append(f"## {result.agent_name.replace('_', ' ').title()} Agent")
+        title = result.agent_name.replace("_", " ").title()
+
+        if result.status == AgentStatus.FAILED:
+            lines.append(f"## {title} Agent (FAILED)")
+            lines.append("")
+            error_msg = result.error_message or "Unknown error"
+            lines.append(f"**Error:** {error_msg}")
+            lines.append("")
+            continue
+
+        lines.append(f"## {title} Agent")
         lines.append("")
         lines.append(
             f"*{len(result.findings)} findings | "
