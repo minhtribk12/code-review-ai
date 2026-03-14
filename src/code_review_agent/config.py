@@ -5,6 +5,7 @@ from enum import StrEnum
 from pydantic import Field, SecretStr, computed_field
 from pydantic_settings import BaseSettings
 
+from code_review_agent.dedup import DedupStrategy
 from code_review_agent.token_budget import TokenTier
 
 
@@ -44,6 +45,7 @@ class Settings(BaseSettings):
     token_tier: TokenTier = TokenTier.FREE
     max_prompt_tokens: int | None = None
     rate_limit_rpm: int | None = None
+    dedup_strategy: DedupStrategy = DedupStrategy.EXACT
     github_token: SecretStr | None = None
     log_level: LogLevel = LogLevel.INFO
     max_concurrent_agents: int = 4

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from code_review_agent.agents import AGENT_REGISTRY, ALL_AGENT_NAMES
+from code_review_agent.dedup import deduplicate_agent_results
 from code_review_agent.models import (
     AgentResult,
     AgentStatus,
@@ -96,6 +97,10 @@ class Orchestrator:
 
         if injection_findings:
             agent_results = self._inject_security_findings(agent_results, injection_findings)
+
+        agent_results = deduplicate_agent_results(
+            agent_results, strategy=self._settings.dedup_strategy
+        )
 
         successful_results = [r for r in agent_results if r.status != AgentStatus.FAILED]
 
