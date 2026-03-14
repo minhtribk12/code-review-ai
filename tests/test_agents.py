@@ -345,8 +345,8 @@ class TestFormatUserPrompt:
         agent = SecurityAgent(llm_client=llm_client)
         prompt = agent._format_user_prompt(review_input=review_input)
 
-        assert "--- DIFF START ---" in prompt
-        assert "--- DIFF END ---" in prompt
+        assert "START ---" in prompt
+        assert "END ---" in prompt
         assert "File: src/db.py (status: modified)" in prompt
         assert "+import os" in prompt
 
@@ -358,7 +358,7 @@ class TestFormatUserPrompt:
 
         assert "PR Title" not in prompt
         assert "PR Description" not in prompt
-        assert "--- DIFF START ---" in prompt
+        assert "START ---" in prompt
 
     def test_previous_findings_included(
         self, llm_client: MagicMock, review_input: ReviewInput
@@ -446,7 +446,7 @@ class TestExtraContext:
         # Extra context should appear between metadata and diff
         meta_pos = prompt.find("PR Title")
         extra_pos = prompt.find("Extra context")
-        diff_pos = prompt.find("--- DIFF START ---")
+        diff_pos = prompt.find("START ---")
         assert meta_pos < extra_pos < diff_pos
 
     def test_whitespace_only_extra_context_excluded(

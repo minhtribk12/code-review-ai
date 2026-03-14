@@ -10,12 +10,15 @@ import structlog
 from code_review_agent.agents import AGENT_REGISTRY, ALL_AGENT_NAMES
 from code_review_agent.models import (
     AgentResult,
+    Confidence,
     DiffFile,
+    Finding,
     ReviewInput,
     ReviewReport,
     Severity,
     SynthesisResponse,
 )
+from code_review_agent.prompt_security import detect_suspicious_patterns
 from code_review_agent.token_budget import (
     CharBasedEstimator,
     TokenEstimator,
@@ -74,6 +77,7 @@ class Orchestrator:
             agent_names: Names of agents to run. Defaults to all registered agents.
         """
         review_input = self._apply_token_budget(review_input)
+        injection_findings = self._scan_for_injection(review_input)
 
         selected_names = agent_names or default_agents_for_tier(self._settings.token_tier)
         agents: list[BaseAgent] = self._build_agents(selected_names)
@@ -88,6 +92,9 @@ class Orchestrator:
             agents=agents,
             review_input=review_input,
         )
+
+        if injection_findings:
+            agent_results = self._inject_security_findings(agent_results, injection_findings)
 
         successful_results = [r for r in agent_results if r.status != "failed"]
 
@@ -107,6 +114,54 @@ class Orchestrator:
             overall_summary=synthesis.overall_summary,
             risk_level=synthesis.risk_level,
         )
+
+    def _scan_for_injection(self, review_input: ReviewInput) -> list[Finding]:
+        """Scan diff content for suspicious prompt injection patterns."""
+        all_patches = "\n".join(f.patch for f in review_input.diff_files)
+        if not all_patches:
+            return []
+
+        patterns = detect_suspicious_patterns(all_patches)
+        findings: list[Finding] = []
+
+        for pattern in patterns:
+            if not pattern.is_high_confidence:
+                continue
+            findings.append(
+                Finding(
+                    severity=Severity.LOW,
+                    category="Prompt Security",
+                    title=f"Potential prompt injection: {pattern.name}",
+                    description=(
+                        f"The diff contains text matching a known injection pattern: "
+                        f"'{pattern.matched_text}'. This may be legitimate code, but "
+                        f"could also be an attempt to manipulate the review."
+                    ),
+                    confidence=Confidence.LOW,
+                )
+            )
+
+        return findings
+
+    def _inject_security_findings(
+        self,
+        agent_results: list[AgentResult],
+        injection_findings: list[Finding],
+    ) -> list[AgentResult]:
+        """Add injection detection findings to the first successful agent result."""
+        for i, result in enumerate(agent_results):
+            if result.status != "failed":
+                merged_findings = list(result.findings) + injection_findings
+                agent_results[i] = AgentResult(
+                    agent_name=result.agent_name,
+                    findings=merged_findings,
+                    summary=result.summary,
+                    execution_time_seconds=result.execution_time_seconds,
+                    status=result.status,
+                    error_message=result.error_message,
+                )
+                return agent_results
+        return agent_results
 
     def _build_agents(self, agent_names: list[str]) -> list[BaseAgent]:
         """Instantiate agents by name from the registry."""
