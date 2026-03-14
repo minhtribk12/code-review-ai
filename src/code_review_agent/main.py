@@ -172,6 +172,7 @@ def _build_review_input(
             repo=repo,
             pr_number=pr_number,
             token=token,
+            max_files=settings.max_pr_files,
         )
 
     if diff is not None:

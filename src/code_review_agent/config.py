@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     rate_limit_rpm: int | None = None
     dedup_strategy: DedupStrategy = DedupStrategy.EXACT
     max_review_seconds: int = Field(default=300, ge=10)
+    max_pr_files: int = Field(default=200, ge=1)
     github_token: SecretStr | None = None
     log_level: LogLevel = LogLevel.INFO
     max_concurrent_agents: int = 4

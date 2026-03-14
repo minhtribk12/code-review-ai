@@ -70,9 +70,20 @@ class TestFetchPrDiff:
         files_response = MagicMock()
         files_response.json.return_value = files_json
         files_response.raise_for_status = MagicMock()
+        files_response.headers = {}
+
+        # Pagination: second page returns empty list to stop the loop
+        empty_page = MagicMock()
+        empty_page.json.return_value = []
+        empty_page.raise_for_status = MagicMock()
+        empty_page.headers = {}
 
         mock_client = MagicMock()
-        mock_client.get.side_effect = [meta_response, files_response]
+        mock_client.get.side_effect = [
+            meta_response,
+            files_response,
+            empty_page,
+        ]
         mock_client.__enter__ = MagicMock(return_value=mock_client)
         mock_client.__exit__ = MagicMock(return_value=False)
         return mock_client
