@@ -54,3 +54,6 @@ Desktop.ini
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Interactive test generated output
+interactive_tests/**/output/

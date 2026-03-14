@@ -5,7 +5,7 @@ import re
 import httpx
 import structlog
 
-from code_review_agent.models import DiffFile, ReviewInput
+from code_review_agent.models import DiffFile, DiffStatus, ReviewInput
 
 logger = structlog.get_logger(__name__)
 
@@ -66,6 +66,14 @@ def fetch_pr_diff(
     with httpx.Client(timeout=30.0) as client:
         # Fetch PR metadata.
         meta_resp = client.get(base_url, headers=headers)
+        if meta_resp.status_code == 404:
+            hint = (
+                " If this is a private repo, set GITHUB_TOKEN in your .env file."
+                if token is None
+                else ""
+            )
+            msg = f"PR not found: {owner}/{repo}#{pr_number}.{hint}"
+            raise ValueError(msg)
         meta_resp.raise_for_status()
         meta = meta_resp.json()
 
@@ -87,7 +95,7 @@ def fetch_pr_diff(
             DiffFile(
                 filename=file_entry["filename"],
                 patch=patch,
-                status=file_entry.get("status", "modified"),
+                status=_map_github_status(file_entry.get("status", "modified")),
             )
         )
 
@@ -99,3 +107,18 @@ def fetch_pr_diff(
         pr_title=pr_title,
         pr_description=pr_description,
     )
+
+
+_GITHUB_STATUS_MAP: dict[str, DiffStatus] = {
+    "added": DiffStatus.ADDED,
+    "modified": DiffStatus.MODIFIED,
+    "removed": DiffStatus.DELETED,
+    "renamed": DiffStatus.RENAMED,
+    "copied": DiffStatus.ADDED,
+    "changed": DiffStatus.MODIFIED,
+}
+
+
+def _map_github_status(github_status: str) -> DiffStatus:
+    """Map GitHub API file status string to DiffStatus enum."""
+    return _GITHUB_STATUS_MAP.get(github_status, DiffStatus.MODIFIED)

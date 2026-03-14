@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path  # noqa: TC003 - Typer needs Path at runtime
 
 import structlog
 import typer
@@ -8,12 +8,9 @@ import typer
 from code_review_agent.config import Settings
 from code_review_agent.github_client import fetch_pr_diff, parse_pr_reference
 from code_review_agent.llm_client import LLMClient
-from code_review_agent.models import DiffFile, ReviewInput
+from code_review_agent.models import DiffFile, DiffStatus, ReviewInput
 from code_review_agent.orchestrator import Orchestrator
 from code_review_agent.report import render_report_rich, save_report
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 logger = structlog.get_logger(__name__)
 
@@ -88,7 +85,7 @@ def review(
         raise typer.Exit(code=1)
 
     try:
-        settings = Settings()  # type: ignore[call-arg]
+        settings = _load_settings()
         review_input = _build_review_input(pr=pr, diff=diff, settings=settings)
 
         llm_client = LLMClient(settings=settings)
@@ -105,6 +102,22 @@ def review(
         logger.error("review failed", error=str(exc))
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
+
+
+def _load_settings() -> Settings:
+    """Load settings with a user-friendly error on missing configuration."""
+    try:
+        return Settings()  # type: ignore[call-arg]
+    except Exception as exc:
+        error_str = str(exc)
+        if "llm_api_key" in error_str.lower():
+            msg = (
+                "LLM_API_KEY is required. Set it in .env or as an environment variable.\n"
+                "  Run: cp .env.example .env\n"
+                "  Then edit .env and add your API key."
+            )
+            raise SystemExit(msg) from None
+        raise
 
 
 def _build_review_input(
@@ -141,37 +154,66 @@ def _build_review_input(
 
 
 def _parse_unified_diff(*, raw_diff: str) -> list[DiffFile]:
-    """Parse a unified diff string into a list of DiffFile objects."""
+    """Parse a unified diff string into a list of DiffFile objects.
+
+    Detects file status from git diff headers (``new file mode``,
+    ``deleted file mode``, ``rename from``) and ``--- /dev/null`` /
+    ``+++ /dev/null`` lines.  Filename is extracted from the ``+++ b/...``
+    line when available, falling back to the ``diff --git`` header.
+    """
     files: list[DiffFile] = []
-    current_filename: str | None = None
-    current_patch_lines: list[str] = []
+    current_header_name: str | None = None
+    current_lines: list[str] = []
 
     for line in raw_diff.splitlines(keepends=True):
         if line.startswith("diff --git"):
-            if current_filename is not None:
-                files.append(
-                    DiffFile(
-                        filename=current_filename,
-                        patch="".join(current_patch_lines),
-                        status="modified",
-                    )
-                )
+            if current_header_name is not None:
+                files.append(_build_diff_file(current_header_name, current_lines))
             parts = line.strip().split(" b/")
-            current_filename = parts[-1] if len(parts) > 1 else "unknown"
-            current_patch_lines = [line]
-        elif current_filename is not None:
-            current_patch_lines.append(line)
+            current_header_name = parts[-1] if len(parts) > 1 else "unknown"
+            current_lines = [line]
+        elif current_header_name is not None:
+            current_lines.append(line)
 
-    if current_filename is not None:
-        files.append(
-            DiffFile(
-                filename=current_filename,
-                patch="".join(current_patch_lines),
-                status="modified",
-            )
-        )
+    if current_header_name is not None:
+        files.append(_build_diff_file(current_header_name, current_lines))
 
     return files
+
+
+def _build_diff_file(header_name: str, lines: list[str]) -> DiffFile:
+    """Build a DiffFile from accumulated lines, detecting status and filename."""
+    filename = header_name
+    status = DiffStatus.MODIFIED
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Detect status from git diff header keywords
+        if stripped.startswith("new file mode"):
+            status = DiffStatus.ADDED
+        elif stripped.startswith("deleted file mode"):
+            status = DiffStatus.DELETED
+        elif stripped.startswith("rename from"):
+            status = DiffStatus.RENAMED
+
+        # Detect status from --- /dev/null or +++ /dev/null
+        if stripped == "--- /dev/null" and status == DiffStatus.MODIFIED:
+            status = DiffStatus.ADDED
+        if stripped == "+++ /dev/null" and status == DiffStatus.MODIFIED:
+            status = DiffStatus.DELETED
+
+        # Extract authoritative filename from +++ line
+        if stripped.startswith("+++ b/"):
+            filename = stripped[6:]
+        elif stripped.startswith("+++ ") and stripped != "+++ /dev/null":
+            filename = stripped[4:]
+
+    return DiffFile(
+        filename=filename,
+        patch="".join(lines),
+        status=status,
+    )
 
 
 if __name__ == "__main__":

@@ -81,7 +81,12 @@ class Orchestrator:
         agents: list[BaseAgent],
         review_input: ReviewInput,
     ) -> list[AgentResult]:
-        """Run all agents concurrently and collect their results."""
+        """Run all agents concurrently and collect their results.
+
+        LLM-level errors (parse failures, empty responses) are handled inside
+        each agent and returned as ``AgentResult`` with ``status="failed"``.
+        Only infrastructure errors (network, auth) are caught here.
+        """
         results: list[AgentResult] = []
         max_workers = min(self._settings.max_concurrent_agents, len(agents))
 
@@ -93,11 +98,10 @@ class Orchestrator:
             for future in as_completed(future_to_agent):
                 agent = future_to_agent[future]
                 try:
-                    result = future.result()
-                    results.append(result)
+                    results.append(future.result())
                 except Exception:
                     logger.exception(
-                        "agent failed, continuing with partial results",
+                        "agent crashed, continuing with partial results",
                         agent=agent.name,
                     )
 

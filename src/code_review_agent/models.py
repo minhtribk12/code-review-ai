@@ -1,9 +1,34 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from enum import StrEnum
 
 from pydantic import BaseModel, computed_field
+
+
+class Severity(StrEnum):
+    """Severity levels for findings and risk assessment."""
+
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class Confidence(StrEnum):
+    """Confidence levels for agent findings."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class AgentStatus(StrEnum):
+    """Status of an agent's review execution."""
+
+    SUCCESS = "success"
+    PARTIAL = "partial"
+    FAILED = "failed"
 
 
 class Finding(BaseModel):
@@ -11,13 +36,14 @@ class Finding(BaseModel):
 
     model_config = {"frozen": True}
 
-    severity: Literal["critical", "high", "medium", "low"]
+    severity: Severity
     category: str
     title: str
     description: str
     file_path: str | None = None
     line_number: int | None = None
     suggestion: str | None = None
+    confidence: Confidence = Confidence.MEDIUM
 
 
 class AgentResult(BaseModel):
@@ -29,6 +55,8 @@ class AgentResult(BaseModel):
     findings: list[Finding]
     summary: str
     execution_time_seconds: float
+    status: AgentStatus = AgentStatus.SUCCESS
+    error_message: str | None = None
 
 
 class ReviewReport(BaseModel):
@@ -40,22 +68,26 @@ class ReviewReport(BaseModel):
     reviewed_at: datetime
     agent_results: list[AgentResult]
     overall_summary: str
-    risk_level: Literal["low", "medium", "high", "critical"]
+    risk_level: Severity
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def total_findings(self) -> dict[str, int]:
         """Count findings grouped by severity."""
-        counts: dict[str, int] = {
-            "critical": 0,
-            "high": 0,
-            "medium": 0,
-            "low": 0,
-        }
+        counts: dict[str, int] = {s.value: 0 for s in Severity}
         for result in self.agent_results:
             for finding in result.findings:
-                counts[finding.severity] += 1
+                counts[finding.severity.value] += 1
         return counts
+
+
+class DiffStatus(StrEnum):
+    """Status of a file in a diff."""
+
+    ADDED = "added"
+    MODIFIED = "modified"
+    DELETED = "deleted"
+    RENAMED = "renamed"
 
 
 class DiffFile(BaseModel):
@@ -65,7 +97,7 @@ class DiffFile(BaseModel):
 
     filename: str
     patch: str
-    status: str
+    status: DiffStatus
 
 
 class ReviewInput(BaseModel):
@@ -94,4 +126,4 @@ class SynthesisResponse(BaseModel):
     model_config = {"frozen": True}
 
     overall_summary: str
-    risk_level: Literal["low", "medium", "high", "critical"]
+    risk_level: Severity

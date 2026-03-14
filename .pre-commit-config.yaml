@@ -23,6 +23,7 @@ repos:
           - structlog
           - httpx
           - openai
+          - tenacity
         args: [--strict]
         pass_filenames: false
         entry: mypy src/

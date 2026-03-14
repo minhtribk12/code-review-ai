@@ -6,19 +6,21 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from code_review_agent.models import Severity
+
 if TYPE_CHECKING:
     from pathlib import Path
 
     from code_review_agent.models import ReviewReport
 
-_SEVERITY_COLORS: dict[str, str] = {
-    "critical": "bold red",
-    "high": "red",
-    "medium": "yellow",
-    "low": "green",
+_SEVERITY_COLORS: dict[Severity, str] = {
+    Severity.CRITICAL: "bold red",
+    Severity.HIGH: "red",
+    Severity.MEDIUM: "yellow",
+    Severity.LOW: "green",
 }
 
-_SEVERITY_ORDER: list[str] = ["critical", "high", "medium", "low"]
+_SEVERITY_ORDER: list[Severity] = list(Severity)
 
 
 def render_report_rich(report: ReviewReport) -> None:

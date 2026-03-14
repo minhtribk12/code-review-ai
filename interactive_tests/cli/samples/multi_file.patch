@@ -1,0 +1,52 @@
+diff --git a/src/api/routes.py b/src/api/routes.py
+index abc1234..def5678 100644
+--- a/src/api/routes.py
++++ b/src/api/routes.py
+@@ -15,8 +15,12 @@ from flask import Flask, request, jsonify
+
+ @app.route("/users/<user_id>")
+ def get_user(user_id):
+-    user = db.query(f"SELECT * FROM users WHERE id = {user_id}")
+-    return jsonify(user)
++    user = db.query("SELECT * FROM users WHERE id = %s", (user_id,))
++    if user is None:
++        return jsonify({"error": "not found"}), 404
++    return jsonify(user.to_dict())
++
++
++@app.route("/admin", methods=["POST"])
++def admin_action():
++    # TODO: add authentication
++    return jsonify({"status": "ok"})
+diff --git a/src/models/user.py b/src/models/user.py
+new file mode 100644
+index 0000000..abc1234
+--- /dev/null
++++ b/src/models/user.py
+@@ -0,0 +1,12 @@
++from dataclasses import dataclass
++
++
++@dataclass
++class User:
++    id: int
++    name: str
++    email: str
++
++    def to_dict(self):
++        return {"id": self.id, "name": self.name, "email": self.email}
++
+diff --git a/tests/test_routes.py b/tests/test_routes.py
+index abc1234..def5678 100644
+--- a/tests/test_routes.py
++++ b/tests/test_routes.py
+@@ -5,3 +5,8 @@ from src.api.routes import app
+
+ def test_get_user():
+     with app.test_client() as client:
+-        pass
++        resp = client.get("/users/1")
++        assert resp.status_code in (200, 404)
++
++# TODO: add test for admin_action
++# TODO: add test for invalid user_id
