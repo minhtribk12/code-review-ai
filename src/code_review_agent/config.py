@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     max_prompt_tokens: int | None = None
     rate_limit_rpm: int | None = None
     dedup_strategy: DedupStrategy = DedupStrategy.EXACT
+    max_review_seconds: int = Field(default=300, ge=10)
     github_token: SecretStr | None = None
     log_level: LogLevel = LogLevel.INFO
     max_concurrent_agents: int = 4

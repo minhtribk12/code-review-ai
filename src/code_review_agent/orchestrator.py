@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -312,21 +312,27 @@ class Orchestrator:
         agents: list[BaseAgent],
         review_input: ReviewInput,
     ) -> list[AgentResult]:
-        """Run all agents concurrently and collect their results.
+        """Run all agents concurrently with a total time limit.
 
         LLM-level errors (parse failures, empty responses) are handled inside
         each agent and returned as ``AgentResult`` with ``status="failed"``.
-        Only infrastructure errors (network, auth) are caught here.
+        Infrastructure errors (network, auth) are caught here.
+        Agents that don't complete within ``max_review_seconds`` are marked
+        as failed with a timeout error.
         """
         results: list[AgentResult] = []
         max_workers = min(self._settings.max_concurrent_agents, len(agents))
+        timeout = self._settings.max_review_seconds
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_agent = {
                 executor.submit(agent.review, review_input): agent for agent in agents
             }
 
-            for future in as_completed(future_to_agent):
+            done, not_done = wait(future_to_agent, timeout=timeout)
+
+            # Collect completed results
+            for future in done:
                 agent = future_to_agent[future]
                 try:
                     results.append(future.result())
@@ -335,6 +341,26 @@ class Orchestrator:
                         "agent crashed, continuing with partial results",
                         agent=agent.name,
                     )
+
+            # Mark timed-out agents as failed
+            for future in not_done:
+                agent = future_to_agent[future]
+                future.cancel()
+                logger.warning(
+                    "agent timed out",
+                    agent=agent.name,
+                    timeout_seconds=timeout,
+                )
+                results.append(
+                    AgentResult(
+                        agent_name=agent.name,
+                        findings=[],
+                        summary="",
+                        execution_time_seconds=float(timeout),
+                        status=AgentStatus.FAILED,
+                        error_message=f"Review timed out after {timeout}s",
+                    )
+                )
 
         return results
 
