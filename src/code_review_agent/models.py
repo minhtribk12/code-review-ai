@@ -81,6 +81,13 @@ class ReviewReport(BaseModel):
         return counts
 
 
+class OutputFormat(StrEnum):
+    """Output format for the review report."""
+
+    RICH = "rich"
+    JSON = "json"
+
+
 class ReviewEvent(StrEnum):
     """Events emitted by the orchestrator during a review."""
 

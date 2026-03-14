@@ -9,7 +9,7 @@ from code_review_agent.agents import ALL_AGENT_NAMES
 from code_review_agent.config import Settings
 from code_review_agent.github_client import fetch_pr_diff, parse_pr_reference
 from code_review_agent.llm_client import LLMClient
-from code_review_agent.models import DiffFile, DiffStatus, ReviewInput
+from code_review_agent.models import DiffFile, DiffStatus, OutputFormat, ReviewInput
 from code_review_agent.orchestrator import Orchestrator
 from code_review_agent.progress import create_progress_callback
 from code_review_agent.report import render_report_rich, save_report
@@ -93,6 +93,11 @@ def review(
         "-q",
         help="Suppress progress display (useful for CI/piping).",
     ),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.RICH,
+        "--format",
+        help="Output format: rich (terminal) or json (machine-readable).",
+    ),
 ) -> None:
     """Run multi-agent code review on a GitHub PR or local diff."""
     if pr is None and diff is None:
@@ -101,6 +106,9 @@ def review(
     if pr is not None and diff is not None:
         typer.echo("Error: provide only one of --pr or --diff, not both", err=True)
         raise typer.Exit(code=1)
+
+    # JSON mode auto-suppresses progress (stdout is for JSON)
+    is_quiet = quiet or output_format == OutputFormat.JSON
 
     try:
         settings = _load_settings()
@@ -111,7 +119,7 @@ def review(
 
         callback, display = create_progress_callback(
             agent_names=selected_names,
-            is_quiet=quiet,
+            is_quiet=is_quiet,
         )
 
         llm_client = LLMClient(settings=settings)
@@ -125,10 +133,13 @@ def review(
             if display is not None:
                 display.stop()
 
-        render_report_rich(report=report)
+        if output_format == OutputFormat.JSON:
+            typer.echo(report.model_dump_json(indent=2))
+        else:
+            render_report_rich(report=report)
 
         if output is not None:
-            save_report(report=report, path=output)
+            save_report(report=report, path=output, output_format=output_format)
             typer.echo(f"Report saved to {output}")
 
     except Exception as exc:

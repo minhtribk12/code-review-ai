@@ -10,9 +10,15 @@ from code_review_agent.models import (
     AgentResult,
     AgentStatus,
     Finding,
+    OutputFormat,
     ReviewReport,
 )
-from code_review_agent.report import render_report_markdown, render_report_rich, save_report
+from code_review_agent.report import (
+    render_report_json,
+    render_report_markdown,
+    render_report_rich,
+    save_report,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -289,3 +295,59 @@ class TestFailedAgentsMarkdown:
         md = render_report_markdown(sample_review_report)
         assert "WARNING" not in md
         assert "FAILED" not in md
+
+
+class TestRenderReportJson:
+    """Test JSON report rendering."""
+
+    def test_valid_json(self, sample_review_report: ReviewReport) -> None:
+        import json
+
+        json_str = render_report_json(sample_review_report)
+        data = json.loads(json_str)
+        assert isinstance(data, dict)
+
+    def test_contains_risk_level(self, sample_review_report: ReviewReport) -> None:
+        import json
+
+        data = json.loads(render_report_json(sample_review_report))
+        assert data["risk_level"] == "high"
+
+    def test_contains_agent_results(self, sample_review_report: ReviewReport) -> None:
+        import json
+
+        data = json.loads(render_report_json(sample_review_report))
+        assert len(data["agent_results"]) == 4
+
+    def test_contains_total_findings(self, sample_review_report: ReviewReport) -> None:
+        import json
+
+        data = json.loads(render_report_json(sample_review_report))
+        assert "total_findings" in data
+        assert data["total_findings"]["high"] >= 1
+
+    def test_contains_pr_url(self, sample_review_report: ReviewReport) -> None:
+        import json
+
+        data = json.loads(render_report_json(sample_review_report))
+        assert data["pr_url"] == "https://github.com/acme/webapp/pull/42"
+
+
+class TestSaveReportJson:
+    """Test saving report in JSON format."""
+
+    def test_save_as_json(self, sample_review_report: ReviewReport, tmp_path: Path) -> None:
+        import json
+
+        path = tmp_path / "report.json"
+        save_report(sample_review_report, path, output_format=OutputFormat.JSON)
+        data = json.loads(path.read_text())
+        assert data["risk_level"] == "high"
+
+    def test_save_as_markdown_default(
+        self, sample_review_report: ReviewReport, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "report.md"
+        save_report(sample_review_report, path)
+        content = path.read_text()
+        assert content.startswith("# Code Review Report")

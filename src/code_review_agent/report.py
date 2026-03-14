@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from code_review_agent.models import AgentStatus, Severity
+from code_review_agent.models import AgentStatus, OutputFormat, Severity
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -181,8 +181,23 @@ def render_report_markdown(report: ReviewReport) -> str:
     return "\n".join(lines)
 
 
-def save_report(report: ReviewReport, path: Path) -> None:
-    """Save the review report as markdown to the specified file path."""
-    content = render_report_markdown(report=report)
+def render_report_json(report: ReviewReport) -> str:
+    """Render the review report as a JSON string."""
+    return report.model_dump_json(indent=2)
+
+
+def save_report(
+    report: ReviewReport, path: Path, *, output_format: OutputFormat = OutputFormat.RICH
+) -> None:
+    """Save the review report to the specified file path.
+
+    Format is determined by the ``output_format`` flag:
+    - RICH/default: markdown
+    - JSON: JSON
+    """
+    if output_format == OutputFormat.JSON:
+        content = render_report_json(report=report)
+    else:
+        content = render_report_markdown(report=report)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")

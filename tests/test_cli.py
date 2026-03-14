@@ -402,6 +402,38 @@ class TestReviewCommandWithDiff:
         mock_save.assert_called_once()
         assert "Report saved" in result.output
 
+    def test_review_diff_json_format(self, tmp_path: Path) -> None:
+        import json
+
+        diff_file = tmp_path / "sample.patch"
+        diff_file.write_text(
+            "diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n+new line\n"
+        )
+
+        report = _make_report()
+
+        with (
+            patch("code_review_agent.main._load_settings") as mock_settings,
+            patch("code_review_agent.main.LLMClient"),
+            patch("code_review_agent.main.Orchestrator") as mock_orch_cls,
+            patch(
+                "code_review_agent.main.create_progress_callback",
+                return_value=(MagicMock(), None),
+            ),
+        ):
+            settings_obj = MagicMock(spec=Settings)
+            settings_obj.github_token = None
+            settings_obj.token_tier = TokenTier.FREE
+            mock_settings.return_value = settings_obj
+            mock_orch_cls.return_value.run.return_value = report
+
+            result = runner.invoke(app, ["review", "--diff", str(diff_file), "--format", "json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["risk_level"] == "low"
+        assert "agent_results" in data
+
     def test_review_catches_errors_gracefully(self, tmp_path: Path) -> None:
         diff_file = tmp_path / "sample.patch"
         diff_file.write_text("diff --git a/x.py b/x.py\n")
