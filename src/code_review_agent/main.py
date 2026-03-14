@@ -11,7 +11,9 @@ from code_review_agent.github_client import fetch_pr_diff, parse_pr_reference
 from code_review_agent.llm_client import LLMClient
 from code_review_agent.models import DiffFile, DiffStatus, ReviewInput
 from code_review_agent.orchestrator import Orchestrator
+from code_review_agent.progress import create_progress_callback
 from code_review_agent.report import render_report_rich, save_report
+from code_review_agent.token_budget import default_agents_for_tier
 
 logger = structlog.get_logger(__name__)
 
@@ -85,6 +87,12 @@ def review(
             "Default: all agents."
         ),
     ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Suppress progress display (useful for CI/piping).",
+    ),
 ) -> None:
     """Run multi-agent code review on a GitHub PR or local diff."""
     if pr is None and diff is None:
@@ -99,10 +107,23 @@ def review(
         review_input = _build_review_input(pr=pr, diff=diff, settings=settings)
 
         agent_names = _parse_agent_names(agents)
+        selected_names = agent_names or default_agents_for_tier(settings.token_tier)
+
+        callback, display = create_progress_callback(
+            agent_names=selected_names,
+            is_quiet=quiet,
+        )
 
         llm_client = LLMClient(settings=settings)
-        orchestrator = Orchestrator(settings=settings, llm_client=llm_client)
-        report = orchestrator.run(review_input=review_input, agent_names=agent_names)
+        orchestrator = Orchestrator(settings=settings, llm_client=llm_client, on_event=callback)
+
+        if display is not None:
+            display.start()
+        try:
+            report = orchestrator.run(review_input=review_input, agent_names=agent_names)
+        finally:
+            if display is not None:
+                display.stop()
 
         render_report_rich(report=report)
 

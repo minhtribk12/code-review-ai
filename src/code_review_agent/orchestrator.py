@@ -15,6 +15,7 @@ from code_review_agent.models import (
     Confidence,
     DiffFile,
     Finding,
+    ReviewEvent,
     ReviewInput,
     ReviewReport,
     Severity,
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from code_review_agent.agents.base import BaseAgent
     from code_review_agent.config import Settings
     from code_review_agent.llm_client import LLMClient
+    from code_review_agent.progress import EventCallback
 
 logger = structlog.get_logger(__name__)
 
@@ -63,11 +65,13 @@ class Orchestrator:
         settings: Settings,
         llm_client: LLMClient,
         token_estimator: TokenEstimator | None = None,
+        on_event: EventCallback | None = None,
     ) -> None:
         self._settings = settings
         self._llm_client = llm_client
         self._estimator = token_estimator or CharBasedEstimator()
         self._budget = resolve_prompt_budget(settings)
+        self._on_event = on_event
 
     def run(
         self,
@@ -114,7 +118,9 @@ class Orchestrator:
                 successful_results=successful_results,
             )
 
+        self._emit(ReviewEvent.SYNTHESIS_STARTED, "synthesis")
         synthesis = self._synthesize(agent_results=agent_results)
+        self._emit(ReviewEvent.SYNTHESIS_COMPLETED, "synthesis")
         validated_risk = self._validate_risk_level(synthesis.risk_level, agent_results)
 
         return ReviewReport(
@@ -124,6 +130,11 @@ class Orchestrator:
             overall_summary=synthesis.overall_summary,
             risk_level=validated_risk,
         )
+
+    def _emit(self, event: ReviewEvent, agent_name: str, elapsed: float | None = None) -> None:
+        """Fire an event to the registered callback, if any."""
+        if self._on_event is not None:
+            self._on_event(event, agent_name, elapsed)
 
     def _scan_for_injection(self, review_input: ReviewInput) -> list[Finding]:
         """Scan diff content for suspicious prompt injection patterns."""
@@ -306,6 +317,24 @@ class Orchestrator:
             pr_description=review_input.pr_description,
         )
 
+    def _run_single_agent(self, agent: BaseAgent, review_input: ReviewInput) -> AgentResult:
+        """Run a single agent, emitting start/complete/fail events."""
+        self._emit(ReviewEvent.AGENT_STARTED, agent.name)
+        result = agent.review(review_input)
+        if result.status == AgentStatus.FAILED:
+            self._emit(
+                ReviewEvent.AGENT_FAILED,
+                agent.name,
+                result.execution_time_seconds,
+            )
+        else:
+            self._emit(
+                ReviewEvent.AGENT_COMPLETED,
+                agent.name,
+                result.execution_time_seconds,
+            )
+        return result
+
     def _run_agents(
         self,
         *,
@@ -326,7 +355,8 @@ class Orchestrator:
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_agent = {
-                executor.submit(agent.review, review_input): agent for agent in agents
+                executor.submit(self._run_single_agent, agent, review_input): agent
+                for agent in agents
             }
 
             done, not_done = wait(future_to_agent, timeout=timeout)
@@ -341,6 +371,7 @@ class Orchestrator:
                         "agent crashed, continuing with partial results",
                         agent=agent.name,
                     )
+                    self._emit(ReviewEvent.AGENT_FAILED, agent.name)
 
             # Mark timed-out agents as failed
             for future in not_done:
@@ -351,6 +382,7 @@ class Orchestrator:
                     agent=agent.name,
                     timeout_seconds=timeout,
                 )
+                self._emit(ReviewEvent.AGENT_FAILED, agent.name, float(timeout))
                 results.append(
                     AgentResult(
                         agent_name=agent.name,

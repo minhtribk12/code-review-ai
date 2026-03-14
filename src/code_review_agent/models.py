@@ -81,6 +81,16 @@ class ReviewReport(BaseModel):
         return counts
 
 
+class ReviewEvent(StrEnum):
+    """Events emitted by the orchestrator during a review."""
+
+    AGENT_STARTED = "agent_started"
+    AGENT_COMPLETED = "agent_completed"
+    AGENT_FAILED = "agent_failed"
+    SYNTHESIS_STARTED = "synthesis_started"
+    SYNTHESIS_COMPLETED = "synthesis_completed"
+
+
 class DiffStatus(StrEnum):
     """Status of a file in a diff."""
 

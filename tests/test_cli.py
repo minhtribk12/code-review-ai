@@ -15,6 +15,7 @@ from code_review_agent.models import (
     DiffStatus,
     ReviewReport,
 )
+from code_review_agent.token_budget import TokenTier
 
 # ---------------------------------------------------------------------------
 # _parse_unified_diff -- status detection
@@ -351,9 +352,15 @@ class TestReviewCommandWithDiff:
             patch("code_review_agent.main.LLMClient"),
             patch("code_review_agent.main.Orchestrator") as mock_orch_cls,
             patch("code_review_agent.main.render_report_rich") as mock_render,
+            patch(
+                "code_review_agent.main.create_progress_callback",
+                return_value=(MagicMock(), None),
+            ),
         ):
-            mock_settings.return_value = MagicMock(spec=Settings)
-            mock_settings.return_value.github_token = None
+            settings_obj = MagicMock(spec=Settings)
+            settings_obj.github_token = None
+            settings_obj.token_tier = TokenTier.FREE
+            mock_settings.return_value = settings_obj
             mock_orch_cls.return_value.run.return_value = report
             mock_render.return_value = None
 
@@ -376,9 +383,15 @@ class TestReviewCommandWithDiff:
             patch("code_review_agent.main.Orchestrator") as mock_orch_cls,
             patch("code_review_agent.main.render_report_rich"),
             patch("code_review_agent.main.save_report") as mock_save,
+            patch(
+                "code_review_agent.main.create_progress_callback",
+                return_value=(MagicMock(), None),
+            ),
         ):
-            mock_settings.return_value = MagicMock(spec=Settings)
-            mock_settings.return_value.github_token = None
+            settings_obj = MagicMock(spec=Settings)
+            settings_obj.github_token = None
+            settings_obj.token_tier = TokenTier.FREE
+            mock_settings.return_value = settings_obj
             mock_orch_cls.return_value.run.return_value = report
 
             result = runner.invoke(

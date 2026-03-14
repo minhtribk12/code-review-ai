@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from code_review_agent.models import (
     AgentResult,
     Finding,
+    ReviewEvent,
     ReviewInput,
     ReviewReport,
     SynthesisResponse,
@@ -168,3 +169,84 @@ class TestOrchestratorReportAssembly:
         assert totals["critical"] == 1
         assert totals["high"] == 1
         assert totals["medium"] == 2  # one from each of performance, style
+
+
+class TestOrchestratorEvents:
+    """Verify that the orchestrator emits review events to the callback."""
+
+    def test_emits_agent_events(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+        mock_synthesis_response: SynthesisResponse,
+    ) -> None:
+        mock_llm_client.complete.return_value = mock_synthesis_response
+        event_callback = MagicMock()
+        orchestrator = Orchestrator(
+            settings=mock_settings,
+            llm_client=mock_llm_client,
+            on_event=event_callback,
+        )
+
+        agent_names = ["security", "performance"]
+        results = [_make_agent_result(name) for name in agent_names]
+
+        with patch.object(orchestrator, "_run_agents", return_value=results):
+            orchestrator.run(review_input=sample_review_input)
+
+        # Synthesis events should fire for multi-agent runs
+        synthesis_calls = [
+            c
+            for c in event_callback.call_args_list
+            if c[0][0] in (ReviewEvent.SYNTHESIS_STARTED, ReviewEvent.SYNTHESIS_COMPLETED)
+        ]
+        assert len(synthesis_calls) == 2
+        assert synthesis_calls[0] == call(ReviewEvent.SYNTHESIS_STARTED, "synthesis", None)
+        assert synthesis_calls[1][0][0] == ReviewEvent.SYNTHESIS_COMPLETED
+
+    def test_no_synthesis_events_for_single_agent(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+    ) -> None:
+        event_callback = MagicMock()
+        orchestrator = Orchestrator(
+            settings=mock_settings,
+            llm_client=mock_llm_client,
+            on_event=event_callback,
+        )
+
+        results = [_make_agent_result("security")]
+
+        with patch.object(orchestrator, "_run_agents", return_value=results):
+            orchestrator.run(review_input=sample_review_input)
+
+        # No synthesis events for single-agent runs
+        synthesis_calls = [
+            c
+            for c in event_callback.call_args_list
+            if c[0][0] in (ReviewEvent.SYNTHESIS_STARTED, ReviewEvent.SYNTHESIS_COMPLETED)
+        ]
+        assert len(synthesis_calls) == 0
+
+    def test_no_error_without_callback(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+    ) -> None:
+        """Orchestrator works fine without an event callback."""
+        orchestrator = Orchestrator(
+            settings=mock_settings,
+            llm_client=mock_llm_client,
+            on_event=None,
+        )
+
+        results = [_make_agent_result("security")]
+
+        with patch.object(orchestrator, "_run_agents", return_value=results):
+            report = orchestrator.run(review_input=sample_review_input)
+
+        assert isinstance(report, ReviewReport)
