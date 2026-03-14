@@ -55,5 +55,13 @@ Desktop.ini
 # Jupyter
 .ipynb_checkpoints/
 
+# Local planning and documentation (not for repo)
+CLAUDE.md
+PLAN.md
+PHASE2.md
+TASKS.md
+CHECKLIST.md
+CLI_README.md
+
 # Interactive test generated output
 interactive_tests/**/output/
