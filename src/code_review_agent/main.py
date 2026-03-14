@@ -5,6 +5,7 @@ from pathlib import Path  # noqa: TC003 - Typer needs Path at runtime
 import structlog
 import typer
 
+from code_review_agent.agents import ALL_AGENT_NAMES
 from code_review_agent.config import Settings
 from code_review_agent.github_client import fetch_pr_diff, parse_pr_reference
 from code_review_agent.llm_client import LLMClient
@@ -75,6 +76,15 @@ def review(
         "-o",
         help="Path to save the markdown report.",
     ),
+    agents: str | None = typer.Option(
+        None,
+        "--agents",
+        help=(
+            "Comma-separated agent names to run. "
+            f"Available: {', '.join(ALL_AGENT_NAMES)}. "
+            "Default: all agents."
+        ),
+    ),
 ) -> None:
     """Run multi-agent code review on a GitHub PR or local diff."""
     if pr is None and diff is None:
@@ -88,9 +98,11 @@ def review(
         settings = _load_settings()
         review_input = _build_review_input(pr=pr, diff=diff, settings=settings)
 
+        agent_names = _parse_agent_names(agents)
+
         llm_client = LLMClient(settings=settings)
         orchestrator = Orchestrator(settings=settings, llm_client=llm_client)
-        report = orchestrator.run(review_input=review_input)
+        report = orchestrator.run(review_input=review_input, agent_names=agent_names)
 
         render_report_rich(report=report)
 
@@ -102,6 +114,30 @@ def review(
         logger.error("review failed", error=str(exc))
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
+
+
+def _parse_agent_names(agents_arg: str | None) -> list[str] | None:
+    """Parse the --agents CLI flag into a list of agent names.
+
+    Returns ``None`` for the default (all agents).
+    """
+    if agents_arg is None:
+        return None
+
+    names = [name.strip() for name in agents_arg.split(",") if name.strip()]
+    if not names:
+        return None
+
+    invalid = [n for n in names if n not in ALL_AGENT_NAMES]
+    if invalid:
+        typer.echo(
+            f"Error: unknown agent(s): {', '.join(invalid)}. "
+            f"Available: {', '.join(ALL_AGENT_NAMES)}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    return names
 
 
 def _load_settings() -> Settings:

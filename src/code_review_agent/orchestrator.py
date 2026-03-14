@@ -7,22 +7,19 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from code_review_agent.agents import (
-    PerformanceAgent,
-    SecurityAgent,
-    StyleAgent,
-    TestCoverageAgent,
-)
+from code_review_agent.agents import AGENT_REGISTRY, ALL_AGENT_NAMES
 from code_review_agent.models import (
     AgentResult,
     DiffFile,
     ReviewInput,
     ReviewReport,
+    Severity,
     SynthesisResponse,
 )
 from code_review_agent.token_budget import (
     CharBasedEstimator,
     TokenEstimator,
+    default_agents_for_tier,
     resolve_prompt_budget,
 )
 
@@ -64,21 +61,42 @@ class Orchestrator:
         self._estimator = token_estimator or CharBasedEstimator()
         self._budget = resolve_prompt_budget(settings)
 
-    def run(self, review_input: ReviewInput) -> ReviewReport:
-        """Execute all agents concurrently, synthesize results, and return a report."""
+    def run(
+        self,
+        review_input: ReviewInput,
+        *,
+        agent_names: list[str] | None = None,
+    ) -> ReviewReport:
+        """Execute selected agents concurrently, synthesize results, and return a report.
+
+        Args:
+            review_input: The diff and metadata to review.
+            agent_names: Names of agents to run. Defaults to all registered agents.
+        """
         review_input = self._apply_token_budget(review_input)
 
-        agents: list[BaseAgent] = [
-            SecurityAgent(llm_client=self._llm_client),
-            PerformanceAgent(llm_client=self._llm_client),
-            StyleAgent(llm_client=self._llm_client),
-            TestCoverageAgent(llm_client=self._llm_client),
-        ]
+        selected_names = agent_names or default_agents_for_tier(self._settings.token_tier)
+        agents: list[BaseAgent] = self._build_agents(selected_names)
+
+        logger.info(
+            "running agents",
+            selected=[a.name for a in agents],
+            total_registered=len(ALL_AGENT_NAMES),
+        )
 
         agent_results = self._run_agents(
             agents=agents,
             review_input=review_input,
         )
+
+        successful_results = [r for r in agent_results if r.status != "failed"]
+
+        if len(successful_results) <= 1:
+            return self._build_report_without_synthesis(
+                review_input=review_input,
+                agent_results=agent_results,
+                successful_results=successful_results,
+            )
 
         synthesis = self._synthesize(agent_results=agent_results)
 
@@ -88,6 +106,58 @@ class Orchestrator:
             agent_results=agent_results,
             overall_summary=synthesis.overall_summary,
             risk_level=synthesis.risk_level,
+        )
+
+    def _build_agents(self, agent_names: list[str]) -> list[BaseAgent]:
+        """Instantiate agents by name from the registry."""
+        agents: list[BaseAgent] = []
+        for name in agent_names:
+            agent_cls = AGENT_REGISTRY.get(name)
+            if agent_cls is None:
+                logger.warning(
+                    "unknown agent name, skipping",
+                    agent=name,
+                    available=ALL_AGENT_NAMES,
+                )
+                continue
+            agents.append(agent_cls(llm_client=self._llm_client))
+        return agents
+
+    def _build_report_without_synthesis(
+        self,
+        *,
+        review_input: ReviewInput,
+        agent_results: list[AgentResult],
+        successful_results: list[AgentResult],
+    ) -> ReviewReport:
+        """Build report without an LLM synthesis call.
+
+        Used when 0 or 1 agents succeeded -- synthesis adds no value
+        and this saves one LLM call.
+        """
+        if successful_results:
+            result = successful_results[0]
+            overall_summary = result.summary
+            max_severity = max(
+                (f.severity for f in result.findings),
+                default=Severity.LOW,
+            )
+            logger.info(
+                "skipping synthesis, single agent result",
+                agent=result.agent_name,
+                risk_level=max_severity,
+            )
+        else:
+            overall_summary = "No agents completed successfully."
+            max_severity = Severity.LOW
+            logger.warning("skipping synthesis, no successful agent results")
+
+        return ReviewReport(
+            pr_url=review_input.pr_url,
+            reviewed_at=datetime.now(tz=UTC),
+            agent_results=agent_results,
+            overall_summary=overall_summary,
+            risk_level=max_severity,
         )
 
     def _apply_token_budget(self, review_input: ReviewInput) -> ReviewInput:

@@ -25,6 +25,18 @@ _TIER_BUDGETS: dict[TokenTier, int] = {
     TokenTier.PREMIUM: 48_000,
 }
 
+# Default agents per tier. Free tier runs only security to minimize LLM calls.
+_TIER_DEFAULT_AGENTS: dict[TokenTier, list[str]] = {
+    TokenTier.FREE: ["security"],
+    TokenTier.STANDARD: ["security", "performance", "style", "test_coverage"],
+    TokenTier.PREMIUM: ["security", "performance", "style", "test_coverage"],
+}
+
+
+def default_agents_for_tier(tier: TokenTier) -> list[str]:
+    """Return the default agent names for the given token tier."""
+    return _TIER_DEFAULT_AGENTS[tier]
+
 
 # Known model context windows (tokens).
 # Used for auto-detection when max_prompt_tokens is not set explicitly.
