@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = Field(default=120, ge=1)
     token_tier: TokenTier = TokenTier.FREE
     max_prompt_tokens: int | None = None
+    rate_limit_rpm: int | None = None
     github_token: SecretStr | None = None
     log_level: LogLevel = LogLevel.INFO
     max_concurrent_agents: int = 4

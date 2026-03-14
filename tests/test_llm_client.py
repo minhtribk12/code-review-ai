@@ -170,12 +170,14 @@ class TestLLMClientComplete:
     def _make_client(self) -> MagicMock:
         """Create a mock LLMClient with a mock OpenAI client."""
         from code_review_agent.llm_client import LLMClient
+        from code_review_agent.rate_limiter import NoOpRateLimiter
 
         with patch.object(LLMClient, "__init__", lambda self, settings: None):
             client = LLMClient.__new__(LLMClient)
             client._model = "test-model"
             client._temperature = 0.1
             client._client = MagicMock()
+            client._rate_limiter = NoOpRateLimiter()
         return client
 
     def _mock_response(self, content: str) -> MagicMock:

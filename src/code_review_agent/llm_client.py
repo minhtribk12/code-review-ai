@@ -15,6 +15,8 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from code_review_agent.rate_limiter import RateLimiter, create_rate_limiter
+
 if TYPE_CHECKING:
     from code_review_agent.config import Settings
 
@@ -57,9 +59,14 @@ _MAX_PARSE_RETRIES = 1
 class LLMClient:
     """Thin wrapper around the OpenAI-compatible API for LLM calls."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        rate_limiter: RateLimiter | None = None,
+    ) -> None:
         self._model = settings.llm_model
         self._temperature = settings.llm_temperature
+        self._rate_limiter = rate_limiter or create_rate_limiter(settings)
         self._client = openai.OpenAI(
             api_key=settings.llm_api_key.get_secret_value(),
             base_url=settings.resolved_llm_base_url,
@@ -143,19 +150,29 @@ class LLMClient:
     )
     def _call_api(self, system_prompt: str, user_prompt: str) -> str:
         """Make the actual API call with retry logic for transient errors."""
+        self._rate_limiter.acquire()
+
         logger.debug(
             "sending llm request",
             model=self._model,
         )
 
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=self._temperature,
-        )
+        try:
+            response = self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=self._temperature,
+            )
+        except openai.RateLimitError as err:
+            # Adapt rate limiter from provider feedback before re-raising
+            # (tenacity will handle the retry)
+            retry_after = getattr(err, "retry_after", None)
+            if retry_after is not None:
+                self._rate_limiter.update_from_retry_after(float(retry_after))
+            raise
 
         if not response.choices:
             msg = "LLM returned response with no choices"
