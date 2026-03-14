@@ -15,9 +15,15 @@ from code_review_agent.agents import (
 )
 from code_review_agent.models import (
     AgentResult,
+    DiffFile,
     ReviewInput,
     ReviewReport,
     SynthesisResponse,
+)
+from code_review_agent.token_budget import (
+    CharBasedEstimator,
+    TokenEstimator,
+    resolve_prompt_budget,
 )
 
 if TYPE_CHECKING:
@@ -47,12 +53,21 @@ _SYNTHESIS_SYSTEM_PROMPT = (
 class Orchestrator:
     """Coordinates multiple review agents and synthesizes their results."""
 
-    def __init__(self, settings: Settings, llm_client: LLMClient) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        llm_client: LLMClient,
+        token_estimator: TokenEstimator | None = None,
+    ) -> None:
         self._settings = settings
         self._llm_client = llm_client
+        self._estimator = token_estimator or CharBasedEstimator()
+        self._budget = resolve_prompt_budget(settings)
 
     def run(self, review_input: ReviewInput) -> ReviewReport:
         """Execute all agents concurrently, synthesize results, and return a report."""
+        review_input = self._apply_token_budget(review_input)
+
         agents: list[BaseAgent] = [
             SecurityAgent(llm_client=self._llm_client),
             PerformanceAgent(llm_client=self._llm_client),
@@ -73,6 +88,77 @@ class Orchestrator:
             agent_results=agent_results,
             overall_summary=synthesis.overall_summary,
             risk_level=synthesis.risk_level,
+        )
+
+    def _apply_token_budget(self, review_input: ReviewInput) -> ReviewInput:
+        """Estimate token usage and truncate if over budget.
+
+        Two-pass strategy: sort files by change volume, keep full diff for
+        most-changed files that fit the budget, replace the rest with a
+        one-line summary.
+        """
+        all_patches = "".join(f.patch for f in review_input.diff_files)
+        estimated_tokens = self._estimator.estimate(all_patches)
+
+        if estimated_tokens <= self._budget:
+            logger.debug(
+                "diff within token budget",
+                estimated_tokens=estimated_tokens,
+                budget=self._budget,
+            )
+            return review_input
+
+        logger.warning(
+            "diff exceeds token budget, truncating",
+            estimated_tokens=estimated_tokens,
+            budget=self._budget,
+            file_count=len(review_input.diff_files),
+        )
+
+        return self._truncate_review_input(review_input)
+
+    def _truncate_review_input(self, review_input: ReviewInput) -> ReviewInput:
+        """Two-pass truncation: full diff for top files, summary for rest."""
+        # Sort by change volume (most changed first)
+        sorted_files = sorted(
+            review_input.diff_files,
+            key=lambda f: f.patch.count("\n"),
+            reverse=True,
+        )
+
+        included_full: list[DiffFile] = []
+        included_summary: list[DiffFile] = []
+        remaining_budget = self._budget
+
+        for diff_file in sorted_files:
+            file_tokens = self._estimator.estimate(diff_file.patch)
+
+            if remaining_budget >= file_tokens:
+                included_full.append(diff_file)
+                remaining_budget -= file_tokens
+            else:
+                added = sum(1 for line in diff_file.patch.splitlines() if line.startswith("+"))
+                removed = sum(1 for line in diff_file.patch.splitlines() if line.startswith("-"))
+                summary_patch = f"[TRUNCATED] +{added}/-{removed} lines"
+                included_summary.append(
+                    DiffFile(
+                        filename=diff_file.filename,
+                        patch=summary_patch,
+                        status=diff_file.status,
+                    )
+                )
+
+        logger.info(
+            "truncation complete",
+            full_files=len(included_full),
+            truncated_files=len(included_summary),
+        )
+
+        return ReviewInput(
+            diff_files=included_full + included_summary,
+            pr_url=review_input.pr_url,
+            pr_title=review_input.pr_title,
+            pr_description=review_input.pr_description,
         )
 
     def _run_agents(

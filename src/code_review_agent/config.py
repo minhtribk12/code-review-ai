@@ -5,6 +5,8 @@ from enum import StrEnum
 from pydantic import Field, SecretStr, computed_field
 from pydantic_settings import BaseSettings
 
+from code_review_agent.token_budget import TokenTier
+
 
 class KnownProvider(StrEnum):
     """Supported LLM API providers."""
@@ -39,6 +41,8 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_temperature: float = Field(default=0.1, ge=0.0, le=1.0)
     request_timeout_seconds: int = Field(default=120, ge=1)
+    token_tier: TokenTier = TokenTier.FREE
+    max_prompt_tokens: int | None = None
     github_token: SecretStr | None = None
     log_level: LogLevel = LogLevel.INFO
     max_concurrent_agents: int = 4

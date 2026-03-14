@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 import httpx
 import structlog
@@ -84,7 +85,7 @@ def fetch_pr_diff(
         # Fetch PR files (which include patches).
         files_resp = client.get(f"{base_url}/files", headers=headers)
         files_resp.raise_for_status()
-        files_data: list[dict[str, str]] = files_resp.json()
+        files_data: list[dict[str, Any]] = files_resp.json()
 
     diff_files: list[DiffFile] = []
     for file_entry in files_data:
