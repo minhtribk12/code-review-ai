@@ -10,6 +10,7 @@ import structlog
 from code_review_agent.agents import AGENT_REGISTRY, ALL_AGENT_NAMES
 from code_review_agent.models import (
     AgentResult,
+    AgentStatus,
     Confidence,
     DiffFile,
     Finding,
@@ -96,7 +97,7 @@ class Orchestrator:
         if injection_findings:
             agent_results = self._inject_security_findings(agent_results, injection_findings)
 
-        successful_results = [r for r in agent_results if r.status != "failed"]
+        successful_results = [r for r in agent_results if r.status != AgentStatus.FAILED]
 
         if len(successful_results) <= 1:
             return self._build_report_without_synthesis(
@@ -127,6 +128,8 @@ class Orchestrator:
         for pattern in patterns:
             if not pattern.is_high_confidence:
                 continue
+            # Severity LOW intentionally: injection detection is heuristic,
+            # false positives are common. LOW avoids inflating risk level.
             findings.append(
                 Finding(
                     severity=Severity.LOW,
@@ -148,20 +151,28 @@ class Orchestrator:
         agent_results: list[AgentResult],
         injection_findings: list[Finding],
     ) -> list[AgentResult]:
-        """Add injection detection findings to the first successful agent result."""
-        for i, result in enumerate(agent_results):
-            if result.status != "failed":
+        """Return a new list with injection findings added to the first successful result."""
+        updated: list[AgentResult] = []
+        is_injected = False
+
+        for result in agent_results:
+            if not is_injected and result.status != AgentStatus.FAILED:
                 merged_findings = list(result.findings) + injection_findings
-                agent_results[i] = AgentResult(
-                    agent_name=result.agent_name,
-                    findings=merged_findings,
-                    summary=result.summary,
-                    execution_time_seconds=result.execution_time_seconds,
-                    status=result.status,
-                    error_message=result.error_message,
+                updated.append(
+                    AgentResult(
+                        agent_name=result.agent_name,
+                        findings=merged_findings,
+                        summary=result.summary,
+                        execution_time_seconds=result.execution_time_seconds,
+                        status=result.status,
+                        error_message=result.error_message,
+                    )
                 )
-                return agent_results
-        return agent_results
+                is_injected = True
+            else:
+                updated.append(result)
+
+        return updated
 
     def _build_agents(self, agent_names: list[str]) -> list[BaseAgent]:
         """Instantiate agents by name from the registry."""
