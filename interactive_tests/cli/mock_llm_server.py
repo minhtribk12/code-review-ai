@@ -4,6 +4,12 @@ Responds to POST /v1/chat/completions with realistic code review findings.
 Detects whether the request is from a review agent or the synthesis step
 by inspecting the system prompt.
 
+Features:
+- Random per-agent latency (0.2-2.0s) to simulate realistic parallel progress
+- Configurable failure mode via X-Mock-Fail header
+- Rate limit simulation via X-Mock-Rate-Limit header
+- Request counter for verification
+
 Run:
     uv run uvicorn interactive_tests.cli.mock_llm_server:app --port 9999
 """
@@ -11,13 +17,17 @@ Run:
 from __future__ import annotations
 
 import json
+import random
 import time
 import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
 app = FastAPI(title="Mock LLM Server")
+
+# Track request count for verification
+_request_count = 0
 
 # ---------------------------------------------------------------------------
 # Request / response models (OpenAI-compatible)
@@ -166,6 +176,15 @@ _SYNTHESIS_RESPONSE = json.dumps(
     }
 )
 
+# Per-agent latency ranges (min, max) in seconds -- simulates realistic timing
+_AGENT_LATENCY: dict[str, tuple[float, float]] = {
+    "security": (0.5, 1.5),
+    "performance": (0.3, 1.0),
+    "style": (0.2, 0.8),
+    "test_coverage": (0.4, 1.2),
+    "synthesis": (0.3, 0.7),
+}
+
 
 def _detect_agent(system_prompt: str) -> str:
     """Detect which agent is calling based on the system prompt content."""
@@ -193,13 +212,16 @@ _AGENT_RESPONSES: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# Endpoint
+# Endpoints
 # ---------------------------------------------------------------------------
 
 
 @app.post("/v1/chat/completions")
-def chat_completions(request: ChatRequest) -> ChatResponse:
+def chat_completions(request: ChatRequest, raw_request: Request) -> ChatResponse:
     """Handle chat completion requests with mock responses."""
+    global _request_count
+    _request_count += 1
+
     system_prompt = ""
     for msg in request.messages:
         if msg.role == "system":
@@ -209,8 +231,10 @@ def chat_completions(request: ChatRequest) -> ChatResponse:
     agent = _detect_agent(system_prompt)
     response_content = _AGENT_RESPONSES.get(agent, _SECURITY_RESPONSE)
 
-    # Simulate realistic latency
-    time.sleep(0.3)
+    # Simulate random realistic latency per agent
+    min_latency, max_latency = _AGENT_LATENCY.get(agent, (0.2, 0.5))
+    latency = random.uniform(min_latency, max_latency)  # noqa: S311
+    time.sleep(latency)
 
     return ChatResponse(
         id=f"chatcmpl-mock-{uuid.uuid4().hex[:8]}",
@@ -234,3 +258,17 @@ def chat_completions(request: ChatRequest) -> ChatResponse:
 def health() -> dict[str, str]:
     """Health check endpoint."""
     return {"status": "ok"}
+
+
+@app.get("/stats")
+def stats() -> dict[str, int]:
+    """Return request statistics for test verification."""
+    return {"request_count": _request_count}
+
+
+@app.post("/reset")
+def reset() -> dict[str, str]:
+    """Reset request counter."""
+    global _request_count
+    _request_count = 0
+    return {"status": "reset"}

@@ -1,0 +1,155 @@
+diff --git a/src/auth/login.py b/src/auth/login.py
+--- a/src/auth/login.py
++++ b/src/auth/login.py
+@@ -10,6 +10,12 @@
+ def authenticate(username: str, password: str) -> bool:
+-    query = f"SELECT * FROM users WHERE name='{username}'"
++    query = "SELECT * FROM users WHERE name = %s"
++    cursor.execute(query, (username,))
+     user = cursor.fetchone()
++    if user is None:
++        return False
++    return verify_password(password, user.hashed_password)
+diff --git a/src/utils/cache.py b/src/utils/cache.py
+--- a/src/utils/cache.py
++++ b/src/utils/cache.py
+@@ -1,4 +1,15 @@
++from functools import lru_cache
++
++
++@lru_cache(maxsize=256)
+ def get_config(key: str) -> str:
+     return _load_config()[key]
++
++
++def invalidate_cache() -> None:
++    get_config.cache_clear()
+diff --git a/src/models/user.py b/src/models/user.py
+new file mode 100644
+--- /dev/null
++++ b/src/models/user.py
+@@ -0,0 +1,35 @@
++from __future__ import annotations
++
++from datetime import datetime
++from enum import StrEnum
++
++from pydantic import BaseModel, Field
++
++
++class UserRole(StrEnum):
++    ADMIN = "admin"
++    USER = "user"
++    GUEST = "guest"
++
++
++class User(BaseModel):
++    id: int
++    username: str
++    email: str
++    role: UserRole = UserRole.USER
++    created_at: datetime = Field(default_factory=datetime.now)
++    is_active: bool = True
++
++    def has_permission(self, action: str) -> bool:
++        if self.role == UserRole.ADMIN:
++            return True
++        if self.role == UserRole.GUEST:
++            return action == "read"
++        return action in ("read", "write")
++
++
++class UserSession(BaseModel):
++    user_id: int
++    token: str
++    expires_at: datetime
++    is_valid: bool = True
+diff --git a/src/api/routes.py b/src/api/routes.py
+--- a/src/api/routes.py
++++ b/src/api/routes.py
+@@ -5,8 +5,20 @@
+ from flask import Flask, request, jsonify
+
+ app = Flask(__name__)
+
++@app.route("/api/users", methods=["GET"])
++def list_users():
++    page = request.args.get("page", 1, type=int)
++    per_page = request.args.get("per_page", 20, type=int)
++    users = db.query(User).offset((page - 1) * per_page).limit(per_page).all()
++    return jsonify([u.dict() for u in users])
++
++
++@app.route("/api/users/<int:user_id>", methods=["DELETE"])
++def delete_user(user_id: int):
++    user = db.query(User).get(user_id)
++    if user is None:
++        return jsonify({"error": "not found"}), 404
++    db.delete(user)
++    db.commit()
++    return jsonify({"status": "deleted"})
+diff --git a/src/services/email.py b/src/services/email.py
+new file mode 100644
+--- /dev/null
++++ b/src/services/email.py
+@@ -0,0 +1,28 @@
++from __future__ import annotations
++
++import smtplib
++from email.mime.text import MIMEText
++
++
++def send_email(
++    to: str,
++    subject: str,
++    body: str,
++    from_addr: str = "noreply@example.com",
++) -> bool:
++    msg = MIMEText(body)
++    msg["Subject"] = subject
++    msg["From"] = from_addr
++    msg["To"] = to
++
++    try:
++        with smtplib.SMTP("localhost", 587) as server:
++            server.starttls()
++            server.send_message(msg)
++        return True
++    except smtplib.SMTPException:
++        return False
++
++
++def send_welcome_email(username: str, email: str) -> bool:
++    return send_email(to=email, subject="Welcome!", body=f"Hello {username}")
+diff --git a/tests/test_auth.py b/tests/test_auth.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_auth.py
+@@ -0,0 +1,15 @@
++import pytest
++from src.auth.login import authenticate
++
++
++def test_valid_login():
++    assert authenticate("admin", "correct_password") is True
++
++
++def test_invalid_password():
++    assert authenticate("admin", "wrong") is False
++
++
++def test_nonexistent_user():
++    assert authenticate("nobody", "any") is False
+diff --git a/config/settings.yaml b/config/settings.yaml
+--- a/config/settings.yaml
++++ b/config/settings.yaml
+@@ -1,5 +1,8 @@
+ database:
+   host: localhost
+   port: 5432
++  pool_size: 10
++  max_overflow: 20
+
+ cache:
+   backend: redis
++  ttl_seconds: 3600

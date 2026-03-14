@@ -53,9 +53,32 @@ def main(
 
     level_name = "DEBUG" if verbose else "INFO"
     level = getattr(logging, level_name)
+    from typing import TextIO, cast
+
     structlog.configure(
         wrapper_class=structlog.make_filtering_bound_logger(level),
+        logger_factory=structlog.PrintLoggerFactory(
+            file=cast("TextIO", _StderrProxy()),
+        ),
     )
+
+
+class _StderrProxy:
+    """Proxy that always resolves to the current sys.stderr at write time.
+
+    Needed because structlog.PrintLoggerFactory captures the file object once.
+    During testing, pytest replaces sys.stderr, so a captured reference goes stale.
+    """
+
+    def write(self, data: str) -> int:
+        import sys
+
+        return sys.stderr.write(data)
+
+    def flush(self) -> None:
+        import sys
+
+        sys.stderr.flush()
 
 
 @app.command()
