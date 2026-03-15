@@ -16,9 +16,10 @@ if TYPE_CHECKING:
 console = Console()
 
 
-def _get_storage() -> ReviewStorage:
-    """Get or create the review storage instance."""
-    return ReviewStorage()
+def _get_storage(session: SessionState) -> ReviewStorage:
+    """Get or create the review storage instance from session config."""
+    db_path = session.effective_settings.history_db_path
+    return ReviewStorage(db_path)
 
 
 def _fmt_cost(cost: float | None) -> str:
@@ -95,7 +96,7 @@ def _history_list(args: list[str], session: SessionState) -> None:
     days = int(days_str) if days_str else None
     limit = int(limit_str) if limit_str else 20
 
-    storage = _get_storage()
+    storage = _get_storage(session)
     reviews = storage.list_reviews(repo=repo, days=days, limit=limit)
 
     if not reviews:
@@ -151,7 +152,7 @@ def _history_show(args: list[str], session: SessionState) -> None:
         console.print(f"[red]Invalid review ID: {args[0]}[/red]")
         return
 
-    storage = _get_storage()
+    storage = _get_storage(session)
     review = storage.get_review(review_id)
 
     if review is None:
@@ -197,7 +198,7 @@ def _history_trends(args: list[str], session: SessionState) -> None:
     days_str = _parse_flag(args, "--days")
     days = int(days_str) if days_str else 30
 
-    storage = _get_storage()
+    storage = _get_storage(session)
     trends = storage.get_trends(repo=repo, days=days)
 
     if trends.get("review_count", 0) == 0:
@@ -284,6 +285,6 @@ def _history_export(args: list[str], session: SessionState) -> None:
     """Export review history as JSON."""
     repo = _parse_flag(args, "--repo") or None
 
-    storage = _get_storage()
+    storage = _get_storage(session)
     output = storage.export_json(repo=repo)
     console.print(output)

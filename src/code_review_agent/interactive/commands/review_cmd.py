@@ -185,8 +185,11 @@ def _auto_save_report(report: object, session: SessionState) -> None:
     try:
         from code_review_agent.storage import ReviewStorage
 
-        storage = ReviewStorage()
         settings = session.effective_settings
+        if not settings.auto_save_history:
+            return
+
+        storage = ReviewStorage(settings.history_db_path)
         storage.save(
             report,  # type: ignore[arg-type]
             repo=session.active_repo,

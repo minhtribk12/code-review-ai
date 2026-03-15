@@ -69,6 +69,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Iterative deepening
+    max_deepening_rounds: int = Field(default=1, ge=1, le=5)
+    is_validation_enabled: bool = False
+    max_validation_rounds: int = Field(default=1, ge=1, le=3)
+
+    # History
+    history_db_path: str = "~/.cra/reviews.db"
+    auto_save_history: bool = True
+
     @model_validator(mode="after")
     def _validate_custom_pricing(self) -> Settings:
         """Validate that custom pricing is either both set or both unset."""

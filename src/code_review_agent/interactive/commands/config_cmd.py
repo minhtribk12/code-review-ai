@@ -36,11 +36,22 @@ _CONFIG_CATEGORIES: dict[str, list[str]] = {
         "dedup_strategy",
         "max_review_seconds",
         "max_concurrent_agents",
+        "default_agents",
+    ],
+    "Iterative Review": [
+        "max_deepening_rounds",
+        "is_validation_enabled",
+        "max_validation_rounds",
     ],
     "GitHub": [
         "github_token",
         "max_pr_files",
         "github_rate_limit_warn_threshold",
+        "pr_stale_days",
+    ],
+    "History": [
+        "history_db_path",
+        "auto_save_history",
     ],
 }
 
