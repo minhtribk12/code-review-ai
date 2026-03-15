@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from typing import TYPE_CHECKING, TypeVar
 
 import openai
@@ -15,6 +16,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from code_review_agent.models import TokenUsage
 from code_review_agent.rate_limiter import RateLimiter, create_rate_limiter
 
 if TYPE_CHECKING:
@@ -72,6 +74,21 @@ class LLMClient:
             base_url=settings.resolved_llm_base_url,
             timeout=float(settings.request_timeout_seconds),
         )
+        # Thread-safe cumulative token tracking
+        self._usage_lock = threading.Lock()
+        self._total_prompt_tokens = 0
+        self._total_completion_tokens = 0
+        self._llm_calls = 0
+
+    def get_usage(self) -> TokenUsage:
+        """Return cumulative token usage for all API calls made by this client."""
+        with self._usage_lock:
+            return TokenUsage(
+                prompt_tokens=self._total_prompt_tokens,
+                completion_tokens=self._total_completion_tokens,
+                total_tokens=self._total_prompt_tokens + self._total_completion_tokens,
+                llm_calls=self._llm_calls,
+            )
 
     def complete(
         self,
@@ -185,6 +202,10 @@ class LLMClient:
 
         usage = response.usage
         if usage is not None:
+            with self._usage_lock:
+                self._total_prompt_tokens += usage.prompt_tokens
+                self._total_completion_tokens += usage.completion_tokens
+                self._llm_calls += 1
             logger.info(
                 "llm request completed",
                 model=self._model,

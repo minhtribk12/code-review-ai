@@ -20,12 +20,14 @@ from code_review_agent.models import (
     ReviewReport,
     Severity,
     SynthesisResponse,
+    TokenUsage,
 )
 from code_review_agent.prompt_security import detect_suspicious_patterns
 from code_review_agent.token_budget import (
     CharBasedEstimator,
     TokenEstimator,
     default_agents_for_tier,
+    estimate_cost,
     resolve_prompt_budget,
 )
 
@@ -102,6 +104,14 @@ class Orchestrator:
             review_input=review_input,
         )
 
+        if self._is_token_budget_exceeded():
+            usage = self._llm_client.get_usage()
+            logger.warning(
+                "token budget exceeded after agents",
+                total_tokens=usage.total_tokens,
+                budget=self._settings.max_tokens_per_review,
+            )
+
         if injection_findings:
             agent_results = self._inject_security_findings(agent_results, injection_findings)
 
@@ -130,12 +140,39 @@ class Orchestrator:
             overall_summary=synthesis.overall_summary,
             risk_level=validated_risk,
             fetch_warnings=review_input.fetch_warnings,
+            token_usage=self._build_token_usage(),
         )
 
     def _emit(self, event: ReviewEvent, agent_name: str, elapsed: float | None = None) -> None:
         """Fire an event to the registered callback, if any."""
         if self._on_event is not None:
             self._on_event(event, agent_name, elapsed)
+
+    def _build_token_usage(self) -> TokenUsage:
+        """Build a TokenUsage with cost estimate from the LLM client's cumulative counters."""
+        usage = self._llm_client.get_usage()
+        cost = estimate_cost(
+            model=self._settings.llm_model,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            input_price_per_m=self._settings.llm_input_price_per_m,
+            output_price_per_m=self._settings.llm_output_price_per_m,
+        )
+        return TokenUsage(
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            llm_calls=usage.llm_calls,
+            estimated_cost_usd=cost,
+        )
+
+    def _is_token_budget_exceeded(self) -> bool:
+        """Check if cumulative token usage exceeds the per-review budget."""
+        max_tokens = self._settings.max_tokens_per_review
+        if max_tokens is None:
+            return False
+        usage = self._llm_client.get_usage()
+        return usage.total_tokens >= max_tokens
 
     def _scan_for_injection(self, review_input: ReviewInput) -> list[Finding]:
         """Scan diff content for suspicious prompt injection patterns."""
@@ -246,6 +283,7 @@ class Orchestrator:
             overall_summary=overall_summary,
             risk_level=max_severity,
             fetch_warnings=review_input.fetch_warnings,
+            token_usage=self._build_token_usage(),
         )
 
     def _apply_token_budget(self, review_input: ReviewInput) -> ReviewInput:

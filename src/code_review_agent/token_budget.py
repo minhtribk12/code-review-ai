@@ -66,6 +66,58 @@ _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
 _CONTEXT_BUDGET_RATIO = 0.4
 
 
+# Known model pricing: (input_price_per_M_tokens, output_price_per_M_tokens).
+# Used for auto-detection when user does not provide custom pricing.
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    # NVIDIA (OpenRouter pricing)
+    "nvidia/nemotron-3-super-120b-a12b": (0.30, 0.60),
+    "nvidia/llama-3.1-nemotron-70b-instruct": (0.20, 0.40),
+    # Meta Llama (OpenRouter pricing)
+    "meta-llama/llama-3-8b-instruct": (0.06, 0.06),
+    "meta-llama/llama-3-70b-instruct": (0.52, 0.75),
+    "meta-llama/llama-3.1-8b-instruct": (0.05, 0.08),
+    "meta-llama/llama-3.1-70b-instruct": (0.35, 0.40),
+    # OpenAI
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4-turbo": (10.00, 30.00),
+    "gpt-3.5-turbo": (0.50, 1.50),
+    # Mistral
+    "mistralai/mistral-7b-instruct": (0.06, 0.06),
+    "mistralai/mixtral-8x7b-instruct": (0.24, 0.24),
+    # Google
+    "google/gemma-2-9b-it": (0.08, 0.08),
+}
+
+
+def estimate_cost(
+    *,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    input_price_per_m: float | None = None,
+    output_price_per_m: float | None = None,
+) -> float | None:
+    """Estimate cost in USD for the given token usage.
+
+    Resolution:
+    1. If custom prices provided, use them (exact).
+    2. If model is in _MODEL_PRICING, use auto-detected prices (estimated).
+    3. Otherwise return None (unknown pricing).
+    """
+    if input_price_per_m is not None and output_price_per_m is not None:
+        return (
+            prompt_tokens * input_price_per_m + completion_tokens * output_price_per_m
+        ) / 1_000_000
+
+    pricing = _MODEL_PRICING.get(model)
+    if pricing is not None:
+        input_price, output_price = pricing
+        return (prompt_tokens * input_price + completion_tokens * output_price) / 1_000_000
+
+    return None
+
+
 class TokenEstimator(Protocol):
     """Protocol for estimating token count from text."""
 

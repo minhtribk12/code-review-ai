@@ -59,6 +59,18 @@ class AgentResult(BaseModel):
     error_message: str | None = None
 
 
+class TokenUsage(BaseModel):
+    """Cumulative token usage for a review session."""
+
+    model_config = {"frozen": True}
+
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    llm_calls: int
+    estimated_cost_usd: float | None = None
+
+
 class ReviewReport(BaseModel):
     """Aggregated review report from all agents."""
 
@@ -70,6 +82,7 @@ class ReviewReport(BaseModel):
     overall_summary: str
     risk_level: Severity
     fetch_warnings: list[str] = Field(default_factory=list)
+    token_usage: TokenUsage | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property

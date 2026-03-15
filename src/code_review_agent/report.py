@@ -51,6 +51,17 @@ def render_report_rich(report: ReviewReport) -> None:
             f"WARNING: {len(failed)} of {total_agents} agents failed. Review is incomplete."
         )
 
+    if report.token_usage is not None:
+        usage = report.token_usage
+        token_line = (
+            f"Tokens: {usage.prompt_tokens:,} prompt + "
+            f"{usage.completion_tokens:,} completion = "
+            f"{usage.total_tokens:,} total ({usage.llm_calls} calls)"
+        )
+        if usage.estimated_cost_usd is not None:
+            token_line += f" (~${usage.estimated_cost_usd:.4f})"
+        header_lines.append(token_line)
+
     for warning in report.fetch_warnings:
         header_lines.append(f"WARNING: {warning}")
 
@@ -138,6 +149,17 @@ def render_report_markdown(report: ReviewReport) -> str:
         lines.append(
             f"**WARNING:** {len(failed)} of {total_agents} agents failed. Review is incomplete."
         )
+
+    if report.token_usage is not None:
+        usage = report.token_usage
+        token_line = (
+            f"**Tokens:** {usage.prompt_tokens:,} prompt + "
+            f"{usage.completion_tokens:,} completion = "
+            f"{usage.total_tokens:,} total ({usage.llm_calls} calls)"
+        )
+        if usage.estimated_cost_usd is not None:
+            token_line += f" (~${usage.estimated_cost_usd:.4f})"
+        lines.append(token_line)
 
     for warning in report.fetch_warnings:
         lines.append(f"**WARNING:** {warning}")

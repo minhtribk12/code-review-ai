@@ -169,6 +169,8 @@ class TestLLMClientComplete:
 
     def _make_client(self) -> MagicMock:
         """Create a mock LLMClient with a mock OpenAI client."""
+        import threading
+
         from code_review_agent.llm_client import LLMClient
         from code_review_agent.rate_limiter import NoOpRateLimiter
 
@@ -178,6 +180,10 @@ class TestLLMClientComplete:
             client._temperature = 0.1
             client._client = MagicMock()
             client._rate_limiter = NoOpRateLimiter()
+            client._usage_lock = threading.Lock()
+            client._total_prompt_tokens = 0
+            client._total_completion_tokens = 0
+            client._llm_calls = 0
         return client
 
     def _mock_response(self, content: str) -> MagicMock:
@@ -344,3 +350,48 @@ class TestLLMClientComplete:
             response_model=_SimpleModel,
         )
         assert result.name == "x"
+
+    def test_get_usage_tracks_cumulative_tokens(self) -> None:
+        client = self._make_client()
+        client._client.chat.completions.create.return_value = self._mock_response(
+            '{"name": "a", "value": 1}'
+        )
+        client.complete(system_prompt="t", user_prompt="t", response_model=_SimpleModel)
+
+        usage = client.get_usage()
+        assert usage.prompt_tokens == 100
+        assert usage.completion_tokens == 50
+        assert usage.total_tokens == 150
+        assert usage.llm_calls == 1
+
+    def test_get_usage_accumulates_across_calls(self) -> None:
+        client = self._make_client()
+        client._client.chat.completions.create.return_value = self._mock_response(
+            '{"name": "a", "value": 1}'
+        )
+        client.complete(system_prompt="t", user_prompt="t", response_model=_SimpleModel)
+        client.complete(system_prompt="t", user_prompt="t", response_model=_SimpleModel)
+
+        usage = client.get_usage()
+        assert usage.prompt_tokens == 200
+        assert usage.completion_tokens == 100
+        assert usage.total_tokens == 300
+        assert usage.llm_calls == 2
+
+    def test_get_usage_initial_zero(self) -> None:
+        client = self._make_client()
+        usage = client.get_usage()
+        assert usage.total_tokens == 0
+        assert usage.llm_calls == 0
+
+    def test_get_usage_no_usage_header_does_not_increment(self) -> None:
+        client = self._make_client()
+        response = self._mock_response('{"name": "a", "value": 1}')
+        response.usage = None
+        client._client.chat.completions.create.return_value = response
+
+        client.complete(system_prompt="t", user_prompt="t", response_model=_SimpleModel)
+
+        usage = client.get_usage()
+        assert usage.total_tokens == 0
+        assert usage.llm_calls == 0

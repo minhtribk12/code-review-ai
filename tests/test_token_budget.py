@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-import pytest  # noqa: TC002
+import pytest
 
 from code_review_agent.models import DiffFile, DiffStatus, ReviewInput
 from code_review_agent.token_budget import (
     _MODEL_CONTEXT_WINDOWS,
+    _MODEL_PRICING,
     _TIER_BUDGETS,
     CharBasedEstimator,
     TokenTier,
+    estimate_cost,
     resolve_prompt_budget,
 )
 
@@ -307,3 +309,81 @@ class TestTokenTier:
 
     def test_premium_tier_value(self) -> None:
         assert _TIER_BUDGETS[TokenTier.PREMIUM] == 48000
+
+
+# ---------------------------------------------------------------------------
+# Cost estimation
+# ---------------------------------------------------------------------------
+
+
+class TestEstimateCost:
+    """Test cost estimation with custom and auto-detected pricing."""
+
+    def test_custom_pricing(self) -> None:
+        cost = estimate_cost(
+            model="unknown/model",
+            prompt_tokens=1_000_000,
+            completion_tokens=500_000,
+            input_price_per_m=1.00,
+            output_price_per_m=2.00,
+        )
+        assert cost is not None
+        assert cost == pytest.approx(2.0)
+
+    def test_auto_detect_known_model(self) -> None:
+        cost = estimate_cost(
+            model="gpt-4o",
+            prompt_tokens=10_000,
+            completion_tokens=5_000,
+        )
+        assert cost is not None
+        assert cost > 0
+
+    def test_unknown_model_returns_none(self) -> None:
+        cost = estimate_cost(
+            model="unknown/mystery-model",
+            prompt_tokens=10_000,
+            completion_tokens=5_000,
+        )
+        assert cost is None
+
+    def test_custom_overrides_auto_detect(self) -> None:
+        # Custom pricing should be used even for known models
+        cost = estimate_cost(
+            model="gpt-4o",
+            prompt_tokens=1_000_000,
+            completion_tokens=0,
+            input_price_per_m=99.0,
+            output_price_per_m=0.0,
+        )
+        assert cost == pytest.approx(99.0)
+
+    def test_zero_tokens_zero_cost(self) -> None:
+        cost = estimate_cost(
+            model="gpt-4o",
+            prompt_tokens=0,
+            completion_tokens=0,
+        )
+        assert cost == pytest.approx(0.0)
+
+    def test_pricing_registry_matches_context_registry(self) -> None:
+        """All models with pricing should also have context windows."""
+        for model in _MODEL_PRICING:
+            assert model in _MODEL_CONTEXT_WINDOWS, f"{model} has pricing but no context window"
+
+    def test_pricing_values_positive(self) -> None:
+        for model, (input_p, output_p) in _MODEL_PRICING.items():
+            assert input_p >= 0, f"{model} has negative input price"
+            assert output_p >= 0, f"{model} has negative output price"
+
+    def test_partial_custom_pricing_ignored(self) -> None:
+        """If only one price is provided, fall back to auto-detect."""
+        cost = estimate_cost(
+            model="gpt-4o",
+            prompt_tokens=10_000,
+            completion_tokens=5_000,
+            input_price_per_m=1.0,
+            output_price_per_m=None,
+        )
+        # Should use auto-detect (not custom, since output is None)
+        assert cost is not None

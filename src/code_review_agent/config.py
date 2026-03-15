@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = Field(default=120, ge=1)
     token_tier: TokenTier = TokenTier.FREE
     max_prompt_tokens: int | None = None
+    max_tokens_per_review: int | None = None
+    llm_input_price_per_m: float | None = None
+    llm_output_price_per_m: float | None = None
     rate_limit_rpm: int | None = None
     dedup_strategy: DedupStrategy = DedupStrategy.EXACT
     max_review_seconds: int = Field(default=300, ge=10)
