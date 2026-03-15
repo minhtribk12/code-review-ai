@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 import pytest
 from pydantic import SecretStr
@@ -1775,3 +1779,188 @@ class TestTokenFormatting:
         # 999,949 should show as k, 999,950+ should show as m
         assert _format_token_count(999_949) == "999.9k"
         assert _format_token_count(999_950) == "1.0m"
+
+
+# ---------------------------------------------------------------------------
+# Review storage (SQLite history)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewStorage:
+    """Test SQLite-backed review history storage."""
+
+    def _make_report(
+        self,
+        risk: str = "medium",
+        agents: list[str] | None = None,
+        tokens: int = 1000,
+    ) -> object:
+        from datetime import UTC, datetime
+
+        from code_review_agent.models import (
+            AgentResult,
+            Finding,
+            ReviewReport,
+            TokenUsage,
+        )
+
+        agent_names = agents or ["security"]
+        results = [
+            AgentResult(
+                agent_name=name,
+                findings=[
+                    Finding(
+                        file_path="src/app.py",
+                        line_number=10,
+                        severity="high",
+                        category=name,
+                        title=f"Issue from {name}",
+                        description="Test finding",
+                        suggestion="Fix it",
+                    ),
+                ],
+                summary="ok",
+                execution_time_seconds=1.0,
+            )
+            for name in agent_names
+        ]
+        return ReviewReport(
+            reviewed_at=datetime.now(UTC),
+            agent_results=results,
+            overall_summary="Test review",
+            risk_level=risk,
+            token_usage=TokenUsage(
+                prompt_tokens=tokens // 2,
+                completion_tokens=tokens // 2,
+                total_tokens=tokens,
+                llm_calls=len(agent_names) + 1,
+                estimated_cost_usd=0.01,
+            ),
+        )
+
+    def test_save_and_list(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        db = tmp_path / "test.db"
+        storage = ReviewStorage(str(db))
+
+        report = self._make_report()
+        review_id = storage.save(report, repo="acme/app")  # type: ignore[arg-type]
+        assert review_id >= 1
+
+        reviews = storage.list_reviews()
+        assert len(reviews) == 1
+        assert reviews[0]["repo"] == "acme/app"
+        assert reviews[0]["risk_level"] == "medium"
+
+    def test_save_multiple_and_filter(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+
+        r1 = self._make_report(risk="high")
+        r2 = self._make_report(risk="low")
+        storage.save(r1, repo="acme/app")  # type: ignore[arg-type]
+        storage.save(r2, repo="acme/api")  # type: ignore[arg-type]
+
+        all_reviews = storage.list_reviews()
+        assert len(all_reviews) == 2
+
+        filtered = storage.list_reviews(repo="acme/app")
+        assert len(filtered) == 1
+        assert filtered[0]["repo"] == "acme/app"
+
+    def test_get_review_by_id(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+        report = self._make_report()
+        review_id = storage.save(report, repo="acme/app")  # type: ignore[arg-type]
+
+        review = storage.get_review(review_id)
+        assert review is not None
+        assert review["id"] == review_id
+        assert review["report_json"]  # Full JSON preserved
+
+    def test_get_nonexistent_review(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+        assert storage.get_review(999) is None
+
+    def test_trends(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+        for _ in range(3):
+            r = self._make_report(
+                agents=["security", "performance"],
+                tokens=2000,
+            )
+            storage.save(r, repo="acme/app")  # type: ignore[arg-type]
+
+        trends = storage.get_trends(days=7)
+        assert trends["review_count"] == 3
+        assert trends["total_tokens"] == 6000
+        assert trends["avg_findings"] > 0
+
+    def test_finding_counts(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+        report = self._make_report()
+        storage.save(report, repo="test/repo")  # type: ignore[arg-type]
+
+        reviews = storage.list_reviews()
+        assert reviews[0]["high_count"] >= 1
+
+    def test_export_json(self, tmp_path: Path) -> None:
+        import json
+
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+        storage.save(self._make_report(), repo="acme/app")  # type: ignore[arg-type]
+
+        output = storage.export_json()
+        parsed = json.loads(output)
+        assert isinstance(parsed, list)
+        assert len(parsed) == 1
+
+    def test_pr_number_extraction(self) -> None:
+        from code_review_agent.storage import _extract_pr_number
+
+        assert (
+            _extract_pr_number(
+                "https://github.com/acme/app/pull/42",
+            )
+            == 42
+        )
+        assert _extract_pr_number(None) is None
+        assert _extract_pr_number("https://github.com/acme/app") is None
+
+    def test_db_created_automatically(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        db = tmp_path / "subdir" / "reviews.db"
+        storage = ReviewStorage(str(db))
+        assert storage.db_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# History command
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryCommand:
+    """Test history command registration and dispatch."""
+
+    def test_history_registered(self) -> None:
+        from code_review_agent.interactive.repl import _COMMANDS
+
+        assert "history" in _COMMANDS
+
+    def test_help_includes_history(self) -> None:
+        from code_review_agent.interactive.commands.meta import COMMAND_HELP
+
+        assert "History" in COMMAND_HELP

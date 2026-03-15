@@ -94,6 +94,12 @@ def build_static_completer() -> NestedCompleter:
                 "github": None,
             },
             "watch": {"--interval": None, "--agents": None},
+            "history": {
+                "list": {"--repo": None, "--days": None, "--limit": None},
+                "show": None,
+                "trends": {"--repo": None, "--days": None},
+                "export": {"--repo": None, "--format": {"json": None}},
+            },
             "usage": None,
             "help": {
                 "git": None,

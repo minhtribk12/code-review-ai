@@ -117,6 +117,9 @@ def _run_review_on_input(
         if report.token_usage is not None:
             session.total_tokens_used += report.token_usage.total_tokens
 
+        # Auto-save to history
+        _auto_save_report(report, session)
+
         if output_format == OutputFormat.JSON:
             console.print(render_report_json(report))
         else:
@@ -172,3 +175,21 @@ def _resolve_diff(positional: list[str]) -> str | None:
     except git_ops.GitError as exc:
         console.print(f"[red]{exc}[/red]")
         return None
+
+
+def _auto_save_report(report: object, session: SessionState) -> None:
+    """Save the review report to history storage.
+
+    Fails silently -- storage errors should never block the review output.
+    """
+    try:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage()
+        repo = session.active_repo
+        storage.save(report, repo=repo)  # type: ignore[arg-type]
+    except Exception:
+        # Storage failure is non-critical -- don't interrupt the review
+        import structlog
+
+        structlog.get_logger(__name__).debug("auto-save failed", exc_info=True)

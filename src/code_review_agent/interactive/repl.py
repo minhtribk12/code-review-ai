@@ -28,6 +28,7 @@ from code_review_agent.interactive.commands.git_write import (
     cmd_stash,
     cmd_unstage,
 )
+from code_review_agent.interactive.commands.history_cmd import cmd_history
 from code_review_agent.interactive.commands.meta import (
     cmd_agents,
     cmd_clear,
@@ -67,6 +68,7 @@ _COMMANDS: dict[str, CommandHandler] = {
     "pr": cmd_pr,
     "repo": cmd_repo,
     "watch": cmd_watch,
+    "history": cmd_history,
     "config": cmd_config,
     "usage": cmd_usage,
     "help": cmd_help,

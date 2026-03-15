@@ -300,10 +300,26 @@ config validate                 # check config for errors
 - Esc to cancel edit or exit editor
 - Validation on Enter -- invalid input shows error, keeps old value
 
+### Review History
+
+Reviews are automatically saved to `~/.cra/reviews.db` (SQLite). Browse and
+query past reviews:
+
+```bash
+history                         # last 20 reviews
+history --repo acme/app         # filter by repo
+history --days 30               # last 30 days
+history --limit 50              # more results
+history show 42                 # full detail for review #42
+history trends                  # aggregated stats (findings, cost, risk)
+history trends --days 7         # last week's trends
+history export                  # export as JSON
+```
+
 ### Other Commands
 
 ```bash
-usage                           # session stats (reviews, tokens, cost)
+usage                           # current session stats (tokens, cost)
 help                            # all commands
 help pr                         # help for a specific group
 agents                          # list available review agents
@@ -402,6 +418,7 @@ src/code_review_agent/
       pr_workflow.py     # pr mine/assigned/stale/ready/conflicts/summary
       repo_cmd.py        # repo list/select/current/clear
       review_cmd.py      # review command with auto-stage
+      history_cmd.py     # history list/show/trends/export
       usage_cmd.py       # session usage summary
       watch_cmd.py       # continuous file monitoring
     completers.py        # tab completion (static + dynamic branches)
@@ -414,6 +431,7 @@ src/code_review_agent/
   orchestrator.py        # Parallel agent execution + synthesis
   main.py                # Typer CLI + diff parser
   report.py              # Rich terminal + Markdown rendering
+  storage.py             # SQLite review history (auto-save, query, trends)
   github_client.py       # GitHub API (PR read + write + rate limiting)
 
 tests/                   # 450+ unit tests

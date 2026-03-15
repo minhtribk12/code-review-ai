@@ -82,6 +82,12 @@ COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
         ("config reset", "Reload config from .env"),
         ("config validate", "Check config for errors"),
     ],
+    "History": [
+        ("history [--repo R] [--days N]", "List past reviews"),
+        ("history show <id>", "Show full review detail"),
+        ("history trends [--days N]", "Aggregated trends and stats"),
+        ("history export", "Export review history as JSON"),
+    ],
     "Usage": [
         ("usage", "Show session usage summary (tokens, cost, calls)"),
     ],
