@@ -81,11 +81,12 @@ class Orchestrator:
         *,
         agent_names: list[str] | None = None,
     ) -> ReviewReport:
-        """Execute selected agents concurrently, synthesize results, and return a report.
+        """Execute agents with optional iterative deepening, then synthesize.
 
-        Args:
-            review_input: The diff and metadata to review.
-            agent_names: Names of agents to run. Defaults to all registered agents.
+        When ``max_deepening_rounds > 1``, agents run multiple rounds.
+        Each round passes the previous round's findings to agents via
+        ``previous_findings``. The loop stops early if a round produces
+        zero new findings (convergence) or when the max is reached.
         """
         review_input = self._apply_token_budget(review_input)
         injection_findings = self._scan_for_injection(review_input)
@@ -99,39 +100,98 @@ class Orchestrator:
             total_registered=len(ALL_AGENT_NAMES),
         )
 
-        agent_results = self._run_agents(
-            agents=agents,
-            review_input=review_input,
-        )
+        max_rounds = self._settings.max_deepening_rounds
+        all_findings: list[Finding] = []
+        all_agent_results: list[AgentResult] = []
+        rounds_completed = 0
 
-        if self._is_token_budget_exceeded():
-            usage = self._llm_client.get_usage()
-            logger.warning(
-                "token budget exceeded after agents",
-                total_tokens=usage.total_tokens,
-                budget=self._settings.max_tokens_per_review,
+        for round_num in range(1, max_rounds + 1):
+            previous = all_findings if round_num > 1 else None
+
+            round_results = self._run_agents(
+                agents=agents,
+                review_input=review_input,
+                previous_findings=previous,
             )
 
-        if injection_findings:
-            agent_results = self._inject_security_findings(agent_results, injection_findings)
+            # Deduplicate this round's findings against all previous
+            round_results = deduplicate_agent_results(
+                round_results,
+                strategy=self._settings.dedup_strategy,
+            )
 
-        agent_results = deduplicate_agent_results(
-            agent_results, strategy=self._settings.dedup_strategy
-        )
+            # Count genuinely new findings
+            existing_keys = {(f.file_path, f.line_number, f.title) for f in all_findings}
+            new_findings: list[Finding] = []
+            for result in round_results:
+                for finding in result.findings:
+                    key = (finding.file_path, finding.line_number, finding.title)
+                    if key not in existing_keys:
+                        new_findings.append(finding)
+                        existing_keys.add(key)
+
+            rounds_completed = round_num
+
+            # Merge round results into cumulative results
+            if round_num == 1:
+                all_agent_results = round_results
+            else:
+                all_agent_results = self._merge_round_results(
+                    all_agent_results,
+                    round_results,
+                )
+
+            all_findings.extend(new_findings)
+
+            logger.info(
+                "deepening round complete",
+                round=round_num,
+                new_findings=len(new_findings),
+                total_findings=len(all_findings),
+            )
+
+            if self._is_token_budget_exceeded():
+                logger.warning(
+                    "token budget exceeded, stopping deepening",
+                    round=round_num,
+                )
+                break
+
+            # Convergence: stop if no new findings this round
+            if round_num > 1 and len(new_findings) == 0:
+                logger.info(
+                    "deepening converged, no new findings",
+                    round=round_num,
+                )
+                break
+
+        agent_results = all_agent_results
+
+        if injection_findings:
+            agent_results = self._inject_security_findings(
+                agent_results,
+                injection_findings,
+            )
 
         successful_results = [r for r in agent_results if r.status != AgentStatus.FAILED]
 
         if len(successful_results) <= 1:
-            return self._build_report_without_synthesis(
+            report = self._build_report_without_synthesis(
                 review_input=review_input,
                 agent_results=agent_results,
                 successful_results=successful_results,
+            )
+            return report.model_copy(
+                update={"rounds_completed": rounds_completed},
             )
 
         self._emit(ReviewEvent.SYNTHESIS_STARTED, "synthesis")
         synthesis = self._synthesize(agent_results=agent_results)
         self._emit(ReviewEvent.SYNTHESIS_COMPLETED, "synthesis")
-        validated_risk = self._validate_risk_level(synthesis.risk_level, agent_results)
+        validated_risk = self._validate_risk_level(
+            synthesis.risk_level,
+            agent_results,
+        )
 
         return ReviewReport(
             pr_url=review_input.pr_url,
@@ -141,6 +201,7 @@ class Orchestrator:
             risk_level=validated_risk,
             fetch_warnings=review_input.fetch_warnings,
             token_usage=self._build_token_usage(),
+            rounds_completed=rounds_completed,
         )
 
     def _emit(self, event: ReviewEvent, agent_name: str, elapsed: float | None = None) -> None:
@@ -359,10 +420,46 @@ class Orchestrator:
             fetch_warnings=review_input.fetch_warnings,
         )
 
-    def _run_single_agent(self, agent: BaseAgent, review_input: ReviewInput) -> AgentResult:
+    def _merge_round_results(
+        self,
+        cumulative: list[AgentResult],
+        new_round: list[AgentResult],
+    ) -> list[AgentResult]:
+        """Merge a new round's results into the cumulative results.
+
+        For each agent, combine findings from all rounds into a single
+        AgentResult. Execution times are summed.
+        """
+        by_name: dict[str, AgentResult] = {r.agent_name: r for r in cumulative}
+
+        for result in new_round:
+            existing = by_name.get(result.agent_name)
+            if existing is None:
+                by_name[result.agent_name] = result
+            else:
+                merged_findings = list(existing.findings) + list(result.findings)
+                by_name[result.agent_name] = AgentResult(
+                    agent_name=result.agent_name,
+                    findings=merged_findings,
+                    summary=result.summary,
+                    execution_time_seconds=(
+                        existing.execution_time_seconds + result.execution_time_seconds
+                    ),
+                    status=result.status,
+                    error_message=result.error_message,
+                )
+
+        return list(by_name.values())
+
+    def _run_single_agent(
+        self,
+        agent: BaseAgent,
+        review_input: ReviewInput,
+        previous_findings: list[Finding] | None = None,
+    ) -> AgentResult:
         """Run a single agent, emitting start/complete/fail events."""
         self._emit(ReviewEvent.AGENT_STARTED, agent.name)
-        result = agent.review(review_input)
+        result = agent.review(review_input, previous_findings=previous_findings)
         if result.status == AgentStatus.FAILED:
             self._emit(
                 ReviewEvent.AGENT_FAILED,
@@ -382,6 +479,7 @@ class Orchestrator:
         *,
         agents: list[BaseAgent],
         review_input: ReviewInput,
+        previous_findings: list[Finding] | None = None,
     ) -> list[AgentResult]:
         """Run all agents concurrently with a total time limit.
 
@@ -397,7 +495,12 @@ class Orchestrator:
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_agent = {
-                executor.submit(self._run_single_agent, agent, review_input): agent
+                executor.submit(
+                    self._run_single_agent,
+                    agent,
+                    review_input,
+                    previous_findings,
+                ): agent
                 for agent in agents
             }
 

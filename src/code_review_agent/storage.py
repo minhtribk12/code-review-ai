@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS reviews (
     files_reviewed INTEGER NOT NULL DEFAULT 0,
     agents_count INTEGER NOT NULL DEFAULT 0,
     agents_used TEXT,
+    rounds_completed INTEGER NOT NULL DEFAULT 1,
     -- Full report for complete retrieval
     report_json TEXT NOT NULL
 );
@@ -182,10 +183,10 @@ class ReviewStorage:
                     prompt_tokens, completion_tokens, total_tokens, llm_calls,
                     estimated_cost_usd, llm_model, token_tier, dedup_strategy,
                     total_execution_seconds, files_reviewed, agents_count,
-                    agents_used, report_json
+                    agents_used, rounds_completed, report_json
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (
@@ -214,6 +215,7 @@ class ReviewStorage:
                     files_reviewed,
                     agents_count,
                     agents,
+                    getattr(report, "rounds_completed", 1),
                     report_json,
                 ),
             )

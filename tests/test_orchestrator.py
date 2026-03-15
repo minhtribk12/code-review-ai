@@ -250,3 +250,216 @@ class TestOrchestratorEvents:
             report = orchestrator.run(review_input=sample_review_input)
 
         assert isinstance(report, ReviewReport)
+
+
+class TestDeepeningLoop:
+    """Test iterative deepening (multiple agent rounds)."""
+
+    def test_single_round_default(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+    ) -> None:
+        """Default max_deepening_rounds=1 runs agents once."""
+        orchestrator = Orchestrator(
+            settings=mock_settings,
+            llm_client=mock_llm_client,
+        )
+        results = [_make_agent_result("security")]
+
+        with patch.object(orchestrator, "_run_agents", return_value=results) as mock_run:
+            report = orchestrator.run(review_input=sample_review_input)
+
+        assert mock_run.call_count == 1
+        assert report.rounds_completed == 1
+
+    def test_multiple_rounds_with_new_findings(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+        mock_synthesis_response: SynthesisResponse,
+    ) -> None:
+        """Multiple rounds run when max_deepening_rounds > 1."""
+        mock_settings.max_deepening_rounds = 3
+        mock_llm_client.complete.return_value = mock_synthesis_response
+        orchestrator = Orchestrator(
+            settings=mock_settings,
+            llm_client=mock_llm_client,
+        )
+
+        # Round 1: one finding
+        round1 = [_make_agent_result("security")]
+        # Round 2: a NEW finding (different file+line+title)
+        round2_finding = Finding(
+            file_path="src/new.py",
+            line_number=99,
+            severity="high",
+            category="security",
+            title="New round 2 finding",
+            description="Found in deeper analysis.",
+            suggestion="Fix.",
+        )
+        round2 = [
+            AgentResult(
+                agent_name="security",
+                findings=[round2_finding],
+                summary="Found deeper issue.",
+                execution_time_seconds=1.0,
+            ),
+        ]
+        # Round 3: no new findings (convergence)
+        round3 = [
+            AgentResult(
+                agent_name="security",
+                findings=[],
+                summary="No new issues.",
+                execution_time_seconds=0.5,
+            ),
+        ]
+
+        call_count = 0
+
+        def side_effect(**kwargs: object) -> list[AgentResult]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return round1
+            if call_count == 2:
+                return round2
+            return round3
+
+        with patch.object(orchestrator, "_run_agents", side_effect=side_effect):
+            report = orchestrator.run(review_input=sample_review_input)
+
+        # Should stop at round 3 (convergence: 0 new findings)
+        assert call_count == 3
+        assert report.rounds_completed == 3
+
+    def test_convergence_stops_early(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+    ) -> None:
+        """Loop stops when round produces 0 new findings."""
+        mock_settings.max_deepening_rounds = 5
+        orchestrator = Orchestrator(
+            settings=mock_settings,
+            llm_client=mock_llm_client,
+        )
+
+        round1 = [_make_agent_result("security")]
+        # Round 2: same finding as round 1 (duplicate)
+        round2 = [_make_agent_result("security")]
+
+        call_count = 0
+
+        def side_effect(**kwargs: object) -> list[AgentResult]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return round1
+            return round2
+
+        with patch.object(orchestrator, "_run_agents", side_effect=side_effect):
+            report = orchestrator.run(review_input=sample_review_input)
+
+        # Should stop at round 2 (convergence: duplicate findings)
+        assert call_count == 2
+        assert report.rounds_completed == 2
+
+    def test_previous_findings_passed_to_agents(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+    ) -> None:
+        """Round 2+ passes previous findings to _run_agents."""
+        mock_settings.max_deepening_rounds = 2
+        orchestrator = Orchestrator(
+            settings=mock_settings,
+            llm_client=mock_llm_client,
+        )
+
+        round1 = [_make_agent_result("security")]
+        round2 = [
+            AgentResult(
+                agent_name="security",
+                findings=[],
+                summary="No new issues.",
+                execution_time_seconds=0.5,
+            ),
+        ]
+
+        previous_findings_received: list[object] = []
+
+        def side_effect(
+            **kwargs: object,
+        ) -> list[AgentResult]:
+            previous_findings_received.append(
+                kwargs.get("previous_findings"),
+            )
+            if len(previous_findings_received) == 1:
+                return round1
+            return round2
+
+        with patch.object(orchestrator, "_run_agents", side_effect=side_effect):
+            orchestrator.run(review_input=sample_review_input)
+
+        # Round 1: no previous findings
+        assert previous_findings_received[0] is None
+        # Round 2: has previous findings from round 1
+        assert previous_findings_received[1] is not None
+        assert len(previous_findings_received[1]) > 0  # type: ignore[arg-type]
+
+    def test_findings_accumulated_across_rounds(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+        mock_synthesis_response: SynthesisResponse,
+    ) -> None:
+        """Final report contains findings from all rounds."""
+        mock_settings.max_deepening_rounds = 2
+        mock_llm_client.complete.return_value = mock_synthesis_response
+        orchestrator = Orchestrator(
+            settings=mock_settings,
+            llm_client=mock_llm_client,
+        )
+
+        round1 = [_make_agent_result("security")]
+        round2_finding = Finding(
+            file_path="src/deep.py",
+            line_number=50,
+            severity="critical",
+            category="security",
+            title="Deep finding",
+            description="Found on second pass.",
+            suggestion="Fix.",
+        )
+        round2 = [
+            AgentResult(
+                agent_name="security",
+                findings=[round2_finding],
+                summary="Deeper issue.",
+                execution_time_seconds=1.0,
+            ),
+        ]
+
+        call_count = 0
+
+        def side_effect(**kwargs: object) -> list[AgentResult]:
+            nonlocal call_count
+            call_count += 1
+            return round1 if call_count == 1 else round2
+
+        with patch.object(orchestrator, "_run_agents", side_effect=side_effect):
+            report = orchestrator.run(review_input=sample_review_input)
+
+        # Both rounds' findings should be in the report
+        all_finding_titles = [f.title for r in report.agent_results for f in r.findings]
+        assert "security finding" in all_finding_titles
+        assert "Deep finding" in all_finding_titles
+        assert report.rounds_completed == 2

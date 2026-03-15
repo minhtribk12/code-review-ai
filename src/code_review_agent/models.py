@@ -83,6 +83,7 @@ class ReviewReport(BaseModel):
     risk_level: Severity
     fetch_warnings: list[str] = Field(default_factory=list)
     token_usage: TokenUsage | None = None
+    rounds_completed: int = 1
 
     @computed_field  # type: ignore[prop-decorator]
     @property
