@@ -9,6 +9,9 @@ from code_review_agent.models import (
     ReviewInput,
     ReviewReport,
     SynthesisResponse,
+    ValidatedFinding,
+    ValidationResponse,
+    ValidationVerdict,
 )
 from code_review_agent.orchestrator import Orchestrator
 
@@ -463,3 +466,328 @@ class TestDeepeningLoop:
         assert "security finding" in all_finding_titles
         assert "Deep finding" in all_finding_titles
         assert report.rounds_completed == 2
+
+
+def _make_validation_response(
+    findings: list[Finding],
+    verdicts: list[ValidationVerdict],
+) -> ValidationResponse:
+    """Build a ValidationResponse with given verdicts for each finding."""
+    validated = [
+        ValidatedFinding(
+            original_finding=f,
+            verdict=v,
+            reasoning=f"Verdict for {f.title}",
+        )
+        for f, v in zip(findings, verdicts, strict=True)
+    ]
+    fp_count = sum(1 for v in verdicts if v == ValidationVerdict.LIKELY_FALSE_POSITIVE)
+    return ValidationResponse(
+        validated_findings=validated,
+        false_positive_count=fp_count,
+        validation_summary=f"{fp_count} false positives removed.",
+    )
+
+
+class TestValidationLoop:
+    """Test the validation loop (CRA-49)."""
+
+    def test_validation_disabled_by_default(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+        mock_synthesis_response: SynthesisResponse,
+    ) -> None:
+        """Validation is off by default -- no validation_result in report."""
+        assert mock_settings.is_validation_enabled is False
+        mock_llm_client.complete.return_value = mock_synthesis_response
+        orchestrator = Orchestrator(settings=mock_settings, llm_client=mock_llm_client)
+
+        results = [_make_agent_result("security"), _make_agent_result("performance")]
+
+        with patch.object(orchestrator, "_run_agents", return_value=results):
+            report = orchestrator.run(review_input=sample_review_input)
+
+        assert report.validation_result is None
+
+    def test_validation_filters_false_positives(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+        mock_synthesis_response: SynthesisResponse,
+    ) -> None:
+        """False positives are removed from agent results."""
+        mock_settings.is_validation_enabled = True
+        mock_settings.max_validation_rounds = 1
+
+        results = [_make_agent_result("security"), _make_agent_result("performance")]
+        all_findings = [f for r in results for f in r.findings]
+
+        validation_resp = _make_validation_response(
+            all_findings,
+            [ValidationVerdict.LIKELY_FALSE_POSITIVE, ValidationVerdict.CONFIRMED],
+        )
+
+        # First call = synthesis, second call = validation
+        mock_llm_client.complete.side_effect = [mock_synthesis_response, validation_resp]
+        orchestrator = Orchestrator(settings=mock_settings, llm_client=mock_llm_client)
+
+        with patch.object(orchestrator, "_run_agents", return_value=results):
+            report = orchestrator.run(review_input=sample_review_input)
+
+        # One false positive removed
+        remaining_titles = [f.title for r in report.agent_results for f in r.findings]
+        assert "security finding" not in remaining_titles
+        assert "performance finding" in remaining_titles
+        assert report.validation_result is not None
+        assert report.validation_result.false_positive_count == 1
+
+    def test_validation_preserves_confirmed_and_uncertain(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+        mock_synthesis_response: SynthesisResponse,
+    ) -> None:
+        """Confirmed and uncertain findings are kept in the report."""
+        mock_settings.is_validation_enabled = True
+        mock_settings.max_validation_rounds = 1
+
+        results = [_make_agent_result("security"), _make_agent_result("performance")]
+        all_findings = [f for r in results for f in r.findings]
+
+        validation_resp = _make_validation_response(
+            all_findings,
+            [ValidationVerdict.CONFIRMED, ValidationVerdict.UNCERTAIN],
+        )
+
+        mock_llm_client.complete.side_effect = [mock_synthesis_response, validation_resp]
+        orchestrator = Orchestrator(settings=mock_settings, llm_client=mock_llm_client)
+
+        with patch.object(orchestrator, "_run_agents", return_value=results):
+            report = orchestrator.run(review_input=sample_review_input)
+
+        remaining_titles = [f.title for r in report.agent_results for f in r.findings]
+        assert "security finding" in remaining_titles
+        assert "performance finding" in remaining_titles
+
+    def test_adjusted_severity_applied(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+        mock_synthesis_response: SynthesisResponse,
+    ) -> None:
+        """Validator can downgrade severity of a finding."""
+        mock_settings.is_validation_enabled = True
+        mock_settings.max_validation_rounds = 1
+
+        results = [_make_agent_result("security"), _make_agent_result("performance")]
+        sec_finding = results[0].findings[0]
+        perf_finding = results[1].findings[0]
+
+        validation_resp = ValidationResponse(
+            validated_findings=[
+                ValidatedFinding(
+                    original_finding=sec_finding,
+                    verdict=ValidationVerdict.CONFIRMED,
+                    reasoning="Real issue but in test code, lower severity.",
+                    adjusted_severity="low",
+                ),
+                ValidatedFinding(
+                    original_finding=perf_finding,
+                    verdict=ValidationVerdict.CONFIRMED,
+                    reasoning="Valid.",
+                ),
+            ],
+            false_positive_count=0,
+            validation_summary="0 false positives removed.",
+        )
+
+        mock_llm_client.complete.side_effect = [mock_synthesis_response, validation_resp]
+        orchestrator = Orchestrator(settings=mock_settings, llm_client=mock_llm_client)
+
+        with patch.object(orchestrator, "_run_agents", return_value=results):
+            report = orchestrator.run(review_input=sample_review_input)
+
+        adjusted = report.agent_results[0].findings[0]
+        assert adjusted.severity == "low"
+
+    def test_risk_level_recalculated_after_filtering(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+    ) -> None:
+        """Risk level adjusts downward when critical findings are removed."""
+        mock_settings.is_validation_enabled = True
+        mock_settings.max_validation_rounds = 1
+
+        critical_finding = Finding(
+            file_path="src/app.py",
+            line_number=1,
+            severity="critical",
+            category="security",
+            title="Critical vuln",
+            description="A critical vulnerability.",
+        )
+        low_finding = Finding(
+            file_path="src/app.py",
+            line_number=10,
+            severity="low",
+            category="style",
+            title="Style issue",
+            description="A minor style issue.",
+        )
+        results = [
+            AgentResult(
+                agent_name="security",
+                findings=[critical_finding],
+                summary="Critical issue.",
+                execution_time_seconds=1.0,
+            ),
+            AgentResult(
+                agent_name="style",
+                findings=[low_finding],
+                summary="Style issue.",
+                execution_time_seconds=1.0,
+            ),
+        ]
+
+        synthesis = SynthesisResponse(
+            overall_summary="Critical security issue found.",
+            risk_level="critical",
+        )
+        validation_resp = _make_validation_response(
+            [critical_finding, low_finding],
+            [ValidationVerdict.LIKELY_FALSE_POSITIVE, ValidationVerdict.CONFIRMED],
+        )
+
+        mock_llm_client.complete.side_effect = [synthesis, validation_resp]
+        orchestrator = Orchestrator(settings=mock_settings, llm_client=mock_llm_client)
+
+        with patch.object(orchestrator, "_run_agents", return_value=results):
+            report = orchestrator.run(review_input=sample_review_input)
+
+        # Critical removed, only low remains -- risk should be low or medium
+        assert report.risk_level in ("low", "medium")
+
+    def test_validation_failure_degrades_gracefully(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+        mock_synthesis_response: SynthesisResponse,
+    ) -> None:
+        """If validation LLM call fails, return unfiltered results."""
+        mock_settings.is_validation_enabled = True
+        mock_settings.max_validation_rounds = 1
+
+        results = [_make_agent_result("security"), _make_agent_result("performance")]
+
+        # Synthesis succeeds, validation raises
+        mock_llm_client.complete.side_effect = [
+            mock_synthesis_response,
+            RuntimeError("LLM unavailable"),
+        ]
+        orchestrator = Orchestrator(settings=mock_settings, llm_client=mock_llm_client)
+
+        with patch.object(orchestrator, "_run_agents", return_value=results):
+            report = orchestrator.run(review_input=sample_review_input)
+
+        # All findings preserved despite validation failure
+        assert len(report.agent_results) == 2
+        total = sum(len(r.findings) for r in report.agent_results)
+        assert total == 2
+        assert report.validation_result is None
+
+    def test_validation_events_emitted(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+        mock_synthesis_response: SynthesisResponse,
+    ) -> None:
+        """VALIDATION_STARTED and VALIDATION_COMPLETED events fire."""
+        mock_settings.is_validation_enabled = True
+        mock_settings.max_validation_rounds = 1
+
+        results = [_make_agent_result("security"), _make_agent_result("performance")]
+        all_findings = [f for r in results for f in r.findings]
+
+        validation_resp = _make_validation_response(
+            all_findings,
+            [ValidationVerdict.CONFIRMED, ValidationVerdict.CONFIRMED],
+        )
+
+        mock_llm_client.complete.side_effect = [mock_synthesis_response, validation_resp]
+        event_callback = MagicMock()
+        orchestrator = Orchestrator(
+            settings=mock_settings,
+            llm_client=mock_llm_client,
+            on_event=event_callback,
+        )
+
+        with patch.object(orchestrator, "_run_agents", return_value=results):
+            orchestrator.run(review_input=sample_review_input)
+
+        validation_calls = [
+            c
+            for c in event_callback.call_args_list
+            if c[0][0] in (ReviewEvent.VALIDATION_STARTED, ReviewEvent.VALIDATION_COMPLETED)
+        ]
+        assert len(validation_calls) == 2
+        assert validation_calls[0] == call(
+            ReviewEvent.VALIDATION_STARTED,
+            "validation",
+            None,
+        )
+        assert validation_calls[1] == call(
+            ReviewEvent.VALIDATION_COMPLETED,
+            "validation",
+            None,
+        )
+
+    def test_multi_round_validation_rechecks_uncertain(
+        self,
+        sample_review_input: ReviewInput,
+        mock_settings: MagicMock,
+        mock_llm_client: MagicMock,
+        mock_synthesis_response: SynthesisResponse,
+    ) -> None:
+        """Uncertain findings are re-checked in subsequent validation rounds."""
+        mock_settings.is_validation_enabled = True
+        mock_settings.max_validation_rounds = 2
+
+        results = [_make_agent_result("security"), _make_agent_result("performance")]
+        all_findings = [f for r in results for f in r.findings]
+
+        # Round 1: security=uncertain, performance=confirmed
+        round1_resp = _make_validation_response(
+            all_findings,
+            [ValidationVerdict.UNCERTAIN, ValidationVerdict.CONFIRMED],
+        )
+        # Round 2: uncertain finding now confirmed
+        round2_resp = _make_validation_response(
+            [all_findings[0]],
+            [ValidationVerdict.CONFIRMED],
+        )
+
+        mock_llm_client.complete.side_effect = [
+            mock_synthesis_response,
+            round1_resp,
+            round2_resp,
+        ]
+        orchestrator = Orchestrator(settings=mock_settings, llm_client=mock_llm_client)
+
+        with patch.object(orchestrator, "_run_agents", return_value=results):
+            report = orchestrator.run(review_input=sample_review_input)
+
+        # Both findings should survive (both confirmed after 2 rounds)
+        remaining_titles = [f.title for r in report.agent_results for f in r.findings]
+        assert "security finding" in remaining_titles
+        assert "performance finding" in remaining_titles
+        # 3 LLM calls: synthesis + 2 validation rounds
+        assert mock_llm_client.complete.call_count == 3

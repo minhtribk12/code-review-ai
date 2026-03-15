@@ -21,6 +21,9 @@ from code_review_agent.models import (
     Severity,
     SynthesisResponse,
     TokenUsage,
+    ValidatedFinding,
+    ValidationResponse,
+    ValidationVerdict,
 )
 from code_review_agent.prompt_security import detect_suspicious_patterns
 from code_review_agent.token_budget import (
@@ -56,6 +59,24 @@ _SYNTHESIS_SYSTEM_PROMPT = (
     "- high: high-severity findings present, or many medium-severity issues\n"
     "- medium: only medium and low severity findings\n"
     "- low: few or no findings, all low severity"
+)
+
+_VALIDATION_SYSTEM_PROMPT = (
+    "You are a skeptical senior engineer reviewing findings from automated "
+    "code review tools. Your job is to identify false positives.\n\n"
+    "For each finding, you MUST:\n"
+    "1. Check if the finding references a real issue visible in the diff\n"
+    "2. Check if the issue is in test/migration/generated code (lower severity)\n"
+    "3. Check if the fix is already present in the diff\n"
+    "4. Check if the pattern is intentional (documented in comments)\n\n"
+    "For each finding, assign a verdict:\n"
+    "- confirmed: the finding is valid and supported by code evidence\n"
+    "- likely_false_positive: the finding is incorrect or irrelevant\n"
+    "- uncertain: not enough context to determine\n\n"
+    "Also provide reasoning (1-2 sentences) for each verdict.\n"
+    "You may optionally suggest an adjusted_severity (lower than original) "
+    "if the issue is real but less severe than reported.\n\n"
+    "Return false_positive_count and a brief validation_summary."
 )
 
 
@@ -188,6 +209,28 @@ class Orchestrator:
         self._emit(ReviewEvent.SYNTHESIS_STARTED, "synthesis")
         synthesis = self._synthesize(agent_results=agent_results)
         self._emit(ReviewEvent.SYNTHESIS_COMPLETED, "synthesis")
+
+        # Validation: filter false positives if enabled
+        validation_result: ValidationResponse | None = None
+        if self._settings.is_validation_enabled:
+            try:
+                self._emit(ReviewEvent.VALIDATION_STARTED, "validation")
+                validation_result = self._validate_findings(
+                    agent_results=agent_results,
+                    review_input=review_input,
+                )
+                agent_results = self._apply_validation(
+                    agent_results,
+                    validation_result,
+                )
+                self._emit(ReviewEvent.VALIDATION_COMPLETED, "validation")
+                logger.info(
+                    "validation complete",
+                    false_positives_removed=validation_result.false_positive_count,
+                )
+            except Exception:
+                logger.exception("validation failed, returning unfiltered results")
+
         validated_risk = self._validate_risk_level(
             synthesis.risk_level,
             agent_results,
@@ -202,6 +245,7 @@ class Orchestrator:
             fetch_warnings=review_input.fetch_warnings,
             token_usage=self._build_token_usage(),
             rounds_completed=rounds_completed,
+            validation_result=validation_result,
         )
 
     def _emit(self, event: ReviewEvent, agent_name: str, elapsed: float | None = None) -> None:
@@ -585,6 +629,156 @@ class Orchestrator:
             user_prompt=user_prompt,
             response_model=SynthesisResponse,
         )
+
+    def _validate_findings(
+        self,
+        *,
+        agent_results: list[AgentResult],
+        review_input: ReviewInput,
+    ) -> ValidationResponse:
+        """Run the validator agent to check findings for false positives.
+
+        Supports multiple validation rounds via ``max_validation_rounds``.
+        Each round re-checks findings marked ``uncertain`` in the previous
+        round. Returns the final merged ``ValidationResponse``.
+        """
+        all_findings = [f for r in agent_results for f in r.findings]
+        diff_text = "\n".join(
+            f"--- {df.filename} ---\n{df.patch}" for df in review_input.diff_files
+        )
+
+        max_rounds = self._settings.max_validation_rounds
+        all_validated: list[ValidatedFinding] = []
+        pending_findings = all_findings
+
+        for round_num in range(1, max_rounds + 1):
+            if not pending_findings:
+                break
+
+            findings_json = json.dumps(
+                [f.model_dump() for f in pending_findings],
+                indent=2,
+            )
+            user_prompt = (
+                f"## Code Diff\n\n{diff_text}\n\n"
+                f"## Findings to Validate (round {round_num})\n\n"
+                f"{findings_json}"
+            )
+
+            response = self._llm_client.complete(
+                system_prompt=_VALIDATION_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_model=ValidationResponse,
+            )
+
+            resolved = [
+                vf
+                for vf in response.validated_findings
+                if vf.verdict != ValidationVerdict.UNCERTAIN
+            ]
+            uncertain = [
+                vf
+                for vf in response.validated_findings
+                if vf.verdict == ValidationVerdict.UNCERTAIN
+            ]
+
+            all_validated.extend(resolved)
+
+            logger.info(
+                "validation round complete",
+                round=round_num,
+                confirmed=sum(1 for vf in resolved if vf.verdict == ValidationVerdict.CONFIRMED),
+                false_positives=sum(
+                    1 for vf in resolved if vf.verdict == ValidationVerdict.LIKELY_FALSE_POSITIVE
+                ),
+                uncertain=len(uncertain),
+            )
+
+            if not uncertain or round_num == max_rounds:
+                # Final round: treat remaining uncertain as confirmed
+                all_validated.extend(uncertain)
+                break
+
+            # Re-check uncertain findings in next round
+            pending_findings = [vf.original_finding for vf in uncertain]
+
+        false_positive_count = sum(
+            1 for vf in all_validated if vf.verdict == ValidationVerdict.LIKELY_FALSE_POSITIVE
+        )
+
+        return ValidationResponse(
+            validated_findings=all_validated,
+            false_positive_count=false_positive_count,
+            validation_summary=(
+                f"Validated {len(all_validated)} findings: "
+                f"{false_positive_count} likely false positives removed."
+            ),
+        )
+
+    def _apply_validation(
+        self,
+        agent_results: list[AgentResult],
+        validation: ValidationResponse,
+    ) -> list[AgentResult]:
+        """Filter agent results based on validation verdicts.
+
+        Removes ``likely_false_positive`` findings. Applies
+        ``adjusted_severity`` when the validator suggests a lower severity.
+        Returns new ``AgentResult`` list with filtered findings.
+        """
+        # Build lookup: (file_path, line_number, title) -> ValidatedFinding
+        verdict_map: dict[tuple[str | None, int | None, str], ValidatedFinding] = {}
+        for vf in validation.validated_findings:
+            key = (
+                vf.original_finding.file_path,
+                vf.original_finding.line_number,
+                vf.original_finding.title,
+            )
+            verdict_map[key] = vf
+
+        filtered_results: list[AgentResult] = []
+        for result in agent_results:
+            filtered_findings: list[Finding] = []
+            for finding in result.findings:
+                key = (finding.file_path, finding.line_number, finding.title)
+                matched_vf = verdict_map.get(key)
+
+                if matched_vf is not None:
+                    if matched_vf.verdict == ValidationVerdict.LIKELY_FALSE_POSITIVE:
+                        logger.debug(
+                            "removing false positive",
+                            title=finding.title,
+                            reasoning=matched_vf.reasoning,
+                        )
+                        continue
+
+                    # Apply adjusted severity if validator suggested one
+                    if matched_vf.adjusted_severity is not None:
+                        finding = Finding(
+                            severity=matched_vf.adjusted_severity,
+                            category=finding.category,
+                            title=finding.title,
+                            description=finding.description,
+                            file_path=finding.file_path,
+                            line_number=finding.line_number,
+                            suggestion=finding.suggestion,
+                            confidence=finding.confidence,
+                        )
+
+                filtered_findings.append(finding)
+
+            filtered_results.append(
+                AgentResult(
+                    agent_name=result.agent_name,
+                    findings=filtered_findings,
+                    summary=result.summary,
+                    execution_time_seconds=result.execution_time_seconds,
+                    status=result.status,
+                    error_message=result.error_message,
+                )
+            )
+
+        return filtered_results
 
     def _validate_risk_level(
         self,

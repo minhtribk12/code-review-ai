@@ -71,6 +71,35 @@ class TokenUsage(BaseModel):
     estimated_cost_usd: float | None = None
 
 
+class ValidationVerdict(StrEnum):
+    """Verdict from the validation agent for a single finding."""
+
+    CONFIRMED = "confirmed"
+    LIKELY_FALSE_POSITIVE = "likely_false_positive"
+    UNCERTAIN = "uncertain"
+
+
+class ValidatedFinding(BaseModel):
+    """A finding with a validation verdict from the validator agent."""
+
+    model_config = {"frozen": True}
+
+    original_finding: Finding
+    verdict: ValidationVerdict
+    reasoning: str
+    adjusted_severity: Severity | None = None
+
+
+class ValidationResponse(BaseModel):
+    """LLM response model for the validation step."""
+
+    model_config = {"frozen": True}
+
+    validated_findings: list[ValidatedFinding]
+    false_positive_count: int
+    validation_summary: str
+
+
 class ReviewReport(BaseModel):
     """Aggregated review report from all agents."""
 
@@ -84,6 +113,7 @@ class ReviewReport(BaseModel):
     fetch_warnings: list[str] = Field(default_factory=list)
     token_usage: TokenUsage | None = None
     rounds_completed: int = 1
+    validation_result: ValidationResponse | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -111,6 +141,8 @@ class ReviewEvent(StrEnum):
     AGENT_FAILED = "agent_failed"
     SYNTHESIS_STARTED = "synthesis_started"
     SYNTHESIS_COMPLETED = "synthesis_completed"
+    VALIDATION_STARTED = "validation_started"
+    VALIDATION_COMPLETED = "validation_completed"
 
 
 class DiffStatus(StrEnum):
