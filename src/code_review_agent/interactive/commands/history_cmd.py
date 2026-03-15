@@ -251,6 +251,34 @@ def _history_trends(args: list[str], session: SessionState) -> None:
 
         console.print(risk_table)
 
+    # Agent performance
+    agent_stats = storage.get_agent_stats(days=days)
+    if agent_stats:
+        agent_table = Table(
+            title="Agent Performance",
+            show_lines=False,
+        )
+        agent_table.add_column("Agent", style="bold", width=18)
+        agent_table.add_column("Runs", width=6, justify="right")
+        agent_table.add_column("OK", width=5, justify="right")
+        agent_table.add_column("Fail", width=5, justify="right")
+        agent_table.add_column("Findings", width=9, justify="right")
+        agent_table.add_column("Avg/Run", width=8, justify="right")
+        agent_table.add_column("Avg Time", width=8, justify="right")
+
+        for s in agent_stats:
+            agent_table.add_row(
+                s["agent_name"],
+                str(s["runs"]),
+                str(s["success_count"]),
+                str(s["failed_count"]),
+                str(s["total_findings"]),
+                f"{s['avg_findings_per_run']:.1f}",
+                f"{s['avg_execution_seconds']:.1f}s",
+            )
+
+        console.print(agent_table)
+
 
 def _history_export(args: list[str], session: SessionState) -> None:
     """Export review history as JSON."""

@@ -1952,6 +1952,168 @@ class TestReviewStorage:
 # ---------------------------------------------------------------------------
 
 
+class TestStorageAgentResults:
+    """Test per-agent result storage and querying."""
+
+    def _make_report(
+        self,
+        agents: list[str] | None = None,
+        tokens: int = 1000,
+    ) -> object:
+        from datetime import UTC, datetime
+
+        from code_review_agent.models import (
+            AgentResult,
+            Finding,
+            ReviewReport,
+            TokenUsage,
+        )
+
+        agent_names = agents or ["security", "performance"]
+        results = [
+            AgentResult(
+                agent_name=name,
+                findings=[
+                    Finding(
+                        file_path="src/app.py",
+                        line_number=10,
+                        severity="high",
+                        category=name,
+                        title=f"Issue from {name}",
+                        description="Test",
+                        suggestion="Fix",
+                    ),
+                ],
+                summary="ok",
+                execution_time_seconds=1.5 if name == "security" else 0.8,
+            )
+            for name in agent_names
+        ]
+        return ReviewReport(
+            reviewed_at=datetime.now(UTC),
+            agent_results=results,
+            overall_summary="Test",
+            risk_level="high",
+            token_usage=TokenUsage(
+                prompt_tokens=tokens // 2,
+                completion_tokens=tokens // 2,
+                total_tokens=tokens,
+                llm_calls=len(agent_names) + 1,
+                estimated_cost_usd=0.02,
+            ),
+        )
+
+    def test_agent_results_saved(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+        report = self._make_report()
+        review_id = storage.save(report, repo="acme/app")  # type: ignore[arg-type]
+
+        with storage._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM agent_results WHERE review_id = ?",
+                (review_id,),
+            ).fetchall()
+
+        assert len(rows) == 2
+        names = {r["agent_name"] for r in rows}
+        assert names == {"security", "performance"}
+
+    def test_agent_execution_time_stored(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+        report = self._make_report()
+        review_id = storage.save(report, repo="acme/app")  # type: ignore[arg-type]
+
+        with storage._get_connection() as conn:
+            row = conn.execute(
+                "SELECT execution_time_seconds FROM agent_results "
+                "WHERE review_id = ? AND agent_name = 'security'",
+                (review_id,),
+            ).fetchone()
+
+        assert row is not None
+        assert row["execution_time_seconds"] == 1.5
+
+    def test_agent_finding_counts(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+        report = self._make_report()
+        review_id = storage.save(report, repo="acme/app")  # type: ignore[arg-type]
+
+        with storage._get_connection() as conn:
+            row = conn.execute(
+                "SELECT finding_count, high_count FROM agent_results "
+                "WHERE review_id = ? AND agent_name = 'security'",
+                (review_id,),
+            ).fetchone()
+
+        assert row["finding_count"] == 1
+        assert row["high_count"] == 1
+
+    def test_agent_stats_query(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+        for _ in range(3):
+            report = self._make_report()
+            storage.save(report, repo="acme/app")  # type: ignore[arg-type]
+
+        stats = storage.get_agent_stats(days=7)
+        assert len(stats) == 2
+
+        sec = next(s for s in stats if s["agent_name"] == "security")
+        assert sec["runs"] == 3
+        assert sec["success_count"] == 3
+        assert sec["total_findings"] == 3
+        assert sec["avg_execution_seconds"] > 0
+
+    def test_execution_context_stored(self, tmp_path: Path) -> None:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+        report = self._make_report(tokens=5000)
+        storage.save(
+            report,  # type: ignore[arg-type]
+            repo="acme/app",
+            llm_model="gpt-4o",
+            token_tier="premium",
+            dedup_strategy="exact",
+        )
+
+        reviews = storage.list_reviews()
+        review = storage.get_review(reviews[0]["id"])
+        assert review is not None
+        assert review["llm_model"] == "gpt-4o"
+        assert review["token_tier"] == "premium"  # noqa: S105
+        assert review["dedup_strategy"] == "exact"
+        assert review["prompt_tokens"] == 2500
+        assert review["completion_tokens"] == 2500
+        assert review["llm_calls"] == 3
+        assert review["agents_count"] == 2
+        assert review["total_execution_seconds"] > 0
+
+    def test_cascade_delete(self, tmp_path: Path) -> None:
+        """Deleting a review cascades to agent_results."""
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(str(tmp_path / "test.db"))
+        report = self._make_report()
+        review_id = storage.save(report, repo="acme/app")  # type: ignore[arg-type]
+
+        with storage._get_connection() as conn:
+            conn.execute("DELETE FROM reviews WHERE id = ?", (review_id,))
+            rows = conn.execute(
+                "SELECT COUNT(*) as cnt FROM agent_results WHERE review_id = ?",
+                (review_id,),
+            ).fetchone()
+
+        assert rows["cnt"] == 0
+
+
 class TestHistoryCommand:
     """Test history command registration and dispatch."""
 

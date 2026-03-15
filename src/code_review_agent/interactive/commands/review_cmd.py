@@ -186,10 +186,15 @@ def _auto_save_report(report: object, session: SessionState) -> None:
         from code_review_agent.storage import ReviewStorage
 
         storage = ReviewStorage()
-        repo = session.active_repo
-        storage.save(report, repo=repo)  # type: ignore[arg-type]
+        settings = session.effective_settings
+        storage.save(
+            report,  # type: ignore[arg-type]
+            repo=session.active_repo,
+            llm_model=settings.llm_model,
+            token_tier=str(settings.token_tier),
+            dedup_strategy=str(settings.dedup_strategy),
+        )
     except Exception:
-        # Storage failure is non-critical -- don't interrupt the review
         import structlog
 
         structlog.get_logger(__name__).debug("auto-save failed", exc_info=True)
