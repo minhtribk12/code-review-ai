@@ -383,11 +383,18 @@ class TestPrPosting:
 
     def test_clears_staged_on_success(self, viewer: FindingsViewer) -> None:
         viewer.staged_for_pr = {0, 2}
-        with patch(
-            "code_review_agent.interactive.commands.findings_cmd.submit_pr_review_with_comments"
-        ) as mock_submit:
+        with (
+            patch(
+                "code_review_agent.interactive.commands.findings_cmd"
+                ".submit_pr_review_with_comments"
+            ) as mock_submit,
+            patch(
+                "code_review_agent.interactive.commands.findings_cmd.get_review_comments",
+                return_value=[{"id": 1001}, {"id": 1002}],
+            ),
+        ):
             mock_submit.return_value = {
-                "id": 1,
+                "id": 100,
                 "state": "COMMENTED",
                 "html_url": "",
                 "comments_posted": 2,
@@ -396,6 +403,33 @@ class TestPrPosting:
 
         assert viewer.staged_for_pr == set()
         assert viewer.comments_posted == 2
+        assert viewer.last_review_id == 100
+        assert viewer.last_comment_ids == [1001, 1002]
+
+    def test_blocks_double_posting(self, viewer: FindingsViewer) -> None:
+        """Cannot re-post if comments already exist -- must delete first."""
+        viewer.last_comment_ids = [1001, 1002]
+        viewer.staged_for_pr = {0}
+        viewer.submit_to_pr()
+        assert "delete first" in viewer.status_message.lower()
+
+    def test_delete_posted_comments(self, viewer: FindingsViewer) -> None:
+        viewer.last_comment_ids = [1001, 1002]
+        viewer.last_review_id = 100
+        with patch(
+            "code_review_agent.interactive.commands.findings_cmd.delete_review_comments",
+            return_value=2,
+        ):
+            viewer.delete_posted_comments()
+
+        assert viewer.last_comment_ids == []
+        assert viewer.last_review_id is None
+        assert viewer.comments_deleted == 2
+        assert "Deleted 2" in viewer.status_message
+
+    def test_delete_with_no_posted_comments(self, viewer: FindingsViewer) -> None:
+        viewer.delete_posted_comments()
+        assert "No posted comments" in viewer.status_message
 
 
 # ---------------------------------------------------------------------------

@@ -44,6 +44,7 @@ from code_review_agent.interactive.commands.usage_cmd import cmd_usage
 from code_review_agent.interactive.commands.watch_cmd import cmd_watch
 from code_review_agent.interactive.completers import build_static_completer
 from code_review_agent.interactive.session import SessionState
+from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
     from code_review_agent.config import Settings
@@ -195,7 +196,9 @@ def _dispatch(text: str, session: SessionState) -> None:
     if text in ("exit", "quit", "q"):
         if session.config_overrides:
             n = len(session.config_overrides)
-            console.print(f"  [yellow]You have {n} unsaved config change(s).[/yellow]")
+            console.print(
+                f"  [{theme.warning}]You have {n} unsaved config change(s).[/{theme.warning}]"
+            )
         raise EOFError
 
     try:

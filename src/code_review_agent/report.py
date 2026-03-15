@@ -7,18 +7,14 @@ from rich.panel import Panel
 from rich.table import Table
 
 from code_review_agent.models import AgentStatus, OutputFormat, Severity
+from code_review_agent.theme import SEVERITY_STYLES
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from code_review_agent.models import AgentResult, ReviewReport
 
-_SEVERITY_COLORS: dict[Severity, str] = {
-    Severity.CRITICAL: "bold red",
-    Severity.HIGH: "red",
-    Severity.MEDIUM: "yellow",
-    Severity.LOW: "green",
-}
+_SEVERITY_COLORS: dict[Severity, str] = {Severity(k): v for k, v in SEVERITY_STYLES.items()}
 
 _SEVERITY_ORDER: list[Severity] = list(Severity)
 

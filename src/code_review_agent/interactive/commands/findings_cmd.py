@@ -23,6 +23,8 @@ from rich.console import Console
 
 from code_review_agent.github_client import (
     GitHubAuthError,
+    delete_review_comments,
+    get_review_comments,
     parse_pr_reference,
     submit_pr_review_with_comments,
 )
@@ -31,6 +33,8 @@ from code_review_agent.models import (
     ReviewReport,
     Severity,
 )
+from code_review_agent.theme import SEVERITY_STYLES as _SEVERITY_STYLES
+from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
@@ -44,13 +48,6 @@ _SEVERITY_ORDER: list[Severity] = [
     Severity.MEDIUM,
     Severity.LOW,
 ]
-
-_SEVERITY_STYLES: dict[str, str] = {
-    "critical": "bold red",
-    "high": "red",
-    "medium": "yellow",
-    "low": "green",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +176,9 @@ class FindingsViewer:
 
         # PR posting tracking
         self.comments_posted: int = 0
+        self.last_review_id: int | None = None
+        self.last_comment_ids: list[int] = []
+        self.comments_deleted: int = 0
 
     # -- Navigation --
 
@@ -345,6 +345,11 @@ class FindingsViewer:
         if not self.staged_for_pr:
             self.status_message = "! No findings staged (use 'p' to stage)"
             return
+        if self.last_comment_ids:
+            self.status_message = (
+                "! Comments already posted. Press 'D' to delete first, then re-post."
+            )
+            return
 
         try:
             owner, repo, pr_number = parse_pr_reference(self.report.pr_url)
@@ -400,6 +405,13 @@ class FindingsViewer:
             total_posted = posted_inline + len(general_findings)
             self.comments_posted += total_posted
             self.staged_for_pr.clear()
+
+            # Track posted review for deletion
+            review_id = result.get("id")
+            if review_id is not None:
+                self.last_review_id = review_id
+                self._fetch_comment_ids(owner, repo, pr_number, review_id)
+
             self.status_message = (
                 f"Posted {total_posted} findings to PR #{pr_number}"
                 f" ({posted_inline} inline, {len(general_findings)} in body)"
@@ -411,6 +423,65 @@ class FindingsViewer:
         except Exception as exc:
             logger.exception("pr review posting failed")
             self.status_message = f"! Error posting review: {exc}"
+
+    def _fetch_comment_ids(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        review_id: int,
+    ) -> None:
+        """Fetch and store comment IDs from the last posted review."""
+        if self.github_token is None:
+            return
+        try:
+            comments = get_review_comments(
+                owner=owner,
+                repo=repo,
+                token=self.github_token,
+                pr_number=pr_number,
+                review_id=review_id,
+            )
+            self.last_comment_ids = [c["id"] for c in comments if "id" in c]
+        except Exception:
+            logger.debug("could not fetch review comment IDs", exc_info=True)
+
+    def delete_posted_comments(self) -> None:
+        """Delete previously posted PR review comments."""
+        if not self.last_comment_ids:
+            self.status_message = "! No posted comments to delete"
+            return
+        if not self.report.pr_url:
+            self.status_message = "! Not a PR review (local diff)"
+            return
+        if not self.github_token:
+            self.status_message = "! GITHUB_TOKEN required"
+            return
+
+        try:
+            owner, repo, _pr_number = parse_pr_reference(self.report.pr_url)
+        except ValueError as exc:
+            self.status_message = f"! Invalid PR URL: {exc}"
+            return
+
+        try:
+            deleted = delete_review_comments(
+                owner=owner,
+                repo=repo,
+                token=self.github_token,
+                comment_ids=self.last_comment_ids,
+            )
+            self.comments_deleted += deleted
+            self.last_comment_ids.clear()
+            self.last_review_id = None
+            self.status_message = (
+                f"Deleted {deleted} comment(s). Stage findings and press 'P' to re-post."
+            )
+        except GitHubAuthError:
+            self.status_message = "! Permission denied (check token scope)"
+        except Exception as exc:
+            logger.exception("comment deletion failed")
+            self.status_message = f"! Error deleting comments: {exc}"
 
     # -- Rendering --
 
@@ -425,23 +496,25 @@ class FindingsViewer:
         # Header
         lines.append(("bold", " Findings Navigator"))
         lines.append(("", "  ("))
-        lines.append(("cyan", "Up/Down"))
+        lines.append((theme.accent, "Up/Down"))
         lines.append(("", " nav, "))
-        lines.append(("cyan", "Enter"))
+        lines.append((theme.accent, "Enter"))
         lines.append(("", " detail, "))
-        lines.append(("cyan", "f"))
+        lines.append((theme.accent, "f"))
         lines.append(("", "ilter, "))
-        lines.append(("cyan", "s"))
+        lines.append((theme.accent, "s"))
         lines.append(("", "ort, "))
-        lines.append(("cyan", "m"))
+        lines.append((theme.accent, "m"))
         lines.append(("", "ark FP, "))
-        lines.append(("cyan", "i"))
+        lines.append((theme.accent, "i"))
         lines.append(("", "gnore, "))
-        lines.append(("cyan", "p"))
+        lines.append((theme.accent, "p"))
         lines.append(("", "/"))
-        lines.append(("cyan", "P"))
+        lines.append((theme.accent, "P"))
         lines.append(("", " PR, "))
-        lines.append(("cyan", "q"))
+        lines.append((theme.accent, "D"))
+        lines.append(("", "el PR, "))
+        lines.append((theme.accent, "q"))
         lines.append(("", "uit)\n"))
 
         # Status bar
@@ -456,17 +529,17 @@ class FindingsViewer:
         status_parts.append(f"| sort: {sort_col}")
         if staged:
             status_parts.append(f"| {staged} staged for PR")
-        lines.append(("dim", " ".join(status_parts) + "\n"))
+        lines.append((theme.muted, " ".join(status_parts) + "\n"))
 
         # Status message
         if self.status_message:
-            style = "yellow bold" if self.status_message.startswith("!") else "green"
+            style = theme.error if self.status_message.startswith("!") else theme.success
             lines.append((style, f" {self.status_message}\n"))
 
         lines.append(("", "\n"))
 
         if not self.visible_rows:
-            lines.append(("dim", "  No findings match current filters.\n"))
+            lines.append((theme.muted, "  No findings match current filters.\n"))
             return FormattedText(lines)
 
         # Determine viewport
@@ -477,7 +550,7 @@ class FindingsViewer:
 
         # Table header
         lines.append(("bold dim", "   Sev  Agent        File:Line                      Title\n"))
-        lines.append(("dim", "   " + "-" * 75 + "\n"))
+        lines.append((theme.muted, "   " + "-" * 75 + "\n"))
 
         # Table rows
         for i in range(visible_start, visible_end):
@@ -488,7 +561,7 @@ class FindingsViewer:
 
             # Row prefix
             if is_selected:
-                lines.append(("reverse bold", " > "))
+                lines.append((theme.highlight, " > "))
             else:
                 lines.append(("", "   "))
 
@@ -522,48 +595,48 @@ class FindingsViewer:
 
             # Triage / staged indicator
             if triage_action == TriageAction.FALSE_POSITIVE:
-                lines.append(("dim", " [FP]"))
+                lines.append((theme.muted, " [FP]"))
             elif triage_action == TriageAction.IGNORED:
-                lines.append(("dim", " [IGN]"))
+                lines.append((theme.muted, " [IGN]"))
             elif is_staged:
-                lines.append(("cyan", " [PR]"))
+                lines.append((theme.accent, " [PR]"))
 
             lines.append(("", "\n"))
 
         # Detail panel
         if self.is_detail_open and self.visible_rows:
             lines.append(("", "\n"))
-            lines.append(("dim", "   " + "=" * 75 + "\n"))
+            lines.append((theme.muted, "   " + "=" * 75 + "\n"))
             row = self.visible_rows[self.cursor]
 
             lines.append(("bold", f"   {row.title}\n"))
             lines.append(("", "\n"))
 
-            lines.append(("dim", "   Agent: "))
+            lines.append((theme.muted, "   Agent: "))
             lines.append(("", f"{row.agent_name}"))
-            lines.append(("dim", "  |  Severity: "))
+            lines.append((theme.muted, "  |  Severity: "))
             sev_style = _SEVERITY_STYLES.get(row.severity.value, "")
             lines.append((sev_style, row.severity.value.upper()))
-            lines.append(("dim", "  |  Confidence: "))
+            lines.append((theme.muted, "  |  Confidence: "))
             lines.append(("", f"{row.confidence.value}\n"))
 
             if row.file_path:
                 loc = row.file_path
                 if row.line_number is not None:
                     loc = f"{row.file_path}:{row.line_number}"
-                lines.append(("dim", "   File: "))
-                lines.append(("cyan", f"{loc}\n"))
+                lines.append((theme.muted, "   File: "))
+                lines.append((theme.accent, f"{loc}\n"))
 
             lines.append(("", "\n"))
-            lines.append(("dim", "   Description:\n"))
+            lines.append((theme.muted, "   Description:\n"))
             for desc_line in row.description.split("\n"):
                 lines.append(("", f"     {desc_line}\n"))
 
             if row.suggestion:
                 lines.append(("", "\n"))
-                lines.append(("dim", "   Suggestion:\n"))
+                lines.append((theme.muted, "   Suggestion:\n"))
                 for sug_line in row.suggestion.split("\n"):
-                    lines.append(("green", f"     {sug_line}\n"))
+                    lines.append((theme.success, f"     {sug_line}\n"))
 
         return FormattedText(lines)
 
@@ -571,7 +644,9 @@ class FindingsViewer:
         lines: list[tuple[str, str]] = []
 
         lines.append(("bold", " Filter Findings\n"))
-        lines.append(("dim", " (Up/Down navigate, Enter/Space toggle, Tab confirm, Esc cancel)\n"))
+        lines.append(
+            (theme.muted, " (Up/Down navigate, Enter/Space toggle, Tab confirm, Esc cancel)\n")
+        )
         lines.append(("", "\n"))
 
         for i, (label, _key, checked) in enumerate(self.filter_options):
@@ -579,7 +654,7 @@ class FindingsViewer:
             checkbox = "[x]" if checked else "[ ]"
 
             if is_selected:
-                lines.append(("reverse bold", " > "))
+                lines.append((theme.highlight, " > "))
             else:
                 lines.append(("", "   "))
 
@@ -589,7 +664,7 @@ class FindingsViewer:
         lines.append(("", "\n"))
         checked_count = sum(1 for _, _, c in self.filter_options if c)
         total = len(self.filter_options)
-        lines.append(("dim", f" {checked_count}/{total} selected\n"))
+        lines.append((theme.muted, f" {checked_count}/{total} selected\n"))
 
         return FormattedText(lines)
 
@@ -671,6 +746,11 @@ def run_findings_app(
         if viewer.mode == _ViewerMode.NAVIGATE:
             viewer.submit_to_pr()
 
+    @kb.add("D")  # Shift+D
+    def on_delete_comments(_event: KeyPressEvent) -> None:
+        if viewer.mode == _ViewerMode.NAVIGATE:
+            viewer.delete_posted_comments()
+
     @kb.add("tab")
     def on_tab(_event: KeyPressEvent) -> None:
         if viewer.mode == _ViewerMode.FILTER:
@@ -705,7 +785,8 @@ def run_findings_app(
     fp_count = sum(1 for v in viewer.triage.values() if v == TriageAction.FALSE_POSITIVE)
     ign_count = sum(1 for v in viewer.triage.values() if v == TriageAction.IGNORED)
 
-    if fp_count or ign_count or viewer.comments_posted:
+    has_activity = fp_count or ign_count or viewer.comments_posted or viewer.comments_deleted
+    if has_activity:
         console.print()
         if fp_count:
             console.print(f"  {fp_count} finding(s) marked as false positive")
@@ -713,6 +794,8 @@ def run_findings_app(
             console.print(f"  {ign_count} finding(s) ignored")
         if viewer.comments_posted:
             console.print(f"  {viewer.comments_posted} comment(s) posted to PR")
+        if viewer.comments_deleted:
+            console.print(f"  {viewer.comments_deleted} comment(s) deleted from PR")
         console.print()
 
 
@@ -730,28 +813,30 @@ def cmd_findings(args: list[str], session: SessionState) -> None:
             storage = ReviewStorage(session.effective_settings.history_db_path)
             review_dict = storage.get_review(review_id)
             if review_dict is None:
-                console.print(f"[red]Review #{review_id} not found.[/red]")
+                console.print(f"[{theme.error}]Review #{review_id} not found.[/{theme.error}]")
                 return
             report = ReviewReport.model_validate_json(
                 review_dict["report_json"],
             )
         except Exception as exc:
-            console.print(f"[red]Failed to load review #{review_id}: {exc}[/red]")
+            console.print(
+                f"[{theme.error}]Failed to load review #{review_id}: {exc}[/{theme.error}]"
+            )
             return
     else:
         report = session.last_review_report
 
     if report is None:
         console.print(
-            "[yellow]No review available. "
-            "Run 'review' first or specify a review ID: "
-            "findings <review_id>[/yellow]"
+            f"[{theme.warning}]No review available."
+            f"Run 'review' first or specify a review ID: "
+            f"findings <review_id>[/{theme.warning}]"
         )
         return
 
     findings = _flatten_findings(report)
     if not findings:
-        console.print("[dim]No findings to display.[/dim]")
+        console.print(f"[{theme.muted}]No findings to display.[/{theme.muted}]")
         return
 
     # Resolve GitHub token for PR posting

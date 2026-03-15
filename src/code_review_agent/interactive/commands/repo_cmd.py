@@ -20,6 +20,7 @@ from rich.table import Table
 
 from code_review_agent.github_client import list_user_repos
 from code_review_agent.interactive import git_ops
+from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
     from prompt_toolkit.key_binding import KeyPressEvent
@@ -108,7 +109,9 @@ def _collect_all_repos(
                         }
                     )
         except Exception as exc:
-            console.print(f"  [yellow]Could not fetch remote repos: {exc}[/yellow]")
+            console.print(
+                f"  [{theme.warning}]Could not fetch remote repos: {exc}[/{theme.warning}]"
+            )
 
     return local_repos + remote_repos
 

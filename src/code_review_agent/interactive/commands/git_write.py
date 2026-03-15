@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from code_review_agent.interactive import git_ops
+from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
@@ -73,8 +74,8 @@ def _branch_switch(args: list[str]) -> None:
 
     if git_ops.is_working_tree_dirty():
         console.print(
-            "[yellow]Working tree has uncommitted changes. "
-            "Stash or commit before switching.[/yellow]"
+            f"[{theme.warning}]Working tree has uncommitted changes. "
+            f"Stash or commit before switching.[/{theme.warning}]"
         )
         return
 
@@ -114,8 +115,8 @@ def _branch_delete(args: list[str]) -> None:
 
     if not is_force and not git_ops.is_branch_merged(name):
         console.print(
-            f"[yellow]Branch '{name}' is not merged. "
-            f"Use 'branch delete {name} --force' to force delete.[/yellow]"
+            f"[{theme.warning}]Branch '{name}' is not merged. "
+            f"Use 'branch delete {name} --force' to force delete.[/{theme.warning}]"
         )
         return
 
@@ -176,7 +177,9 @@ def cmd_commit(args: list[str], session: SessionState) -> None:
     # Check for staged files
     staged = git_ops.list_staged_files()
     if not staged:
-        console.print("[yellow]Nothing staged. Use 'add' to stage files first.[/yellow]")
+        console.print(
+            f"[{theme.warning}]Nothing staged. Use 'add' to stage files first.[/{theme.warning}]"
+        )
         return
 
     # Parse -m flag

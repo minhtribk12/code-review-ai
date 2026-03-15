@@ -840,6 +840,71 @@ def submit_pr_review_with_comments(
     }
 
 
+def get_review_comments(
+    *,
+    owner: str,
+    repo: str,
+    token: str,
+    pr_number: int,
+    review_id: int,
+) -> list[dict[str, Any]]:
+    """Fetch comments for a specific PR review.
+
+    Returns a list of comment dicts with keys: id, path, line, body.
+    """
+    url = (
+        f"{_github_api_base()}/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{review_id}/comments"
+    )
+    headers = _make_github_headers(token)
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.get(url, headers=headers)
+        _check_auth_error(resp)
+        resp.raise_for_status()
+        return resp.json()  # type: ignore[no-any-return]
+
+
+def delete_review_comments(
+    *,
+    owner: str,
+    repo: str,
+    token: str,
+    comment_ids: list[int],
+) -> int:
+    """Delete PR review comments by ID.
+
+    Uses ``DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}``.
+    Returns the number of successfully deleted comments.
+    Continues on individual failures (logs warning, does not raise).
+    """
+    base = _github_api_base()
+    headers = _make_github_headers(token)
+    deleted = 0
+
+    with httpx.Client(timeout=30.0) as client:
+        for comment_id in comment_ids:
+            url = f"{base}/repos/{owner}/{repo}/pulls/comments/{comment_id}"
+            try:
+                resp = client.delete(url, headers=headers)
+                _check_auth_error(resp)
+                if resp.status_code == 204:
+                    deleted += 1
+                else:
+                    logger.warning(
+                        "failed to delete comment",
+                        comment_id=comment_id,
+                        status=resp.status_code,
+                    )
+            except Exception:
+                logger.warning(
+                    "error deleting comment",
+                    comment_id=comment_id,
+                    exc_info=True,
+                )
+
+    return deleted
+
+
 _GITHUB_STATUS_MAP: dict[str, DiffStatus] = {
     "added": DiffStatus.ADDED,
     "modified": DiffStatus.MODIFIED,

@@ -18,6 +18,7 @@ from pydantic import SecretStr
 
 from code_review_agent.agents import ALL_AGENT_NAMES
 from code_review_agent.config import Settings
+from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
     from prompt_toolkit.key_binding import KeyPressEvent
@@ -510,7 +511,7 @@ class ConfigEditor:
         lines.append(("", " exit)\n"))
 
         if self.has_changes:
-            lines.append(("yellow", "  * unsaved session changes\n"))
+            lines.append((theme.warning, "  * unsaved session changes\n"))
         lines.append(("", "\n"))
 
         visible_start = max(0, self.cursor - 15)
@@ -576,7 +577,7 @@ class ConfigEditor:
                     val_style = ""
                 lines.append((val_style, f" {display}"))
                 if is_override:
-                    lines.append(("yellow", " *"))
+                    lines.append((theme.warning, " *"))
 
             lines.append(("", "\n"))
 
@@ -850,6 +851,6 @@ def _show_cost_warning(con: object, session: SessionState) -> None:
         return
 
     con.print()
-    con.print(f"  [yellow]! Cost impact: ~{multiplier:.1f}x per review[/yellow]")
+    con.print(f"  [{theme.warning}]! Cost impact: ~{multiplier:.1f}x per review[/{theme.warning}]")
     for reason in reasons:
         con.print(f"    [dim]{reason}[/dim]")

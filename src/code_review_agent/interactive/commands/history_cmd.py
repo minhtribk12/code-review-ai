@@ -9,6 +9,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from code_review_agent.storage import ReviewStorage
+from code_review_agent.theme import SEVERITY_STYLES
 
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
@@ -115,12 +116,7 @@ def _history_list(args: list[str], session: SessionState) -> None:
 
     for r in reviews:
         risk = str(r.get("risk_level", ""))
-        risk_style = {
-            "critical": "red bold",
-            "high": "red",
-            "medium": "yellow",
-            "low": "green",
-        }.get(risk, "")
+        risk_style = SEVERITY_STYLES.get(risk, "")
 
         date_str = str(r.get("reviewed_at", ""))[:10]
         pr_str = str(r.get("pr_number", "")) if r.get("pr_number") else "-"
@@ -225,12 +221,7 @@ def _history_trends(args: list[str], session: SessionState) -> None:
     sev_table.add_column("Severity", style="bold", width=15)
     sev_table.add_column("Count", width=10, justify="right")
 
-    for sev, label_style in [
-        ("critical", "red bold"),
-        ("high", "red"),
-        ("medium", "yellow"),
-        ("low", "green"),
-    ]:
+    for sev, label_style in SEVERITY_STYLES.items():
         key = f"total_{sev}"
         count = trends.get(key, 0)
         sev_table.add_row(

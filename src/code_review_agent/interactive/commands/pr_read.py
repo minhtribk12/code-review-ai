@@ -16,6 +16,7 @@ from code_review_agent.github_client import (
     list_prs,
 )
 from code_review_agent.interactive import git_ops
+from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
@@ -258,7 +259,7 @@ def _pr_checks(args: list[str], session: SessionState) -> None:
         elif conclusion in ("failure", "cancelled"):
             style = "red"
         else:
-            style = "yellow"
+            style = "magenta"
         table.add_row(
             check["name"],
             check["status"],
@@ -349,5 +350,6 @@ def _pr_review(args: list[str], session: SessionState) -> None:
             except git_ops.GitError as exc:
                 console.print(f"[red]Failed to restore stash: {exc}[/red]")
                 console.print(
-                    "[yellow]Your changes are in stash. Run 'stash pop' manually.[/yellow]"
+                    f"[{theme.warning}]Your changes are in stash."
+                    f" Run 'stash pop' manually.[/{theme.warning}]"
                 )

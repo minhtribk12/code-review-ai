@@ -18,6 +18,7 @@ from code_review_agent.github_client import (
 )
 from code_review_agent.interactive import git_ops
 from code_review_agent.interactive.commands.pr_read import _get_repo_info, _parse_pr_number
+from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
@@ -63,7 +64,8 @@ def pr_create(args: list[str], session: SessionState) -> None:
         commits = git_ops.log_oneline_commits_since(base)
         if not commits:
             console.print(
-                f"[yellow]No commits found since '{base}'. Cannot auto-fill title/body.[/yellow]"
+                f"[{theme.warning}]No commits found since '{base}'."
+                f" Cannot auto-fill title/body.[/{theme.warning}]"
             )
             return
         if title is None:
@@ -90,7 +92,9 @@ def pr_create(args: list[str], session: SessionState) -> None:
     # Check upstream
     has_remote = git_ops.has_upstream()
     if not has_remote:
-        lines.append("  [yellow]No upstream -- will push before creating PR.[/yellow]")
+        lines.append(
+            f"  [{theme.warning}]No upstream -- will push before creating PR.[/{theme.warning}]"
+        )
 
     console.print(Panel("\n".join(lines), title="PR Preview", border_style="cyan"))
 
@@ -194,7 +198,7 @@ def pr_merge(args: list[str], session: SessionState) -> None:
         warnings.append("PR has merge conflicts")
 
     for warning in warnings:
-        lines.append(f"  [yellow]Warning: {warning}[/yellow]")
+        lines.append(f"  [{theme.warning}]Warning: {warning}[/{theme.warning}]")
 
     console.print(Panel("\n".join(lines), title="Merge Preview", border_style="cyan"))
 
@@ -303,7 +307,7 @@ def pr_request_changes(args: list[str], session: SessionState) -> None:
         f"  Comment: {comment}",
     ]
 
-    console.print(Panel("\n".join(lines), title="Request Changes Preview", border_style="yellow"))
+    console.print(Panel("\n".join(lines), title="Request Changes Preview", border_style="bold"))
 
     if is_dry_run:
         console.print("[dim]Dry run -- no review submitted.[/dim]")
@@ -323,4 +327,7 @@ def pr_request_changes(args: list[str], session: SessionState) -> None:
         return
 
     session.pr_cache.invalidate()
-    console.print(f"  [yellow]Requested changes on PR #{pr_number}.[/yellow] {result['html_url']}")
+    console.print(
+        f"  [{theme.warning}]Requested changes on PR #{pr_number}.[/{theme.warning}]"
+        f" {result['html_url']}"
+    )

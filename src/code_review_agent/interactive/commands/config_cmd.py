@@ -9,6 +9,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from code_review_agent.theme import theme
+
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
 
@@ -121,7 +123,7 @@ def _print_category(name: str, keys: list[str], session: SessionState) -> None:
         display = _mask_secret(value)
         is_overridden = key in session.config_overrides
         if is_overridden:
-            display = f"{display} [yellow](session override)[/yellow]"
+            display = f"{display} [{theme.warning}](session override)[/{theme.warning}]"
         table.add_row(key, display)
 
     console.print(Panel(table, title=name, border_style="blue"))
@@ -161,7 +163,10 @@ def cmd_config_set(args: list[str], session: SessionState) -> None:
     if key in _COST_KEYS:
         multiplier, reasons = session.estimate_cost_multiplier()
         if multiplier > 1.0:
-            console.print(f"\n  [yellow]! Cost impact: ~{multiplier:.1f}x per review[/yellow]")
+            console.print(
+                f"\n  [{theme.warning}]! Cost impact:"
+                f" ~{multiplier:.1f}x per review[/{theme.warning}]"
+            )
             for reason in reasons:
                 console.print(f"    [dim]{reason}[/dim]")
 
@@ -176,7 +181,10 @@ def cmd_config_save(args: list[str], session: SessionState) -> None:
     for key, value in session.config_overrides.items():
         console.print(f"  {key} = {value}")
     console.print()
-    console.print("[yellow]config save is not yet implemented (coming in Phase 3d).[/yellow]")
+    console.print(
+        f"[{theme.warning}]config save is not yet implemented"
+        f" (coming in Phase 3d).[/{theme.warning}]"
+    )
 
 
 def cmd_config_reset(args: list[str], session: SessionState) -> None:
