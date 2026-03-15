@@ -201,11 +201,13 @@ class LLMClient:
             raise LLMEmptyResponseError(msg)
 
         usage = response.usage
-        if usage is not None:
-            with self._usage_lock:
+        with self._usage_lock:
+            self._llm_calls += 1
+            if usage is not None:
                 self._total_prompt_tokens += usage.prompt_tokens
                 self._total_completion_tokens += usage.completion_tokens
-                self._llm_calls += 1
+
+        if usage is not None:
             logger.info(
                 "llm request completed",
                 model=self._model,

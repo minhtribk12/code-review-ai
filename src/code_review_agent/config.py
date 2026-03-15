@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import Field, SecretStr, computed_field
+from pydantic import Field, SecretStr, computed_field, model_validator
 from pydantic_settings import BaseSettings
 
 from code_review_agent.dedup import DedupStrategy
@@ -55,6 +55,20 @@ class Settings(BaseSettings):
     github_rate_limit_warn_threshold: int = Field(default=100, ge=0)
     log_level: LogLevel = LogLevel.INFO
     max_concurrent_agents: int = 4
+
+    @model_validator(mode="after")
+    def _validate_custom_pricing(self) -> Settings:
+        """Validate that custom pricing is either both set or both unset."""
+        has_input = self.llm_input_price_per_m is not None
+        has_output = self.llm_output_price_per_m is not None
+        if has_input != has_output:
+            msg = (
+                "LLM_INPUT_PRICE_PER_M and LLM_OUTPUT_PRICE_PER_M must both be set "
+                "or both be unset. Set both for custom pricing, or leave both unset "
+                "for auto-detection."
+            )
+            raise ValueError(msg)
+        return self
 
     @computed_field  # type: ignore[prop-decorator]
     @property

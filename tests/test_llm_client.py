@@ -384,7 +384,8 @@ class TestLLMClientComplete:
         assert usage.total_tokens == 0
         assert usage.llm_calls == 0
 
-    def test_get_usage_no_usage_header_does_not_increment(self) -> None:
+    def test_get_usage_no_usage_header_still_counts_call(self) -> None:
+        """LLM call is counted even when provider omits usage data."""
         client = self._make_client()
         response = self._mock_response('{"name": "a", "value": 1}')
         response.usage = None
@@ -394,4 +395,4 @@ class TestLLMClientComplete:
 
         usage = client.get_usage()
         assert usage.total_tokens == 0
-        assert usage.llm_calls == 0
+        assert usage.llm_calls == 1

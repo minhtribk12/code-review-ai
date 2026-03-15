@@ -264,6 +264,7 @@ class Orchestrator:
             overall_summary = result.summary
             max_severity = max(
                 (f.severity for f in result.findings),
+                key=lambda s: _SEVERITY_ORDER.index(s),
                 default=Severity.LOW,
             )
             logger.info(
@@ -355,6 +356,7 @@ class Orchestrator:
             pr_url=review_input.pr_url,
             pr_title=review_input.pr_title,
             pr_description=review_input.pr_description,
+            fetch_warnings=review_input.fetch_warnings,
         )
 
     def _run_single_agent(self, agent: BaseAgent, review_input: ReviewInput) -> AgentResult:
@@ -447,6 +449,7 @@ class Orchestrator:
 
         max_severity = max(
             (f.severity for f in all_findings),
+            key=lambda s: _SEVERITY_ORDER.index(s),
             default=Severity.LOW,
         )
 

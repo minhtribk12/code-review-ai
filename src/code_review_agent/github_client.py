@@ -31,8 +31,8 @@ _PR_REF_PATTERN = re.compile(
 
 _PAGE_RETRY_ATTEMPTS = 3
 
-# Server errors that are safe to retry (transient).
-_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
+# Status codes that are safe to retry (transient server errors + rate limit).
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 # Client errors that indicate a permanent auth/permission problem.
 _ABORT_STATUS_CODES = {401, 403}
@@ -90,15 +90,16 @@ class GitHubRateLimitState:
 
     @property
     def is_exhausted(self) -> bool:
-        """Return True if rate limit is known to be exhausted."""
-        if self.remaining is None:
+        """Return True if rate limit is known to be exhausted.
+
+        Returns False when remaining is unknown, positive, or when
+        the reset time is in the past (limit likely already refreshed).
+        """
+        if self.remaining is None or self.remaining > 0:
             return False
-        if self.remaining > 0:
-            return False
-        # remaining == 0 and reset is in the future
-        if self.reset_at is not None and self.reset_at > time.time():
-            return True
-        return self.remaining == 0
+        # remaining == 0: only exhausted if reset is in the future
+        # (or unknown -- be conservative and treat as exhausted)
+        return not (self.reset_at is not None and self.reset_at <= time.time())
 
     @property
     def is_low(self) -> bool:

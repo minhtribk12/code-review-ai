@@ -35,7 +35,7 @@ _TIER_DEFAULT_AGENTS: dict[TokenTier, list[str]] = {
 
 def default_agents_for_tier(tier: TokenTier) -> list[str]:
     """Return the default agent names for the given token tier."""
-    return _TIER_DEFAULT_AGENTS[tier]
+    return list(_TIER_DEFAULT_AGENTS[tier])
 
 
 # Known model context windows (tokens).
