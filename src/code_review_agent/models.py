@@ -69,6 +69,7 @@ class ReviewReport(BaseModel):
     agent_results: list[AgentResult]
     overall_summary: str
     risk_level: Severity
+    fetch_warnings: list[str] = []
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -126,6 +127,7 @@ class ReviewInput(BaseModel):
     pr_url: str | None = None
     pr_title: str | None = None
     pr_description: str | None = None
+    fetch_warnings: list[str] = []
 
 
 class FindingsResponse(BaseModel):

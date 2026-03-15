@@ -129,6 +129,7 @@ class Orchestrator:
             agent_results=agent_results,
             overall_summary=synthesis.overall_summary,
             risk_level=validated_risk,
+            fetch_warnings=review_input.fetch_warnings,
         )
 
     def _emit(self, event: ReviewEvent, agent_name: str, elapsed: float | None = None) -> None:
@@ -244,6 +245,7 @@ class Orchestrator:
             agent_results=agent_results,
             overall_summary=overall_summary,
             risk_level=max_severity,
+            fetch_warnings=review_input.fetch_warnings,
         )
 
     def _apply_token_budget(self, review_input: ReviewInput) -> ReviewInput:

@@ -5,6 +5,12 @@ from typing import Any
 
 import httpx
 import structlog
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from code_review_agent.models import DiffFile, DiffStatus, ReviewInput
 
@@ -19,6 +25,13 @@ _PR_REF_PATTERN = re.compile(
 )
 
 _RATE_LIMIT_WARNING_THRESHOLD = 100
+_PAGE_RETRY_ATTEMPTS = 3
+
+_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
+
+
+class _PageFetchError(Exception):
+    """Raised on retryable GitHub API errors during page fetching."""
 
 
 def parse_pr_reference(pr_ref: str) -> tuple[str, str, int]:
@@ -61,7 +74,8 @@ def fetch_pr_diff(
     """Fetch PR diff and metadata from the GitHub API.
 
     Paginates the files endpoint (per_page=100) and stops after
-    ``max_files`` files are collected.
+    ``max_files`` files are collected. Returns partial results on
+    page fetch failures instead of crashing.
     """
     base_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
     headers: dict[str, str] = {
@@ -100,12 +114,17 @@ def fetch_pr_diff(
         )
 
         # Fetch PR files with pagination.
+        warnings: list[str] = []
         files_data = _fetch_all_pr_files(
             client=client,
             url=f"{base_url}/files",
             headers=headers,
             max_files=max_files,
+            warnings=warnings,
         )
+
+    # Deduplicate files by filename (last wins).
+    files_data = _deduplicate_files(files_data, warnings)
 
     diff_files: list[DiffFile] = []
     skipped = 0
@@ -122,10 +141,14 @@ def fetch_pr_diff(
             )
         )
 
+    if not diff_files and not files_data:
+        warnings.append("No files could be fetched from the PR.")
+
     logger.info(
         "fetched pr diff",
         file_count=len(diff_files),
         skipped_no_patch=skipped,
+        warning_count=len(warnings),
     )
 
     return ReviewInput(
@@ -133,6 +156,7 @@ def fetch_pr_diff(
         pr_url=pr_url,
         pr_title=pr_title,
         pr_description=pr_description,
+        fetch_warnings=warnings,
     )
 
 
@@ -142,29 +166,47 @@ def _fetch_all_pr_files(
     url: str,
     headers: dict[str, str],
     max_files: int,
+    warnings: list[str],
 ) -> list[dict[str, Any]]:
-    """Paginate the GitHub PR files endpoint.
+    """Paginate the GitHub PR files endpoint with retry and partial recovery.
 
     Fetches up to ``max_files`` files with ``per_page=100``.
-    Logs a warning when GitHub rate limit is running low.
+    On page fetch failure (after retries), stops pagination and returns
+    files collected so far. Appends warnings for any issues encountered.
     """
     all_files: list[dict[str, Any]] = []
     page = 1
 
     while len(all_files) < max_files:
-        resp = client.get(
-            url,
-            headers=headers,
-            params={"per_page": 100, "page": page},
-        )
-        resp.raise_for_status()
-        _check_github_rate_limit(resp)
-
-        batch: list[dict[str, Any]] = resp.json()
-        if not batch:
+        try:
+            batch = _fetch_page(
+                client=client,
+                url=url,
+                headers=headers,
+                page=page,
+            )
+        except Exception as exc:
+            warning_msg = (
+                f"Failed to fetch page {page} of PR files after "
+                f"{_PAGE_RETRY_ATTEMPTS} attempts: {exc}. "
+                f"Continuing with {len(all_files)} files collected so far."
+            )
+            warnings.append(warning_msg)
+            logger.warning(
+                "page fetch failed, returning partial results",
+                page=page,
+                files_collected=len(all_files),
+                error=str(exc),
+            )
             break
 
-        all_files.extend(batch)
+        _check_github_rate_limit(batch["response"])
+
+        page_files: list[dict[str, Any]] = batch["data"]
+        if not page_files:
+            break
+
+        all_files.extend(page_files)
         page += 1
 
     if len(all_files) > max_files:
@@ -176,6 +218,56 @@ def _fetch_all_pr_files(
         all_files = all_files[:max_files]
 
     return all_files
+
+
+@retry(
+    retry=retry_if_exception_type((httpx.TransportError, _PageFetchError)),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    stop=stop_after_attempt(_PAGE_RETRY_ATTEMPTS),
+    reraise=True,
+)
+def _fetch_page(
+    *,
+    client: httpx.Client,
+    url: str,
+    headers: dict[str, str],
+    page: int,
+) -> dict[str, Any]:
+    """Fetch a single page of PR files with retry on transient errors."""
+    resp = client.get(
+        url,
+        headers=headers,
+        params={"per_page": 100, "page": page},
+    )
+
+    if resp.status_code in _RETRYABLE_STATUS_CODES:
+        raise _PageFetchError(f"GitHub API returned {resp.status_code} for page {page}")
+
+    resp.raise_for_status()
+    return {"data": resp.json(), "response": resp}
+
+
+def _deduplicate_files(files: list[dict[str, Any]], warnings: list[str]) -> list[dict[str, Any]]:
+    """Deduplicate files by filename (last occurrence wins).
+
+    GitHub pagination can return duplicate filenames in rare edge cases
+    when files are added/removed between page fetches.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    for file_entry in files:
+        seen[file_entry["filename"]] = file_entry
+
+    removed_count = len(files) - len(seen)
+    if removed_count > 0:
+        logger.info(
+            "deduplicated pr files by filename",
+            original=len(files),
+            deduplicated=len(seen),
+            removed=removed_count,
+        )
+        warnings.append(f"Removed {removed_count} duplicate file(s) from PR file list.")
+
+    return list(seen.values())
 
 
 def _check_github_rate_limit(resp: httpx.Response) -> None:

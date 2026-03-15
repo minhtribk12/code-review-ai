@@ -51,6 +51,9 @@ def render_report_rich(report: ReviewReport) -> None:
             f"WARNING: {len(failed)} of {total_agents} agents failed. Review is incomplete."
         )
 
+    for warning in report.fetch_warnings:
+        header_lines.append(f"WARNING: {warning}")
+
     console.print(
         Panel(
             "\n".join(header_lines),
@@ -135,6 +138,9 @@ def render_report_markdown(report: ReviewReport) -> str:
         lines.append(
             f"**WARNING:** {len(failed)} of {total_agents} agents failed. Review is incomplete."
         )
+
+    for warning in report.fetch_warnings:
+        lines.append(f"**WARNING:** {warning}")
 
     lines.extend(["", "## Overall Summary", "", report.overall_summary, ""])
 
