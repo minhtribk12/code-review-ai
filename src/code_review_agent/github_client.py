@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -27,11 +28,28 @@ _PR_REF_PATTERN = re.compile(
 _RATE_LIMIT_WARNING_THRESHOLD = 100
 _PAGE_RETRY_ATTEMPTS = 3
 
+# Server errors that are safe to retry (transient).
 _RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
+
+# Client errors that indicate a permanent auth/permission problem.
+# These should abort the entire fetch, not return partial results.
+_ABORT_STATUS_CODES = {401, 403}
 
 
 class _PageFetchError(Exception):
     """Raised on retryable GitHub API errors during page fetching."""
+
+
+class GitHubAuthError(Exception):
+    """Raised when GitHub API returns 401/403 (auth or permission failure)."""
+
+
+@dataclass(frozen=True)
+class _PageResult:
+    """Result from fetching a single page of PR files."""
+
+    data: list[dict[str, Any]]
+    response: httpx.Response
 
 
 def parse_pr_reference(pr_ref: str) -> tuple[str, str, int]:
@@ -75,7 +93,8 @@ def fetch_pr_diff(
 
     Paginates the files endpoint (per_page=100) and stops after
     ``max_files`` files are collected. Returns partial results on
-    page fetch failures instead of crashing.
+    transient page fetch failures instead of crashing.
+    Auth errors (401/403) are always propagated.
     """
     base_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
     headers: dict[str, str] = {
@@ -104,6 +123,7 @@ def fetch_pr_diff(
             msg = f"PR not found: {owner}/{repo}#{pr_number}.{hint}"
             raise ValueError(msg)
         meta_resp.raise_for_status()
+        _check_github_rate_limit(meta_resp)
         meta = meta_resp.json()
 
         pr_title: str = meta.get("title", "")
@@ -171,20 +191,23 @@ def _fetch_all_pr_files(
     """Paginate the GitHub PR files endpoint with retry and partial recovery.
 
     Fetches up to ``max_files`` files with ``per_page=100``.
-    On page fetch failure (after retries), stops pagination and returns
-    files collected so far. Appends warnings for any issues encountered.
+    On transient page fetch failure (after retries), stops pagination and
+    returns files collected so far. Auth errors (401/403) are propagated
+    immediately.
     """
     all_files: list[dict[str, Any]] = []
     page = 1
 
     while len(all_files) < max_files:
         try:
-            batch = _fetch_page(
+            page_result = _fetch_page(
                 client=client,
                 url=url,
                 headers=headers,
                 page=page,
             )
+        except GitHubAuthError:
+            raise
         except Exception as exc:
             warning_msg = (
                 f"Failed to fetch page {page} of PR files after "
@@ -200,13 +223,12 @@ def _fetch_all_pr_files(
             )
             break
 
-        _check_github_rate_limit(batch["response"])
+        _check_github_rate_limit(page_result.response)
 
-        page_files: list[dict[str, Any]] = batch["data"]
-        if not page_files:
+        if not page_result.data:
             break
 
-        all_files.extend(page_files)
+        all_files.extend(page_result.data)
         page += 1
 
     if len(all_files) > max_files:
@@ -232,19 +254,28 @@ def _fetch_page(
     url: str,
     headers: dict[str, str],
     page: int,
-) -> dict[str, Any]:
-    """Fetch a single page of PR files with retry on transient errors."""
+) -> _PageResult:
+    """Fetch a single page of PR files with retry on transient errors.
+
+    Retries on: transport errors (timeouts, connection failures) and
+    server errors (500, 502, 503, 504).
+    Raises GitHubAuthError immediately on 401/403 (no retry).
+    """
     resp = client.get(
         url,
         headers=headers,
         params={"per_page": 100, "page": page},
     )
 
+    if resp.status_code in _ABORT_STATUS_CODES:
+        msg = f"GitHub API returned {resp.status_code} for page {page}"
+        raise GitHubAuthError(msg)
+
     if resp.status_code in _RETRYABLE_STATUS_CODES:
         raise _PageFetchError(f"GitHub API returned {resp.status_code} for page {page}")
 
     resp.raise_for_status()
-    return {"data": resp.json(), "response": resp}
+    return _PageResult(data=resp.json(), response=resp)
 
 
 def _deduplicate_files(files: list[dict[str, Any]], warnings: list[str]) -> list[dict[str, Any]]:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel, Field, computed_field
 
 
 class Severity(StrEnum):
@@ -69,7 +69,7 @@ class ReviewReport(BaseModel):
     agent_results: list[AgentResult]
     overall_summary: str
     risk_level: Severity
-    fetch_warnings: list[str] = []
+    fetch_warnings: list[str] = Field(default_factory=list)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -127,7 +127,7 @@ class ReviewInput(BaseModel):
     pr_url: str | None = None
     pr_title: str | None = None
     pr_description: str | None = None
-    fetch_warnings: list[str] = []
+    fetch_warnings: list[str] = Field(default_factory=list)
 
 
 class FindingsResponse(BaseModel):
