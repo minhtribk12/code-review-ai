@@ -21,14 +21,15 @@ if TYPE_CHECKING:
 console = Console()
 
 
-def cmd_review(args: list[str], session: SessionState) -> None:
-    """Run code review on a diff from the current git context."""
-    settings = session.settings
-    output_format = OutputFormat.RICH
-    agent_names: list[str] | None = None
+def _parse_review_flags(args: list[str]) -> tuple[list[str], list[str] | None, OutputFormat]:
+    """Parse --agents and --format flags from args.
 
-    # Parse flags
+    Returns (positional_args, agent_names, output_format).
+    """
     positional: list[str] = []
+    agent_names: list[str] | None = None
+    output_format = OutputFormat.RICH
+
     i = 0
     while i < len(args):
         if args[i] == "--agents" and i + 1 < len(args):
@@ -40,6 +41,13 @@ def cmd_review(args: list[str], session: SessionState) -> None:
         else:
             positional.append(args[i])
             i += 1
+
+    return positional, agent_names, output_format
+
+
+def cmd_review(args: list[str], session: SessionState) -> None:
+    """Run code review on a diff from the current git context."""
+    positional, _agent_names, _output_format = _parse_review_flags(args)
 
     # Get diff based on positional args
     raw_diff = _resolve_diff(positional)
@@ -56,6 +64,20 @@ def cmd_review(args: list[str], session: SessionState) -> None:
         return
 
     review_input = ReviewInput(diff_files=diff_files)
+    _run_review_on_input(review_input, args, session)
+
+
+def _run_review_on_input(
+    review_input: ReviewInput,
+    args: list[str],
+    session: SessionState,
+) -> None:
+    """Run the review pipeline on a prepared ReviewInput.
+
+    Shared by both local diff review (cmd_review) and PR review (pr_read._pr_review).
+    """
+    settings = session.settings
+    _positional, agent_names, output_format = _parse_review_flags(args)
 
     selected_names = agent_names or default_agents_for_tier(settings.token_tier)
     is_quiet = output_format == OutputFormat.JSON
@@ -91,7 +113,6 @@ def cmd_review(args: list[str], session: SessionState) -> None:
 def _resolve_diff(positional: list[str]) -> str | None:
     """Resolve diff content from positional args."""
     if not positional:
-        # Default: unstaged diff
         return git_ops.diff()
 
     target = positional[0]
@@ -106,7 +127,6 @@ def _resolve_diff(positional: list[str]) -> str | None:
         parts = target.split("..", 1)
         return git_ops.diff_between(parts[0], parts[1])
 
-    # Assume it's a file path
     try:
         return git_ops.diff(file_path=target)
     except git_ops.GitError as exc:

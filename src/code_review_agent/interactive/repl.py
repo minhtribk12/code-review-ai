@@ -33,6 +33,7 @@ from code_review_agent.interactive.commands.meta import (
     cmd_shell,
     cmd_version,
 )
+from code_review_agent.interactive.commands.pr_read import cmd_pr
 from code_review_agent.interactive.commands.review_cmd import cmd_review
 from code_review_agent.interactive.commands.usage_cmd import cmd_usage
 from code_review_agent.interactive.completers import build_static_completer
@@ -59,6 +60,7 @@ _COMMANDS: dict[str, CommandHandler] = {
     "commit": cmd_commit,
     "stash": cmd_stash,
     "review": cmd_review,
+    "pr": cmd_pr,
     "config": cmd_config,
     "usage": cmd_usage,
     "help": cmd_help,
@@ -91,7 +93,8 @@ def run_repl(settings: Settings) -> None:
     session = SessionState(settings=settings)
     completer = build_static_completer()
 
-    history_path = "~/.cra_history"
+    prompt_str = settings.interactive_prompt
+    history_path = settings.interactive_history_file
 
     prompt_session: PromptSession[str] = PromptSession(
         history=FileHistory(history_path),
@@ -99,6 +102,7 @@ def run_repl(settings: Settings) -> None:
         complete_while_typing=True,
         bottom_toolbar=lambda: _get_toolbar(session),
         refresh_interval=1.0,
+        vi_mode=settings.interactive_vi_mode,
     )
 
     console.print(f"\n  [bold]code-review-agent[/bold] v{_VERSION}")
@@ -108,7 +112,7 @@ def run_repl(settings: Settings) -> None:
 
     while True:
         try:
-            text = prompt_session.prompt("cra> ").strip()
+            text = prompt_session.prompt(prompt_str).strip()
         except KeyboardInterrupt:
             continue
         except EOFError:

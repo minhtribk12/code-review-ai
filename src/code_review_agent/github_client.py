@@ -438,6 +438,173 @@ def _deduplicate_files(files: list[dict[str, Any]], warnings: list[str]) -> list
     return list(seen.values())
 
 
+# ---------------------------------------------------------------------------
+# Interactive mode: higher-level GitHub API functions
+# ---------------------------------------------------------------------------
+
+
+def _make_github_headers(token: str | None) -> dict[str, str]:
+    """Build standard GitHub API headers."""
+    headers: dict[str, str] = {
+        "Accept": "application/vnd.github.v3+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def list_prs(
+    *,
+    owner: str,
+    repo: str,
+    token: str | None,
+    state: str = "open",
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """List pull requests for a repository.
+
+    Returns a list of PR dicts with keys: number, title, state, head_branch,
+    base_branch, author, created_at, updated_at, draft, html_url.
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
+    headers = _make_github_headers(token)
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.get(
+            url,
+            headers=headers,
+            params={"state": state, "per_page": min(limit, 100), "sort": "updated"},
+        )
+        resp.raise_for_status()
+        raw_prs: list[dict[str, Any]] = resp.json()
+
+    return [
+        {
+            "number": pr["number"],
+            "title": pr["title"],
+            "state": pr["state"],
+            "draft": pr.get("draft", False),
+            "head_branch": pr.get("head", {}).get("ref", ""),
+            "base_branch": pr.get("base", {}).get("ref", ""),
+            "author": pr.get("user", {}).get("login", ""),
+            "created_at": pr.get("created_at", ""),
+            "updated_at": pr.get("updated_at", ""),
+            "html_url": pr.get("html_url", ""),
+        }
+        for pr in raw_prs[:limit]
+    ]
+
+
+def get_pr_detail(
+    *,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    token: str | None,
+) -> dict[str, Any]:
+    """Get detailed PR information including labels, reviewers, and body."""
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
+    headers = _make_github_headers(token)
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.get(url, headers=headers)
+        resp.raise_for_status()
+        pr = resp.json()
+
+    return {
+        "number": pr["number"],
+        "title": pr["title"],
+        "body": pr.get("body") or "",
+        "state": pr["state"],
+        "draft": pr.get("draft", False),
+        "head_branch": pr.get("head", {}).get("ref", ""),
+        "base_branch": pr.get("base", {}).get("ref", ""),
+        "author": pr.get("user", {}).get("login", ""),
+        "labels": [label["name"] for label in pr.get("labels", [])],
+        "reviewers": [r["login"] for r in pr.get("requested_reviewers", [])],
+        "additions": pr.get("additions", 0),
+        "deletions": pr.get("deletions", 0),
+        "changed_files": pr.get("changed_files", 0),
+        "mergeable": pr.get("mergeable"),
+        "html_url": pr.get("html_url", ""),
+        "created_at": pr.get("created_at", ""),
+        "updated_at": pr.get("updated_at", ""),
+    }
+
+
+def get_pr_checks(
+    *,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    token: str | None,
+) -> list[dict[str, str]]:
+    """Get CI/CD check status for a PR's head commit."""
+    # First get the head SHA
+    pr_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
+    headers = _make_github_headers(token)
+
+    with httpx.Client(timeout=30.0) as client:
+        pr_resp = client.get(pr_url, headers=headers)
+        pr_resp.raise_for_status()
+        head_sha = pr_resp.json().get("head", {}).get("sha", "")
+
+        if not head_sha:
+            return []
+
+        checks_url = f"https://api.github.com/repos/{owner}/{repo}/commits/{head_sha}/check-runs"
+        checks_resp = client.get(checks_url, headers=headers)
+        checks_resp.raise_for_status()
+        runs: list[dict[str, Any]] = checks_resp.json().get("check_runs", [])
+
+    return [
+        {
+            "name": run.get("name", ""),
+            "status": run.get("status", ""),
+            "conclusion": run.get("conclusion") or "pending",
+        }
+        for run in runs
+    ]
+
+
+def get_pr_reviews(
+    *,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    token: str | None,
+) -> list[dict[str, str]]:
+    """Get reviews for a PR."""
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+    headers = _make_github_headers(token)
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.get(url, headers=headers)
+        resp.raise_for_status()
+        reviews: list[dict[str, Any]] = resp.json()
+
+    return [
+        {
+            "user": r.get("user", {}).get("login", ""),
+            "state": r.get("state", ""),
+            "submitted_at": r.get("submitted_at", ""),
+        }
+        for r in reviews
+    ]
+
+
+def get_authenticated_user(*, token: str) -> str:
+    """Get the login name of the authenticated user."""
+    headers = _make_github_headers(token)
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.get("https://api.github.com/user", headers=headers)
+        resp.raise_for_status()
+        login: str = resp.json().get("login", "")
+        return login
+
+
 _GITHUB_STATUS_MAP: dict[str, DiffStatus] = {
     "added": DiffStatus.ADDED,
     "modified": DiffStatus.MODIFIED,
