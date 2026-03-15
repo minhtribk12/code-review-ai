@@ -121,6 +121,7 @@ def _get_toolbar(session: SessionState) -> HTML:
         f" | <b>Reviews:</b> {session.reviews_completed}"
         f" | <b>Tokens:</b> {tokens}"
         f" | <b>Tier:</b> {session.display_tier}"
+        f"{'  !' if session.has_cost_warning else ''}"
     )
 
 

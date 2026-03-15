@@ -2126,3 +2126,79 @@ class TestHistoryCommand:
         from code_review_agent.interactive.commands.meta import COMMAND_HELP
 
         assert "History" in COMMAND_HELP
+
+
+# ---------------------------------------------------------------------------
+# Cost warning on config changes
+# ---------------------------------------------------------------------------
+
+
+class TestCostWarning:
+    """Test cost warning indicators and estimation."""
+
+    def test_no_warning_default(self, real_session: SessionState) -> None:
+        assert not real_session.has_cost_warning
+
+    def test_warning_on_deepening(self, real_session: SessionState) -> None:
+        real_session.config_overrides["max_deepening_rounds"] = "3"
+        real_session.invalidate_settings_cache()
+        assert real_session.has_cost_warning
+
+    def test_warning_on_validation(self, real_session: SessionState) -> None:
+        real_session.config_overrides["is_validation_enabled"] = "true"
+        real_session.invalidate_settings_cache()
+        assert real_session.has_cost_warning
+
+    def test_no_warning_single_round(self, real_session: SessionState) -> None:
+        real_session.config_overrides["max_deepening_rounds"] = "1"
+        real_session.invalidate_settings_cache()
+        assert not real_session.has_cost_warning
+
+    def test_multiplier_baseline(self, real_session: SessionState) -> None:
+        multiplier, reasons = real_session.estimate_cost_multiplier()
+        assert multiplier == 1.0
+        assert reasons == []
+
+    def test_multiplier_deepening(self, real_session: SessionState) -> None:
+        real_session.config_overrides["max_deepening_rounds"] = "3"
+        real_session.invalidate_settings_cache()
+        multiplier, reasons = real_session.estimate_cost_multiplier()
+        assert multiplier == 3.0
+        assert len(reasons) == 1
+        assert "3x" in reasons[0]
+
+    def test_multiplier_validation(self, real_session: SessionState) -> None:
+        real_session.config_overrides["is_validation_enabled"] = "true"
+        real_session.invalidate_settings_cache()
+        multiplier, reasons = real_session.estimate_cost_multiplier()
+        assert multiplier > 1.0
+        assert any("validation" in r for r in reasons)
+
+    def test_multiplier_combined(self, real_session: SessionState) -> None:
+        real_session.config_overrides["max_deepening_rounds"] = "2"
+        real_session.config_overrides["is_validation_enabled"] = "true"
+        real_session.config_overrides["max_validation_rounds"] = "2"
+        real_session.invalidate_settings_cache()
+        multiplier, reasons = real_session.estimate_cost_multiplier()
+        assert multiplier > 2.0
+        assert len(reasons) == 2
+
+    def test_config_set_shows_cost_warning(
+        self,
+        real_session: SessionState,
+    ) -> None:
+        from code_review_agent.interactive.commands.config_cmd import (
+            cmd_config_set,
+        )
+
+        with patch(
+            "code_review_agent.interactive.commands.config_cmd.console",
+        ) as mock_con:
+            cmd_config_set(
+                ["max_deepening_rounds", "3"],
+                real_session,
+            )
+
+        output = str(mock_con.print.call_args_list).lower()
+        assert "cost impact" in output
+        assert "3x" in output

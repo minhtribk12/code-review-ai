@@ -835,3 +835,21 @@ def cmd_config_edit(args: list[str], session: SessionState) -> None:
             f"  [green]{len(session.config_overrides)} session override(s) applied.[/green] "
             "Use [bold]config diff[/bold] to review, [bold]config reset[/bold] to discard."
         )
+        _show_cost_warning(con, session)
+
+
+def _show_cost_warning(con: object, session: SessionState) -> None:
+    """Show cost impact warning if cost-increasing overrides are active."""
+    multiplier, reasons = session.estimate_cost_multiplier()
+    if multiplier <= 1.0:
+        return
+
+    from rich.console import Console
+
+    if not isinstance(con, Console):
+        return
+
+    con.print()
+    con.print(f"  [yellow]! Cost impact: ~{multiplier:.1f}x per review[/yellow]")
+    for reason in reasons:
+        con.print(f"    [dim]{reason}[/dim]")

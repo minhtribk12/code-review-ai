@@ -279,3 +279,40 @@ class SessionState:
                 return f"{tier} (custom)"
 
         return str(tier)
+
+    @property
+    def has_cost_warning(self) -> bool:
+        """Return True if cost-increasing overrides are active."""
+        effective = self.effective_settings
+        return effective.max_deepening_rounds > 1 or effective.is_validation_enabled
+
+    def estimate_cost_multiplier(self) -> tuple[float, list[str]]:
+        """Estimate the cost multiplier vs baseline and list reasons.
+
+        Returns (multiplier, reasons) where multiplier is relative to
+        a single-round no-validation review.
+        """
+        effective = self.effective_settings
+        reasons: list[str] = []
+
+        # Baseline: N agents + 1 synthesis = multiplier 1.0
+        multiplier = 1.0
+
+        # Deepening: each extra round re-runs all agents
+        rounds = effective.max_deepening_rounds
+        if rounds > 1:
+            multiplier = float(rounds)
+            reasons.append(f"max_deepening_rounds={rounds} ({rounds}x agent cost)")
+
+        # Validation: adds LLM calls
+        if effective.is_validation_enabled:
+            val_rounds = effective.max_validation_rounds
+            # Each validation round is ~1 LLM call relative to base
+            # Approximate: +0.2 per validation round (1 call vs ~5 agent calls)
+            val_cost = 0.2 * val_rounds
+            multiplier += val_cost
+            reasons.append(
+                f"validation enabled ({val_rounds} round(s), +{val_rounds} LLM call(s))"
+            )
+
+        return multiplier, reasons

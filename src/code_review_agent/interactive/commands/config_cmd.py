@@ -156,6 +156,15 @@ def cmd_config_set(args: list[str], session: SessionState) -> None:
     session.invalidate_settings_cache()
     console.print(f"  [green]{key}[/green] = {value} [dim](session only)[/dim]")
 
+    # Show cost warning for cost-related keys
+    _COST_KEYS = {"max_deepening_rounds", "is_validation_enabled", "max_validation_rounds"}
+    if key in _COST_KEYS:
+        multiplier, reasons = session.estimate_cost_multiplier()
+        if multiplier > 1.0:
+            console.print(f"\n  [yellow]! Cost impact: ~{multiplier:.1f}x per review[/yellow]")
+            for reason in reasons:
+                console.print(f"    [dim]{reason}[/dim]")
+
 
 def cmd_config_save(args: list[str], session: SessionState) -> None:
     """Persist session config overrides to .env file."""
