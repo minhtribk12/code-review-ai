@@ -47,7 +47,7 @@ def _parse_review_flags(args: list[str]) -> tuple[list[str], list[str] | None, O
 
 def cmd_review(args: list[str], session: SessionState) -> None:
     """Run code review on a diff from the current git context."""
-    positional, _agent_names, _output_format = _parse_review_flags(args)
+    positional, agent_names, output_format = _parse_review_flags(args)
 
     # Get diff based on positional args
     raw_diff = _resolve_diff(positional)
@@ -64,22 +64,35 @@ def cmd_review(args: list[str], session: SessionState) -> None:
         return
 
     review_input = ReviewInput(diff_files=diff_files)
-    _run_review_on_input(review_input, args, session)
+    _run_review_on_input(
+        review_input,
+        session,
+        agent_names=agent_names,
+        output_format=output_format,
+    )
 
 
 def _run_review_on_input(
     review_input: ReviewInput,
-    args: list[str],
     session: SessionState,
+    *,
+    agent_names: list[str] | None = None,
+    output_format: OutputFormat = OutputFormat.RICH,
 ) -> None:
     """Run the review pipeline on a prepared ReviewInput.
 
     Shared by both local diff review (cmd_review) and PR review (pr_read._pr_review).
+    Callers should parse flags and pass the results directly.
     """
-    settings = session.settings
-    _positional, agent_names, output_format = _parse_review_flags(args)
+    settings = session.effective_settings
 
-    selected_names = agent_names or default_agents_for_tier(settings.token_tier)
+    # Priority: explicit --agents > default_agents config > tier defaults
+    if agent_names:
+        selected_names = agent_names
+    elif settings.default_agents:
+        selected_names = [n.strip() for n in settings.default_agents.split(",") if n.strip()]
+    else:
+        selected_names = default_agents_for_tier(settings.token_tier)
     is_quiet = output_format == OutputFormat.JSON
 
     callback, display = create_progress_callback(
@@ -94,12 +107,15 @@ def _run_review_on_input(
         if display is not None:
             display.start()
         try:
-            report = orchestrator.run(review_input=review_input, agent_names=agent_names)
+            report = orchestrator.run(review_input=review_input, agent_names=selected_names)
         finally:
             if display is not None:
                 display.stop()
 
         session.reviews_completed += 1
+        session.usage_history.record_review(report)
+        if report.token_usage is not None:
+            session.total_tokens_used += report.token_usage.total_tokens
 
         if output_format == OutputFormat.JSON:
             console.print(render_report_json(report))
@@ -111,9 +127,33 @@ def _run_review_on_input(
 
 
 def _resolve_diff(positional: list[str]) -> str | None:
-    """Resolve diff content from positional args."""
+    """Resolve diff content from positional args.
+
+    When called with no args: if there are unstaged changes but nothing staged,
+    auto-stage all changes, capture the staged diff, then unstage in a finally
+    block. This lets ``review`` with no args always review the working tree.
+    """
     if not positional:
-        return git_ops.diff()
+        raw = git_ops.diff()
+        if raw.strip():
+            return raw
+
+        # No unstaged diff -- check if there are staged changes
+        staged = git_ops.diff(staged=True)
+        if staged.strip():
+            return staged
+
+        # No diff at all -- try auto-staging unstaged changes
+        changed = git_ops.list_changed_files()
+        if not changed:
+            return ""
+
+        # Auto-stage, capture diff, then unstage
+        git_ops.add_files(".")
+        try:
+            return git_ops.diff(staged=True)
+        finally:
+            git_ops.unstage_files(".")
 
     target = positional[0]
 

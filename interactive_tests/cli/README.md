@@ -1,8 +1,13 @@
-# Interactive CLI Tests
+# Interactive CLI & TUI Tests
 
-End-to-end interactive tests for the `code-review-agent` CLI. Uses a **mock
-LLM server** (FastAPI) that responds with realistic code review findings, so
-you can see the full pipeline working without a real API key or spending money.
+End-to-end tests for the `code-review-agent` CLI and interactive TUI. Uses
+**two mock servers** (FastAPI) so you can test the full pipeline without real
+API keys, GitHub accounts, or spending money.
+
+| Server | Port | Purpose |
+|--------|------|---------|
+| `mock_llm_server.py` | 9999 | OpenAI-compatible chat completions (review agents) |
+| `mock_github_server.py` | 9998 | GitHub REST API (PR read/write/workflow) |
 
 ---
 
@@ -11,6 +16,7 @@ you can see the full pipeline working without a real API key or spending money.
 ```
 interactive_tests/cli/
   mock_llm_server.py       # FastAPI mock OpenAI-compatible chat completions API
+  mock_github_server.py     # FastAPI mock GitHub REST API (PRs, reviews, checks)
   samples/
     standard.patch         # SQL injection fix + cache module (main demo)
     empty.patch            # Empty diff (edge case)
@@ -21,7 +27,8 @@ interactive_tests/cli/
     large_diff.patch       # 7 files: auth, cache, models, routes, email, tests, config
     injection.patch        # Prompt injection patterns embedded in code comments
   run_all_tests.sh         # Phase 1 test suite: 16 scenarios
-  run_phase2_tests.sh      # Phase 2 test suite: 22 scenarios (all Phase 2 features)
+  run_phase2_tests.sh      # Phase 2 test suite: 22 scenarios
+  run_phase3_tests.sh      # Phase 3 test suite: 48 scenarios (PR write, TUI, watch)
   output/                  # Generated reports (auto-created, gitignored)
   README.md                # This file
 ```
@@ -30,8 +37,8 @@ interactive_tests/cli/
 
 ## Quick Start (Automated)
 
-Run all tests with a single command. The script starts the mock server, runs
-tests, prints results, and shuts down the server automatically.
+Run all tests with a single command. Scripts start mock servers, run tests,
+print results, and shut down servers automatically.
 
 ```bash
 # Phase 1 tests (basic CLI, diff parsing, input validation)
@@ -39,16 +46,20 @@ bash interactive_tests/cli/run_all_tests.sh
 
 # Phase 2 tests (JSON output, --agents, --quiet, token tiers, dedup, etc.)
 bash interactive_tests/cli/run_phase2_tests.sh
+
+# Phase 3 tests (PR write, TUI commands, watch, auto-stage/stash, mock GitHub API)
+bash interactive_tests/cli/run_phase3_tests.sh
 ```
 
 ---
 
-## Manual Testing (Two Terminals)
+## Manual Testing
 
-For interactive exploration and debugging, run the mock server and CLI in
-separate terminals.
+### Option A: Two Terminals (LLM mock only -- review commands)
 
-### Terminal 1 -- Start the mock server
+For interactive exploration of the review pipeline.
+
+#### Terminal 1 -- Start the mock LLM server
 
 ```bash
 uv run uvicorn interactive_tests.cli.mock_llm_server:app --port 9999 --reload
@@ -60,50 +71,30 @@ The server runs on `http://localhost:9999` with:
 - `GET /stats` -- request counter (for verifying LLM call counts)
 - `POST /reset` -- reset request counter
 
-### Terminal 2 -- Set environment and run CLI
+#### Terminal 2 -- Set environment and run CLI
 
 ```bash
-# Set env vars to point to the mock server
 export LLM_API_KEY=mock-key-not-real
 export LLM_BASE_URL=http://localhost:9999/v1
 export LLM_MODEL=mock/test-model
 export LLM_PROVIDER=openrouter
 ```
 
-#### Basic review (Rich terminal output)
+##### Basic review (Rich terminal output)
 
 ```bash
 uv run code-review-agent review --diff interactive_tests/cli/samples/standard.patch
 ```
 
-#### JSON output (pipe to jq)
+##### JSON output (pipe to jq)
 
 ```bash
 uv run code-review-agent review \
   --diff interactive_tests/cli/samples/standard.patch \
   --format json | jq .
-
-# Just the risk level
-uv run code-review-agent review \
-  --diff interactive_tests/cli/samples/standard.patch \
-  --format json | jq '.risk_level'
 ```
 
-#### Save reports
-
-```bash
-# Markdown report
-uv run code-review-agent review \
-  --diff interactive_tests/cli/samples/standard.patch \
-  --output /tmp/review.md
-
-# JSON report
-uv run code-review-agent review \
-  --diff interactive_tests/cli/samples/standard.patch \
-  --format json --output /tmp/review.json
-```
-
-#### Select specific agents
+##### Select specific agents
 
 ```bash
 # Security only (1 LLM call, no synthesis)
@@ -122,15 +113,11 @@ uv run code-review-agent review \
   --agents security,performance,style,test_coverage
 ```
 
-#### Token tier defaults
+##### Token tier defaults
 
 ```bash
-# Free tier: runs security agent only (1 LLM call)
+# Free tier: security-only
 TOKEN_TIER=free uv run code-review-agent review \
-  --diff interactive_tests/cli/samples/standard.patch --format json | jq '.agent_results[].agent_name'
-
-# Standard tier: all 4 agents
-TOKEN_TIER=standard uv run code-review-agent review \
   --diff interactive_tests/cli/samples/standard.patch --format json | jq '.agent_results[].agent_name'
 
 # Premium tier: all 4 agents
@@ -138,81 +125,150 @@ TOKEN_TIER=premium uv run code-review-agent review \
   --diff interactive_tests/cli/samples/standard.patch --format json | jq '.agent_results[].agent_name'
 ```
 
-#### Quiet mode (suppress progress display)
+### Option B: Three Terminals (LLM + GitHub mocks -- full TUI)
+
+For testing the interactive TUI with PR write commands, review auto-stage,
+and watch mode.
+
+#### Terminal 1 -- Mock LLM server
 
 ```bash
-uv run code-review-agent review \
-  --diff interactive_tests/cli/samples/standard.patch --quiet
+uv run uvicorn interactive_tests.cli.mock_llm_server:app --port 9999 --reload
 ```
 
-#### Verbose / debug logging
+#### Terminal 2 -- Mock GitHub API server
 
 ```bash
-uv run code-review-agent --verbose review \
-  --diff interactive_tests/cli/samples/standard.patch
+uv run uvicorn interactive_tests.cli.mock_github_server:app --port 9998 --reload
 ```
 
-#### Test prompt injection defense
+The GitHub mock runs on `http://localhost:9998` with:
+- `GET  /repos/{owner}/{repo}/pulls` -- list PRs (3 sample PRs)
+- `POST /repos/{owner}/{repo}/pulls` -- create PR
+- `GET  /repos/{owner}/{repo}/pulls/{n}` -- PR detail
+- `GET  /repos/{owner}/{repo}/pulls/{n}/files` -- PR files (with patches)
+- `PUT  /repos/{owner}/{repo}/pulls/{n}/merge` -- merge PR
+- `GET  /repos/{owner}/{repo}/pulls/{n}/reviews` -- list reviews
+- `POST /repos/{owner}/{repo}/pulls/{n}/reviews` -- submit review
+- `GET  /repos/{owner}/{repo}/commits/{sha}/check-runs` -- CI checks
+- `GET  /user` -- authenticated user
+- `GET  /health` -- health check
+- `GET  /stats` -- counters (prs_created, prs_merged, reviews_submitted)
+- `POST /reset` -- reset counters and restore sample data
+
+**Sample data pre-loaded:**
+
+| PR # | Title | State | CI | Reviews | Mergeable |
+|------|-------|-------|----|---------|-----------|
+| 42 | Fix SQL injection in login | open | all passing | 1 approval | yes |
+| 43 | Add caching layer | open (draft) | pending | none | yes |
+| 44 | Refactor auth middleware | open | failing | changes requested | no (conflicts) |
+
+#### Terminal 3 -- TUI session
 
 ```bash
-uv run code-review-agent review \
-  --diff interactive_tests/cli/samples/injection.patch --format json | jq '.agent_results[].findings[].title'
+export LLM_API_KEY=mock-key-not-real
+export LLM_BASE_URL=http://localhost:9999/v1
+export LLM_MODEL=mock/test-model
+export LLM_PROVIDER=openrouter
+export GITHUB_TOKEN=mock-github-token
+
+uv run code-review-agent interactive
 ```
 
-#### Test large multi-file diff
+Then try these TUI commands:
 
-```bash
-uv run code-review-agent review \
-  --diff interactive_tests/cli/samples/large_diff.patch \
-  --agents security,performance --format json | jq '.agent_results | length'
+##### PR Read Commands
+
+```
+pr list
+pr list --state all
+pr show 42
+pr diff 42
+pr checks 42
+pr checkout 42
+pr review 42
+pr review 42 --agents security
 ```
 
-#### Dedup strategy
+##### PR Write Commands
 
-```bash
-# Run with disabled dedup
-DEDUP_STRATEGY=disabled uv run code-review-agent review \
-  --diff interactive_tests/cli/samples/standard.patch --format json | jq '.agent_results[].findings | length'
+```
+# Preview (dry-run, no API call)
+pr create --title "My PR" --dry-run
+pr create --fill --dry-run
+pr create --fill --base main --draft --dry-run
 
-# Run with exact dedup (default)
-DEDUP_STRATEGY=exact uv run code-review-agent review \
-  --diff interactive_tests/cli/samples/standard.patch --format json | jq '.agent_results[].findings | length'
+# Actually create (calls mock API)
+pr create --title "Test PR" --body "Testing"
+pr create --fill
+
+# Merge with pre-flight checks
+pr merge 42 --dry-run
+pr merge 42 --strategy squash
+pr merge 42 --strategy rebase
+
+# Approve / request changes
+pr approve 42 --dry-run
+pr approve 42 -m "LGTM"
+pr request-changes 44 -m "Fix the failing CI"
+pr request-changes 44 --dry-run
 ```
 
-#### Verify LLM call counts
+##### PR Workflow Commands
 
-```bash
-# Reset counter
-curl -s -X POST http://localhost:9999/reset
-
-# Run single agent
-uv run code-review-agent review --diff interactive_tests/cli/samples/standard.patch --agents security --format json > /dev/null
-
-# Check: should be 1 (no synthesis for single agent)
-curl -s http://localhost:9999/stats | jq .request_count
-
-# Reset and run two agents
-curl -s -X POST http://localhost:9999/reset
-uv run code-review-agent review --diff interactive_tests/cli/samples/standard.patch --agents security,performance --format json > /dev/null
-
-# Check: should be 3 (2 agents + 1 synthesis)
-curl -s http://localhost:9999/stats | jq .request_count
+```
+pr mine
+pr assigned
+pr stale
+pr ready
+pr conflicts
+pr summary
+pr summary --full
+pr unresolved
 ```
 
-#### Test the mock API directly with curl
+##### Smart Review Workflows
+
+```
+# Auto-stages when no diff: review with no args stages, reviews, unstages
+review
+
+# Auto-stash on pr review: stashes dirty tree, reviews, pops stash
+pr review 42
+```
+
+##### Watch Mode
+
+```
+# Polls every 5s (default), runs review on changes, Ctrl+C to stop
+watch
+watch --interval 10
+watch --agents security
+```
+
+##### Verify Mock Server State
 
 ```bash
-curl -s http://localhost:9999/health
+# In another terminal:
+curl -s http://localhost:9998/stats | jq .
+curl -s -X POST http://localhost:9998/reset
+```
 
-curl -s -X POST http://localhost:9999/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "test",
-    "messages": [
-      {"role": "system", "content": "You are a security reviewer."},
-      {"role": "user", "content": "Review this code."}
-    ]
-  }' | python3 -m json.tool
+##### Test Error Scenarios
+
+```
+# PR not found
+pr show 999
+
+# No token set (unset GITHUB_TOKEN first)
+pr create --title "test"
+
+# Missing required comment
+pr request-changes 42
+
+# Same branch as base
+# (switch to main first, then: pr create --title "test")
 ```
 
 ---
@@ -257,21 +313,14 @@ curl -s -X POST http://localhost:9999/v1/chat/completions \
 
 ## Phase 2 Test Scenarios (run_phase2_tests.sh)
 
-### JSON output (Tests 1-2) -- CRA-33
+### JSON output (Tests 1-2)
 
 | Test | Scenario | Verifies |
 |------|----------|----------|
 | 1 | `--format json` | Valid JSON on stdout with all fields |
 | 2 | `--format json --output` | Saves valid JSON to file |
 
-### Progress and quiet (Tests 3, 18) -- CRA-32
-
-| Test | Scenario | Verifies |
-|------|----------|----------|
-| 3 | `--quiet` | Suppresses progress, still shows report |
-| 18 | `--format json` | Auto-suppresses progress, clean stdout |
-
-### Agent selection (Tests 4-7) -- multi-agent
+### Agent selection (Tests 4-7)
 
 | Test | Scenario | Verifies |
 |------|----------|----------|
@@ -280,108 +329,167 @@ curl -s -X POST http://localhost:9999/v1/chat/completions \
 | 6 | `--agents invalid_agent` | Helpful error message |
 | 7 | All four agents | 5 LLM calls, all results present |
 
-### Execution timing (Test 8)
+### Token budget (Tests 9, 13-14)
 
 | Test | Scenario | Verifies |
 |------|----------|----------|
-| 8 | All four agents | Positive execution times recorded |
-
-### Token budget (Tests 9, 13-14) -- CRA-25
-
-| Test | Scenario | Verifies |
-|------|----------|----------|
-| 9 | `large_diff.patch` | 7-file diff processed successfully |
-| 13 | `TOKEN_TIER=free` | Security-only, 1 LLM call |
+| 9 | `large_diff.patch` | 7-file diff processed |
+| 13 | `TOKEN_TIER=free` | Security-only |
 | 14 | `TOKEN_TIER=premium` | All 4 agents |
 
-### Prompt injection (Test 10) -- CRA-26
+### Dedup / Injection / Risk (Tests 10-12)
 
 | Test | Scenario | Verifies |
 |------|----------|----------|
-| 10 | `injection.patch` | Processes without crash |
+| 10 | `injection.patch` | No crash |
+| 11 | Dedup strategies | disabled + exact both work |
+| 12 | Risk validation | Valid severity value |
 
-### Dedup strategy (Test 11) -- CRA-27
+## Phase 3 Test Scenarios (run_phase3_tests.sh)
+
+### Section 1: Unit Tests (Tests 1-12)
+
+| Test | Class | Verifies |
+|------|-------|----------|
+| 1 | `TestPrCreate/Merge/Approve/RequestChanges` | All PR write command handlers |
+| 2 | `TestPrDispatchWiring` | Write commands reachable via `pr` router |
+| 3 | `TestReviewAutoStage` | `review` auto-stages when no unstaged diff |
+| 4 | `TestPrReviewAutoStash` | `pr review` stashes/pops dirty working tree |
+| 5 | `TestWatchCommand` | Watch command is registered and dispatches |
+| 6 | `TestGitOpsNewFunctions` | `has_upstream`, `log_oneline_commits_since`, `status_porcelain`, `push_branch` |
+| 7 | `TestPRCacheInvalidation` | Cache clears after write operations |
+| 8 | `TestCompletersPhase3` | Completers include PR write + watch |
+| 9 | `TestMetaPhase3` | Help has Pr Write, Watch, Pr Read groups |
+| 10 | `TestPrWriteHelpers` | `_parse_flag`, `_has_flag` parsing |
+| 11 | All interactive tests | No regressions in existing tests |
+| 12 | Full test suite | All 391+ tests pass |
+
+### Section 2: Mock GitHub API (Tests 13-23)
+
+| Test | Endpoint | Verifies |
+|------|----------|----------|
+| 13 | `GET /health` | Server is running |
+| 14 | `GET /pulls` | Returns sample PRs |
+| 15 | `GET /pulls/42` | Returns correct PR detail |
+| 16 | `GET /pulls/999` | Returns 404 for missing PR |
+| 17 | `POST /pulls` | Creates PR, assigns number |
+| 18 | `PUT /pulls/42/merge` | Returns merged=true |
+| 19 | `POST /pulls/42/reviews` | Returns correct review state |
+| 20 | `GET /pulls/42/reviews` | Returns review list |
+| 21 | `GET /commits/{sha}/check-runs` | Returns CI check data |
+| 22 | `GET /stats` | Tracks request counts |
+| 23 | `PUT /pulls/44/merge` | Returns 405 (not mergeable) |
+
+### Section 3: Static Analysis (Tests 24-25)
+
+| Test | Tool | Verifies |
+|------|------|----------|
+| 24 | `ruff check src/` | Lint passes |
+| 25 | `mypy src/` | Type check passes |
+
+### Section 4: CLI Integration (Tests 26-27)
 
 | Test | Scenario | Verifies |
 |------|----------|----------|
-| 11 | `DEDUP_STRATEGY=disabled/exact` | Both strategies work |
+| 26 | Standard patch review | Review pipeline still works |
+| 27 | `--agents security` filter | Agent filter still works |
 
-### Risk validation (Test 12) -- CRA-28
-
-| Test | Scenario | Verifies |
-|------|----------|----------|
-| 12 | All agents | Risk level is valid severity value |
-
-### CLI options (Test 15)
+### Section 5: TUI Registration (Tests 28-31)
 
 | Test | Scenario | Verifies |
 |------|----------|----------|
-| 15 | `review --help` | Shows `--format`, `--quiet`, `--agents` |
+| 28 | `interactive --help` | Command is registered |
+| 29 | Help groups | Includes "Pr Write" |
+| 30 | Help groups | Includes "Watch" |
+| 31 | Help groups | "Pr" renamed to "Pr Read" |
 
-### Output formats (Tests 16-17)
-
-| Test | Scenario | Verifies |
-|------|----------|----------|
-| 16 | Rich terminal | Report header and findings count |
-| 17 | Markdown file | Both agent sections present |
-
-### Config (Tests 19-20)
+### Section 6: Config (Tests 32-34)
 
 | Test | Scenario | Verifies |
 |------|----------|----------|
-| 19 | Empty diff + JSON | No crash |
-| 20 | `MAX_REVIEW_SECONDS=120` | Custom config accepted |
+| 32 | `watch_debounce_seconds=10.0` | Field accepts custom value |
+| 33 | Default value | Defaults to 5.0 |
+| 34 | `watch_debounce_seconds=0.1` | Rejects values < 1.0 |
 
-### Data validation (Tests 21-22)
+### Section 7: GitHub Client Functions (Tests 35-36)
 
 | Test | Scenario | Verifies |
 |------|----------|----------|
-| 21 | Finding structure | All required fields, valid enum values |
-| 22 | Agent status | Valid status values (success/partial/failed) |
+| 35 | Import check | `create_pr`, `merge_pr`, `submit_pr_review` callable |
+| 36 | Mock server call | `create_pr` works against mock GitHub server |
+
+### Section 8: Git Ops Functions (Tests 37-40)
+
+| Test | Function | Verifies |
+|------|----------|----------|
+| 37 | `has_upstream()` | Returns bool |
+| 38 | `log_oneline_commits_since()` | Returns list |
+| 39 | `status_porcelain()` | Returns str |
+| 40 | `push_branch()` | Has correct signature (remote, set_upstream) |
+
+### Section 9: Completers & Dispatch (Tests 41-43)
+
+| Test | Scenario | Verifies |
+|------|----------|----------|
+| 41 | Completer tree | Has create, merge, approve, request-changes |
+| 42 | Completer tree | Has watch command |
+| 43 | REPL dispatch table | Includes watch handler |
+
+### Section 10: PR Write Behavior (Tests 44-48)
+
+| Test | Scenario | Verifies |
+|------|----------|----------|
+| 44 | `pr create --dry-run` | Shows preview, no API call |
+| 45 | `pr merge --dry-run` | Shows pre-flight, no merge |
+| 46 | `pr approve -m "LGTM"` | Submits APPROVE event with comment |
+| 47 | `pr request-changes` (no -m) | Requires comment (mandatory) |
+| 48 | `GitHubAuthError` on create | Shows "Permission denied" with scope hint |
 
 ---
 
-## How the Mock Server Works
+## How the Mock Servers Work
 
-`mock_llm_server.py` implements a single endpoint:
+### Mock LLM Server (`mock_llm_server.py`)
 
 ```
 POST /v1/chat/completions
 ```
 
-The server:
+1. Reads the system prompt
+2. Detects agent by keyword: security, performance, style, test_coverage, synthesis
+3. Returns pre-built JSON matching Pydantic models
+4. Adds random latency (0.2-2.0s)
+5. Tracks request count via `/stats`
 
-1. Reads the system prompt from the request
-2. Detects which agent is calling by keyword matching:
-   - `"security"` -> SQL injection + info leakage findings
-   - `"performance"` -> unbounded cache finding
-   - `"style"` -> no findings (clean code)
-   - `"test coverage"` -> missing tests finding
-   - `"synthesiz"` or `"senior engineering"` -> overall summary + risk level
-3. Returns a pre-built JSON response matching the expected Pydantic model
-4. Adds random per-agent latency (0.2-2.0s) to simulate realistic parallel progress
-5. Reports realistic token usage counts
-6. Tracks request count via `/stats` endpoint for test verification
+### Mock GitHub API Server (`mock_github_server.py`)
+
+Implements the GitHub REST API v3 endpoints used by the TUI:
+
+1. Pre-loaded with 3 sample PRs (42, 43, 44) with different states
+2. PR 42: open, all CI passing, 1 approval, mergeable
+3. PR 43: open draft, CI pending, no reviews, mergeable
+4. PR 44: open, CI failing, changes requested, not mergeable (conflicts)
+5. Tracks counters: `prs_created`, `prs_merged`, `reviews_submitted`
+6. `POST /reset` restores sample data to initial state
+7. Returns rate limit headers on all responses
 
 ---
 
-## Adding New Scenarios
+## Adding New Test Scenarios
+
+### For CLI review tests
 
 1. Create a `.patch` file in `samples/`
-2. Add a test block in the appropriate test script:
+2. Add a test block in `run_all_tests.sh` or `run_phase2_tests.sh`
 
-```bash
-echo ""
-echo "--- Test N: Description ---"
+### For TUI / PR write tests
 
-run_cli review --diff "$SAMPLES/your_file.patch" --format json
+1. Add mock data to `mock_github_server.py` (PRs, reviews, checks)
+2. Add test blocks in `run_phase3_tests.sh`
+3. For Python-level tests, add to `tests/test_interactive.py`
 
-if [ $CLI_EXIT -eq 0 ]; then
-    pass_test "Your assertion"
-else
-    fail_test "Your assertion" "Exit code: $CLI_EXIT"
-fi
-```
+### For new GitHub API endpoints
 
-3. To add mock responses for new agent types, edit `_AGENT_RESPONSES` in
-   `mock_llm_server.py`.
+1. Add the endpoint to `mock_github_server.py`
+2. Add sample response data to the `_SAMPLE_*` dicts
+3. Verify with `curl http://localhost:9998/your/endpoint`

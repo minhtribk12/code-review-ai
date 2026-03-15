@@ -115,6 +115,32 @@ def remote_url() -> str | None:
     return result.stdout.strip()
 
 
+def list_remotes() -> dict[str, str]:
+    """Return a dict of remote_name -> URL for all configured remotes."""
+    result = _run("remote", "-v", check=False)
+    if result.returncode != 0:
+        return {}
+    remotes: dict[str, str] = {}
+    for line in result.stdout.strip().splitlines():
+        if not line or "(push)" in line:
+            continue
+        parts = line.split()
+        if len(parts) >= 2:
+            remotes[parts[0]] = parts[1]
+    return remotes
+
+
+def parse_github_owner_repo(url: str) -> tuple[str, str] | None:
+    """Parse owner/repo from a GitHub remote URL. Returns None if not GitHub."""
+    url = url.rstrip("/").removesuffix(".git")
+    if "github.com" not in url:
+        return None
+    parts = url.split("github.com")[-1].lstrip(":/").split("/")
+    if len(parts) < 2:
+        return None
+    return parts[0], parts[1]
+
+
 # ---------------------------------------------------------------------------
 # Write operations
 # ---------------------------------------------------------------------------
@@ -191,3 +217,50 @@ def list_untracked_files() -> list[str]:
     """Return list of untracked file paths."""
     output = _run("ls-files", "--others", "--exclude-standard").stdout
     return [f for f in output.strip().splitlines() if f]
+
+
+def push_branch(
+    *,
+    remote: str = "origin",
+    set_upstream: bool = True,
+) -> str:
+    """Push the current branch to a remote."""
+    if set_upstream:
+        branch = current_branch()
+        args = ["push", "--set-upstream", remote, branch]
+    else:
+        args = ["push", remote]
+    return _run(*args).stderr.strip()
+
+
+def has_upstream() -> bool:
+    """Check if the current branch tracks a remote branch."""
+    result = _run(
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{upstream}",
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def log_oneline_commits_since(base: str = "main") -> list[str]:
+    """Return commit subject lines since diverging from base.
+
+    Used by ``pr create --fill`` to auto-fill title/body from commits.
+    """
+    result = _run("log", "--oneline", "--format=%s", f"{base}..HEAD", check=False)
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.strip().splitlines() if line]
+
+
+def fetch_pr_ref(pr_number: int, branch_name: str, remote: str = "origin") -> str:
+    """Fetch a PR head ref into a local branch."""
+    return _run("fetch", remote, f"pull/{pr_number}/head:{branch_name}").stderr.strip()
+
+
+def status_porcelain() -> str:
+    """Return git status in porcelain format (machine-readable)."""
+    return _run("status", "--porcelain").stdout

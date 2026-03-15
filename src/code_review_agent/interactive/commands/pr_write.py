@@ -1,0 +1,326 @@
+"""PR write commands: create, merge, approve, request-changes."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from rich.console import Console
+from rich.panel import Panel
+
+from code_review_agent.github_client import (
+    GitHubAuthError,
+    create_pr,
+    get_pr_checks,
+    get_pr_detail,
+    get_pr_reviews,
+    merge_pr,
+    submit_pr_review,
+)
+from code_review_agent.interactive import git_ops
+from code_review_agent.interactive.commands.pr_read import _get_repo_info, _parse_pr_number
+
+if TYPE_CHECKING:
+    from code_review_agent.interactive.session import SessionState
+
+console = Console()
+
+
+def _parse_flag(args: list[str], flag: str) -> str | None:
+    """Extract a --flag value from args, returning None if not present."""
+    for i, arg in enumerate(args):
+        if arg == flag and i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+
+def _has_flag(args: list[str], flag: str) -> bool:
+    """Check if a boolean flag is present in args."""
+    return flag in args
+
+
+def pr_create(args: list[str], session: SessionState) -> None:
+    """Create a pull request from the current branch."""
+    owner, repo, token = _get_repo_info(session)
+    if token is None:
+        console.print("[red]GITHUB_TOKEN required for pr create.[/red]")
+        return
+
+    is_dry_run = _has_flag(args, "--dry-run")
+    is_fill = _has_flag(args, "--fill")
+    is_draft = _has_flag(args, "--draft")
+
+    head = git_ops.current_branch()
+    base = _parse_flag(args, "--base") or "main"
+    title = _parse_flag(args, "--title")
+    body = _parse_flag(args, "--body") or ""
+
+    if head == base:
+        console.print(f"[red]Current branch '{head}' is the same as base '{base}'.[/red]")
+        return
+
+    # --fill: auto-fill title/body from commits since base
+    if is_fill:
+        commits = git_ops.log_oneline_commits_since(base)
+        if not commits:
+            console.print(
+                f"[yellow]No commits found since '{base}'. Cannot auto-fill title/body.[/yellow]"
+            )
+            return
+        if title is None:
+            title = commits[0]
+        if not body:
+            body = "\n".join(f"- {c}" for c in commits)
+
+    if title is None:
+        console.print("[red]Title required. Use --title or --fill to auto-generate.[/red]")
+        return
+
+    # Preview
+    lines = [
+        "[bold]Create PR[/bold]",
+        f"  Head:  {head}",
+        f"  Base:  {base}",
+        f"  Title: {title}",
+        f"  Draft: {is_draft}",
+    ]
+    if body:
+        truncated = body[:300] + ("..." if len(body) > 300 else "")
+        lines.append(f"  Body:  {truncated}")
+
+    # Check upstream
+    has_remote = git_ops.has_upstream()
+    if not has_remote:
+        lines.append("  [yellow]No upstream -- will push before creating PR.[/yellow]")
+
+    console.print(Panel("\n".join(lines), title="PR Preview", border_style="cyan"))
+
+    if is_dry_run:
+        console.print("[dim]Dry run -- no PR created.[/dim]")
+        return
+
+    # Push if no upstream
+    if not has_remote:
+        console.print("  Pushing branch...")
+        try:
+            git_ops.push_branch()
+            console.print(f"  [green]Pushed {head} to origin.[/green]")
+        except git_ops.GitError as exc:
+            console.print(f"[red]Push failed: {exc}[/red]")
+            return
+
+    try:
+        result = create_pr(
+            owner=owner,
+            repo=repo,
+            token=token,
+            title=title,
+            head=head,
+            base=base,
+            body=body,
+            draft=is_draft,
+        )
+    except GitHubAuthError:
+        console.print(
+            "[red]Permission denied. Your token may lack 'repo' scope "
+            "or you don't have push access to this repository.[/red]"
+        )
+        return
+
+    session.pr_cache.invalidate()
+    console.print(f"  [green]Created PR #{result['number']}:[/green] {result['html_url']}")
+
+
+def pr_merge(args: list[str], session: SessionState) -> None:
+    """Merge a pull request with pre-flight checks."""
+    if not args:
+        console.print(
+            "[red]Usage: pr merge <number> [--strategy merge|squash|rebase] [--dry-run][/red]"
+        )
+        return
+
+    owner, repo, token = _get_repo_info(session)
+    if token is None:
+        console.print("[red]GITHUB_TOKEN required for pr merge.[/red]")
+        return
+
+    pr_number = _parse_pr_number(args)
+    is_dry_run = _has_flag(args, "--dry-run")
+    strategy = _parse_flag(args, "--strategy") or "squash"
+
+    if strategy not in ("merge", "squash", "rebase"):
+        console.print(
+            f"[red]Invalid merge strategy: {strategy}. Use merge, squash, or rebase.[/red]"
+        )
+        return
+
+    # Pre-flight: fetch PR detail, checks, reviews
+    detail = get_pr_detail(owner=owner, repo=repo, pr_number=pr_number, token=token)
+    checks = get_pr_checks(owner=owner, repo=repo, pr_number=pr_number, token=token)
+    reviews = get_pr_reviews(owner=owner, repo=repo, pr_number=pr_number, token=token)
+
+    lines = [
+        f"[bold]Merge PR #{pr_number}[/bold]: {detail['title']}",
+        f"  Branch:   {detail['head_branch']} -> {detail['base_branch']}",
+        f"  Strategy: {strategy}",
+        f"  State:    {detail['state']}",
+    ]
+
+    # Check approvals
+    approvals = [r for r in reviews if r["state"] == "APPROVED"]
+    changes_requested = [r for r in reviews if r["state"] == "CHANGES_REQUESTED"]
+    lines.append(f"  Approvals: {len(approvals)}")
+
+    warnings: list[str] = []
+    if changes_requested:
+        users = ", ".join(r["user"] for r in changes_requested)
+        warnings.append(f"Changes requested by: {users}")
+    if not approvals:
+        warnings.append("No approvals on this PR")
+
+    # Check CI status
+    failed_checks = [c for c in checks if c["conclusion"] in ("failure", "cancelled")]
+    pending_checks = [c for c in checks if c["conclusion"] == "pending"]
+    if failed_checks:
+        names = ", ".join(c["name"] for c in failed_checks)
+        warnings.append(f"Failed checks: {names}")
+    if pending_checks:
+        names = ", ".join(c["name"] for c in pending_checks)
+        warnings.append(f"Pending checks: {names}")
+
+    if detail["state"] != "open":
+        warnings.append(f"PR state is '{detail['state']}' (not open)")
+
+    if detail.get("mergeable") is False:
+        warnings.append("PR has merge conflicts")
+
+    for warning in warnings:
+        lines.append(f"  [yellow]Warning: {warning}[/yellow]")
+
+    console.print(Panel("\n".join(lines), title="Merge Preview", border_style="cyan"))
+
+    if is_dry_run:
+        console.print("[dim]Dry run -- no merge performed.[/dim]")
+        return
+
+    try:
+        result = merge_pr(
+            owner=owner,
+            repo=repo,
+            token=token,
+            pr_number=pr_number,
+            merge_method=strategy,
+        )
+    except GitHubAuthError:
+        console.print("[red]Permission denied. You need write access to merge PRs.[/red]")
+        return
+
+    session.pr_cache.invalidate()
+
+    if result["merged"]:
+        console.print(
+            f"  [green]Merged PR #{pr_number} ({strategy}). SHA: {result['sha'][:8]}[/green]"
+        )
+    else:
+        console.print(f"  [red]Merge failed: {result['message']}[/red]")
+
+
+def pr_approve(args: list[str], session: SessionState) -> None:
+    """Submit an APPROVE review on a pull request."""
+    if not args:
+        console.print("[red]Usage: pr approve <number> [-m comment] [--dry-run][/red]")
+        return
+
+    owner, repo, token = _get_repo_info(session)
+    if token is None:
+        console.print("[red]GITHUB_TOKEN required for pr approve.[/red]")
+        return
+
+    pr_number = _parse_pr_number(args)
+    is_dry_run = _has_flag(args, "--dry-run")
+    comment = _parse_flag(args, "-m") or ""
+
+    detail = get_pr_detail(owner=owner, repo=repo, pr_number=pr_number, token=token)
+
+    lines = [
+        f"[bold]Approve PR #{pr_number}[/bold]: {detail['title']}",
+        f"  Author: {detail['author']}",
+        f"  Branch: {detail['head_branch']} -> {detail['base_branch']}",
+    ]
+    if comment:
+        lines.append(f"  Comment: {comment}")
+
+    console.print(Panel("\n".join(lines), title="Approve Preview", border_style="green"))
+
+    if is_dry_run:
+        console.print("[dim]Dry run -- no approval submitted.[/dim]")
+        return
+
+    try:
+        result = submit_pr_review(
+            owner=owner,
+            repo=repo,
+            token=token,
+            pr_number=pr_number,
+            event="APPROVE",
+            body=comment,
+        )
+    except GitHubAuthError:
+        console.print(
+            "[red]Permission denied. You may not have access to review this PR, "
+            "or you cannot approve your own PR.[/red]"
+        )
+        return
+
+    session.pr_cache.invalidate()
+    console.print(f"  [green]Approved PR #{pr_number}.[/green] {result['html_url']}")
+
+
+def pr_request_changes(args: list[str], session: SessionState) -> None:
+    """Submit a REQUEST_CHANGES review on a pull request."""
+    if not args:
+        console.print('[red]Usage: pr request-changes <number> -m "comment" [--dry-run][/red]')
+        return
+
+    owner, repo, token = _get_repo_info(session)
+    if token is None:
+        console.print("[red]GITHUB_TOKEN required for pr request-changes.[/red]")
+        return
+
+    pr_number = _parse_pr_number(args)
+    is_dry_run = _has_flag(args, "--dry-run")
+    comment = _parse_flag(args, "-m")
+
+    if not comment:
+        console.print('[red]Comment is mandatory for request-changes. Use -m "comment".[/red]')
+        return
+
+    detail = get_pr_detail(owner=owner, repo=repo, pr_number=pr_number, token=token)
+
+    lines = [
+        f"[bold]Request Changes on PR #{pr_number}[/bold]: {detail['title']}",
+        f"  Author:  {detail['author']}",
+        f"  Branch:  {detail['head_branch']} -> {detail['base_branch']}",
+        f"  Comment: {comment}",
+    ]
+
+    console.print(Panel("\n".join(lines), title="Request Changes Preview", border_style="yellow"))
+
+    if is_dry_run:
+        console.print("[dim]Dry run -- no review submitted.[/dim]")
+        return
+
+    try:
+        result = submit_pr_review(
+            owner=owner,
+            repo=repo,
+            token=token,
+            pr_number=pr_number,
+            event="REQUEST_CHANGES",
+            body=comment,
+        )
+    except GitHubAuthError:
+        console.print("[red]Permission denied. You may not have access to review this PR.[/red]")
+        return
+
+    session.pr_cache.invalidate()
+    console.print(f"  [yellow]Requested changes on PR #{pr_number}.[/yellow] {result['html_url']}")

@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     interactive_prompt: str = "cra> "
     interactive_vi_mode: bool = False
     interactive_autocomplete_cache_ttl: int = Field(default=5, ge=1)
+    watch_debounce_seconds: float = Field(default=5.0, ge=1.0)
+    default_agents: str = Field(
+        default="",
+        description=(
+            "Comma-separated list of agents to run by default. "
+            "Empty string means use tier defaults."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_custom_pricing(self) -> Settings:

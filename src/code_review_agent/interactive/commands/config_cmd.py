@@ -66,6 +66,10 @@ def cmd_config(args: list[str], session: SessionState) -> None:
     """Show all config or a specific category."""
     if args and args[0] == "show":
         args = args[1:]
+    if args and args[0] == "edit":
+        from code_review_agent.interactive.commands.config_edit import cmd_config_edit
+
+        return cmd_config_edit(args[1:], session)
     if args and args[0] == "get":
         return cmd_config_get(args[1:], session)
     if args and args[0] == "set":
@@ -138,6 +142,7 @@ def cmd_config_set(args: list[str], session: SessionState) -> None:
         return
 
     session.config_overrides[key] = value
+    session.invalidate_settings_cache()
     console.print(f"  [green]{key}[/green] = {value} [dim](session only)[/dim]")
 
 
@@ -158,6 +163,7 @@ def cmd_config_reset(args: list[str], session: SessionState) -> None:
     """Reload config from .env, discard session overrides."""
     count = len(session.config_overrides)
     session.config_overrides.clear()
+    session.invalidate_settings_cache()
     console.print(
         f"  [green]Reset {count} session override(s). Config reloaded from .env.[/green]"
     )

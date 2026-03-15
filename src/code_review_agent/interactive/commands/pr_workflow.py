@@ -31,10 +31,9 @@ console = Console()
 
 def _get_authenticated_username(session: SessionState) -> str:
     """Get the authenticated GitHub username from token."""
+    effective = session.effective_settings
     token = (
-        session.settings.github_token.get_secret_value()
-        if session.settings.github_token is not None
-        else None
+        effective.github_token.get_secret_value() if effective.github_token is not None else None
     )
     if token is None:
         msg = "GitHub token required for this command. Set GITHUB_TOKEN in .env."
@@ -178,7 +177,7 @@ def pr_stale(args: list[str], session: SessionState) -> None:
     """List PRs with no activity beyond the staleness threshold."""
     _owner, _repo, _token, prs = _fetch_open_prs(session)
 
-    stale_days = session.settings.pr_stale_days
+    stale_days = session.effective_settings.pr_stale_days
     i = 0
     while i < len(args):
         if args[i] == "--days" and i + 1 < len(args):
@@ -289,7 +288,7 @@ def pr_summary(args: list[str], session: SessionState) -> None:
     my_numbers = ", ".join(f"#{pr['number']}" for pr in my_prs)
 
     now = datetime.now(tz=UTC)
-    cutoff = now - timedelta(days=session.settings.pr_stale_days)
+    cutoff = now - timedelta(days=session.effective_settings.pr_stale_days)
     stale_count = 0
     for pr in prs:
         updated_str = pr.get("updated_at", "")
@@ -301,7 +300,7 @@ def pr_summary(args: list[str], session: SessionState) -> None:
     lines = [
         f"[bold]Open:[/bold]            {total}",
         f"[bold]Draft:[/bold]           {draft_count}",
-        f"[bold]Stale (>{session.settings.pr_stale_days}d):[/bold]     {stale_count}",
+        f"[bold]Stale (>{session.effective_settings.pr_stale_days}d):[/bold]     {stale_count}",
     ]
 
     # Expensive counts (per-PR API calls) -- only with --full

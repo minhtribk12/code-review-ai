@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -10,6 +11,7 @@ import structlog
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.styles import Style
 from rich.console import Console
 
 from code_review_agent.interactive.commands.config_cmd import cmd_config
@@ -34,8 +36,10 @@ from code_review_agent.interactive.commands.meta import (
     cmd_version,
 )
 from code_review_agent.interactive.commands.pr_read import cmd_pr
+from code_review_agent.interactive.commands.repo_cmd import cmd_repo
 from code_review_agent.interactive.commands.review_cmd import cmd_review
 from code_review_agent.interactive.commands.usage_cmd import cmd_usage
+from code_review_agent.interactive.commands.watch_cmd import cmd_watch
 from code_review_agent.interactive.completers import build_static_completer
 from code_review_agent.interactive.session import SessionState
 
@@ -61,6 +65,8 @@ _COMMANDS: dict[str, CommandHandler] = {
     "stash": cmd_stash,
     "review": cmd_review,
     "pr": cmd_pr,
+    "repo": cmd_repo,
+    "watch": cmd_watch,
     "config": cmd_config,
     "usage": cmd_usage,
     "help": cmd_help,
@@ -73,7 +79,7 @@ _VERSION = "0.1.0"
 
 
 def _get_toolbar(session: SessionState) -> HTML:
-    """Build the bottom toolbar content."""
+    """Build the bottom toolbar separated by a horizontal line."""
     branch = ""
     try:
         from code_review_agent.interactive import git_ops
@@ -81,11 +87,57 @@ def _get_toolbar(session: SessionState) -> HTML:
         branch = git_ops.current_branch()
     except Exception:
         branch = "?"
+    tokens = _format_token_count(session.total_tokens_used)
+
+    # Build repo label: "owner/repo:local" or "owner/repo:remote"
+    if session.active_repo:
+        source = session.active_repo_source or "local"
+        repo_label = f"{session.active_repo}:{source}"
+    else:
+        # Derive from local git remote without storing
+        try:
+            from code_review_agent.interactive.git_ops import (
+                parse_github_owner_repo,
+                remote_url,
+            )
+
+            url = remote_url()
+            if url:
+                parsed = parse_github_owner_repo(url)
+                repo_label = f"{parsed[0]}/{parsed[1]}:local" if parsed else ""
+            else:
+                repo_label = ""
+        except Exception:
+            repo_label = ""
+
+    repo_part = f" | <b>Repo:</b> {repo_label}" if repo_label else ""
+    separator = "\u2500" * 80
     return HTML(
+        f'<style fg="ansigray">{separator}</style>\n'
         f" <b>Branch:</b> {branch}"
+        f"{repo_part}"
         f" | <b>Reviews:</b> {session.reviews_completed}"
-        f" | <b>Tier:</b> {session.settings.token_tier}"
+        f" | <b>Tokens:</b> {tokens}"
+        f" | <b>Tier:</b> {session.display_tier}"
     )
+
+
+_REPL_STYLE = Style.from_dict(
+    {
+        "bottom-toolbar": "noreverse",
+    }
+)
+
+
+def _format_token_count(count: int) -> str:
+    """Format token count with human-readable suffix (k, m, b)."""
+    if count >= 1_000_000_000:
+        return f"{count / 1_000_000_000:.1f}b"
+    if count >= 999_950:
+        return f"{count / 1_000_000:.1f}m"
+    if count >= 1_000:
+        return f"{count / 1_000:.1f}k"
+    return str(count)
 
 
 def run_repl(settings: Settings) -> None:
@@ -94,13 +146,14 @@ def run_repl(settings: Settings) -> None:
     completer = build_static_completer()
 
     prompt_str = settings.interactive_prompt
-    history_path = settings.interactive_history_file
+    history_path = os.path.expanduser(settings.interactive_history_file)
 
     prompt_session: PromptSession[str] = PromptSession(
         history=FileHistory(history_path),
         completer=completer,
         complete_while_typing=True,
         bottom_toolbar=lambda: _get_toolbar(session),
+        style=_REPL_STYLE,
         refresh_interval=1.0,
         vi_mode=settings.interactive_vi_mode,
     )

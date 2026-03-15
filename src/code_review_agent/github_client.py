@@ -21,6 +21,19 @@ from code_review_agent.models import DiffFile, DiffStatus, ReviewInput
 
 logger = structlog.get_logger(__name__)
 
+
+def _github_api_base() -> str:
+    """Return the GitHub API base URL.
+
+    Reads ``GITHUB_API_BASE_URL`` from the environment. Defaults to
+    ``https://api.github.com`` when unset. Override with a mock server
+    URL (e.g. ``http://localhost:9998``) for local testing.
+    """
+    import os
+
+    return os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com")
+
+
 _PR_REF_PATTERN = re.compile(
     r"^(?:https?://github\.com/)?"
     r"(?P<owner>[A-Za-z0-9_.-]+)/"
@@ -199,7 +212,7 @@ def fetch_pr_diff(
     transient page fetch failures instead of crashing.
     Auth errors (401/403) are always propagated.
     """
-    base_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
+    base_url = f"{_github_api_base()}/repos/{owner}/{repo}/pulls/{pr_number}"
     headers: dict[str, str] = {
         "Accept": "application/vnd.github.v3+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -467,7 +480,7 @@ def list_prs(
     Returns a list of PR dicts with keys: number, title, state, head_branch,
     base_branch, author, created_at, updated_at, draft, html_url.
     """
-    url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
+    url = f"{_github_api_base()}/repos/{owner}/{repo}/pulls"
     headers = _make_github_headers(token)
 
     with httpx.Client(timeout=30.0) as client:
@@ -504,7 +517,7 @@ def get_pr_detail(
     token: str | None,
 ) -> dict[str, Any]:
     """Get detailed PR information including labels, reviewers, and body."""
-    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
+    url = f"{_github_api_base()}/repos/{owner}/{repo}/pulls/{pr_number}"
     headers = _make_github_headers(token)
 
     with httpx.Client(timeout=30.0) as client:
@@ -542,7 +555,7 @@ def get_pr_checks(
 ) -> list[dict[str, str]]:
     """Get CI/CD check status for a PR's head commit."""
     # First get the head SHA
-    pr_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
+    pr_url = f"{_github_api_base()}/repos/{owner}/{repo}/pulls/{pr_number}"
     headers = _make_github_headers(token)
 
     with httpx.Client(timeout=30.0) as client:
@@ -553,7 +566,7 @@ def get_pr_checks(
         if not head_sha:
             return []
 
-        checks_url = f"https://api.github.com/repos/{owner}/{repo}/commits/{head_sha}/check-runs"
+        checks_url = f"{_github_api_base()}/repos/{owner}/{repo}/commits/{head_sha}/check-runs"
         checks_resp = client.get(checks_url, headers=headers)
         checks_resp.raise_for_status()
         runs: list[dict[str, Any]] = checks_resp.json().get("check_runs", [])
@@ -576,7 +589,7 @@ def get_pr_reviews(
     token: str | None,
 ) -> list[dict[str, str]]:
     """Get reviews for a PR."""
-    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+    url = f"{_github_api_base()}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
     headers = _make_github_headers(token)
 
     with httpx.Client(timeout=30.0) as client:
@@ -599,10 +612,175 @@ def get_authenticated_user(*, token: str) -> str:
     headers = _make_github_headers(token)
 
     with httpx.Client(timeout=30.0) as client:
-        resp = client.get("https://api.github.com/user", headers=headers)
+        resp = client.get(f"{_github_api_base()}/user", headers=headers)
         resp.raise_for_status()
         login: str = resp.json().get("login", "")
         return login
+
+
+def list_user_repos(
+    *,
+    token: str,
+    limit: int = 50,
+    sort: str = "updated",
+) -> list[dict[str, Any]]:
+    """List repositories accessible to the authenticated user.
+
+    Returns a list of dicts with keys: full_name, description, private,
+    default_branch, updated_at, open_issues_count, language.
+    """
+    headers = _make_github_headers(token)
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.get(
+            f"{_github_api_base()}/user/repos",
+            headers=headers,
+            params={
+                "per_page": min(limit, 100),
+                "sort": sort,
+                "direction": "desc",
+                "affiliation": "owner,collaborator,organization_member",
+            },
+        )
+        resp.raise_for_status()
+        repos: list[dict[str, Any]] = resp.json()
+
+    return [
+        {
+            "full_name": r.get("full_name", ""),
+            "description": r.get("description") or "",
+            "private": r.get("private", False),
+            "default_branch": r.get("default_branch", "main"),
+            "updated_at": r.get("updated_at", ""),
+            "open_issues_count": r.get("open_issues_count", 0),
+            "language": r.get("language") or "",
+        }
+        for r in repos[:limit]
+    ]
+
+
+def _check_auth_error(resp: httpx.Response) -> None:
+    """Raise GitHubAuthError if the response indicates an auth/permission failure."""
+    if resp.status_code in _ABORT_STATUS_CODES:
+        raise GitHubAuthError(f"GitHub API returned {resp.status_code}: {resp.text}")
+
+
+def create_pr(
+    *,
+    owner: str,
+    repo: str,
+    token: str,
+    title: str,
+    head: str,
+    base: str,
+    body: str = "",
+    draft: bool = False,
+) -> dict[str, Any]:
+    """Create a pull request via POST /repos/{owner}/{repo}/pulls.
+
+    Returns a dict with keys: number, html_url, title, head_branch, base_branch, draft.
+    """
+    url = f"{_github_api_base()}/repos/{owner}/{repo}/pulls"
+    headers = _make_github_headers(token)
+
+    payload: dict[str, Any] = {
+        "title": title,
+        "head": head,
+        "base": base,
+        "body": body,
+        "draft": draft,
+    }
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.post(url, headers=headers, json=payload)
+        _check_auth_error(resp)
+        resp.raise_for_status()
+        pr = resp.json()
+
+    return {
+        "number": pr["number"],
+        "html_url": pr["html_url"],
+        "title": pr["title"],
+        "head_branch": pr.get("head", {}).get("ref", ""),
+        "base_branch": pr.get("base", {}).get("ref", ""),
+        "draft": pr.get("draft", False),
+    }
+
+
+def merge_pr(
+    *,
+    owner: str,
+    repo: str,
+    token: str,
+    pr_number: int,
+    merge_method: str = "squash",
+    commit_title: str | None = None,
+    commit_message: str | None = None,
+) -> dict[str, Any]:
+    """Merge a pull request via PUT /repos/{owner}/{repo}/pulls/{pr_number}/merge.
+
+    Returns a dict with keys: merged, message, sha.
+    """
+    url = f"{_github_api_base()}/repos/{owner}/{repo}/pulls/{pr_number}/merge"
+    headers = _make_github_headers(token)
+
+    payload: dict[str, Any] = {"merge_method": merge_method}
+    if commit_title is not None:
+        payload["commit_title"] = commit_title
+    if commit_message is not None:
+        payload["commit_message"] = commit_message
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.put(url, headers=headers, json=payload)
+        _check_auth_error(resp)
+        if resp.status_code == 405:
+            msg = "PR is not mergeable (merge blocked by branch protection or conflicts)"
+            raise ValueError(msg)
+        if resp.status_code == 409:
+            msg = "Head branch was modified (review and try again)"
+            raise ValueError(msg)
+        resp.raise_for_status()
+        data = resp.json()
+
+    return {
+        "merged": data.get("merged", False),
+        "message": data.get("message", ""),
+        "sha": data.get("sha", ""),
+    }
+
+
+def submit_pr_review(
+    *,
+    owner: str,
+    repo: str,
+    token: str,
+    pr_number: int,
+    event: str,
+    body: str = "",
+) -> dict[str, Any]:
+    """Submit a PR review via POST /repos/{owner}/{repo}/pulls/{pr_number}/reviews.
+
+    event must be one of: APPROVE, REQUEST_CHANGES, COMMENT.
+    Returns a dict with keys: id, state, html_url.
+    """
+    url = f"{_github_api_base()}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+    headers = _make_github_headers(token)
+
+    payload: dict[str, Any] = {"event": event}
+    if body:
+        payload["body"] = body
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.post(url, headers=headers, json=payload)
+        _check_auth_error(resp)
+        resp.raise_for_status()
+        review = resp.json()
+
+    return {
+        "id": review["id"],
+        "state": review.get("state", ""),
+        "html_url": review.get("html_url", ""),
+    }
 
 
 _GITHUB_STATUS_MAP: dict[str, DiffStatus] = {

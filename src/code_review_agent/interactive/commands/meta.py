@@ -37,13 +37,13 @@ COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
         ('commit -m "message"', "Create commit"),
         ("stash [pop|list]", "Stash management"),
     ],
-    "Pr": [
+    "Pr Read": [
         ("pr list [--state open|closed|all]", "List pull requests"),
         ("pr show <number>", "Show PR details"),
         ("pr diff <number>", "Show PR diff with syntax highlighting"),
         ("pr checks <number>", "Show CI/CD check status"),
         ("pr checkout <number>", "Check out PR branch locally"),
-        ("pr review <number> [--agents ...]", "Run code review on PR"),
+        ("pr review <number> [--agents ...]", "Run code review on PR (auto-stashes)"),
         ("pr mine", "List your open PRs"),
         ("pr assigned [--limit N]", "List PRs where you are a reviewer"),
         ("pr stale [--days N]", "List stale PRs (no activity)"),
@@ -52,13 +52,30 @@ COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
         ("pr summary [--full]", "PR dashboard (--full for detailed counts)"),
         ("pr unresolved [--limit N]", "List PRs with unresolved feedback"),
     ],
+    "Pr Write": [
+        ("pr create [--title T] [--fill] [--base B]", "Create PR (--fill from commits)"),
+        ("pr create --draft --dry-run", "Preview draft PR without creating"),
+        ("pr merge <N> [--strategy squash|merge|rebase]", "Merge PR with pre-flight checks"),
+        ("pr approve <N> [-m comment]", "Approve a PR"),
+        ('pr request-changes <N> -m "reason"', "Request changes on a PR"),
+    ],
+    "Repo": [
+        ("repo list [--limit N]", "List accessible repositories"),
+        ("repo select [owner/repo]", "Interactive repo picker (or direct)"),
+        ("repo current", "Show current active repo"),
+        ("repo clear", "Clear selection (use local git remote)"),
+    ],
     "Review": [
-        ("review [staged|HEAD~N|branch|file]", "Run code review on diff"),
+        ("review [staged|HEAD~N|branch|file]", "Run code review on diff (auto-stages)"),
         ("review --agents <list>", "Review with specific agents"),
         ("review --format json", "Review with JSON output"),
     ],
+    "Watch": [
+        ("watch [--interval N] [--agents list]", "Continuous monitoring (Ctrl+C to stop)"),
+    ],
     "Config": [
         ("config", "Show all configuration (grouped, secrets masked)"),
+        ("config edit", "Interactive config editor (full-screen)"),
         ("config get <key>", "Show a single config value"),
         ("config set <key> <value>", "Set config for this session"),
         ("config save", "Persist session config to .env"),
