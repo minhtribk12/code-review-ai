@@ -113,6 +113,7 @@ def _run_review_on_input(
                 display.stop()
 
         session.reviews_completed += 1
+        session.last_review_report = report
         session.usage_history.record_review(report)
         if report.token_usage is not None:
             session.total_tokens_used += report.token_usage.total_tokens

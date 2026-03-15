@@ -100,6 +100,7 @@ def build_static_completer() -> NestedCompleter:
                 "trends": {"--repo": None, "--days": None},
                 "export": {"--repo": None, "--format": {"json": None}},
             },
+            "findings": None,
             "usage": None,
             "help": {
                 "git": None,

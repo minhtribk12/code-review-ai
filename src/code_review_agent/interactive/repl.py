@@ -15,6 +15,7 @@ from prompt_toolkit.styles import Style
 from rich.console import Console
 
 from code_review_agent.interactive.commands.config_cmd import cmd_config
+from code_review_agent.interactive.commands.findings_cmd import cmd_findings
 from code_review_agent.interactive.commands.git_read import (
     cmd_diff,
     cmd_log,
@@ -65,6 +66,7 @@ _COMMANDS: dict[str, CommandHandler] = {
     "commit": cmd_commit,
     "stash": cmd_stash,
     "review": cmd_review,
+    "findings": cmd_findings,
     "pr": cmd_pr,
     "repo": cmd_repo,
     "watch": cmd_watch,

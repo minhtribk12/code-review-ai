@@ -174,6 +174,7 @@ class SessionState:
     usage_history: UsageHistory = field(default_factory=UsageHistory)
     active_repo: str | None = None  # "owner/repo" for PR commands
     active_repo_source: str = ""  # "local" or "remote"
+    last_review_report: ReviewReport | None = None
     _effective_settings_cache: Settings | None = field(
         default=None,
         repr=False,

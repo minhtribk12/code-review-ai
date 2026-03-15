@@ -70,6 +70,10 @@ COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
         ("review --agents <list>", "Review with specific agents"),
         ("review --format json", "Review with JSON output"),
     ],
+    "Findings": [
+        ("findings", "Interactive findings navigator (last review)"),
+        ("findings <review_id>", "Navigate findings from a saved review"),
+    ],
     "Watch": [
         ("watch [--interval N] [--agents list]", "Continuous monitoring (Ctrl+C to stop)"),
     ],

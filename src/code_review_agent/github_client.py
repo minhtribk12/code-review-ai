@@ -783,6 +783,63 @@ def submit_pr_review(
     }
 
 
+def submit_pr_review_with_comments(
+    *,
+    owner: str,
+    repo: str,
+    token: str,
+    pr_number: int,
+    body: str,
+    comments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Submit a PR review with inline comments.
+
+    Uses ``POST /repos/{owner}/{repo}/pulls/{pr_number}/reviews`` with
+    the ``comments`` array for file-level annotations.
+
+    Each comment dict must have: ``path`` (str), ``line`` (int), ``body`` (str).
+    The GitHub API requires the head commit SHA, fetched automatically.
+
+    Returns a dict with keys: id, state, html_url, comments_posted.
+    Raises ``GitHubAuthError`` on 401/403 and ``httpx.HTTPStatusError``
+    on other API failures.
+    """
+    base = _github_api_base()
+    headers = _make_github_headers(token)
+
+    with httpx.Client(timeout=30.0) as client:
+        # Fetch head commit SHA (required by GitHub for inline comments)
+        pr_url = f"{base}/repos/{owner}/{repo}/pulls/{pr_number}"
+        pr_resp = client.get(pr_url, headers=headers)
+        _check_auth_error(pr_resp)
+        pr_resp.raise_for_status()
+        head_sha = pr_resp.json().get("head", {}).get("sha", "")
+
+        if not head_sha:
+            msg = f"Could not determine head commit SHA for PR #{pr_number}"
+            raise ValueError(msg)
+
+        payload: dict[str, Any] = {
+            "event": "COMMENT",
+            "body": body,
+            "commit_id": head_sha,
+            "comments": comments,
+        }
+
+        url = f"{base}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+        resp = client.post(url, headers=headers, json=payload)
+        _check_auth_error(resp)
+        resp.raise_for_status()
+        review = resp.json()
+
+    return {
+        "id": review["id"],
+        "state": review.get("state", ""),
+        "html_url": review.get("html_url", ""),
+        "comments_posted": len(comments),
+    }
+
+
 _GITHUB_STATUS_MAP: dict[str, DiffStatus] = {
     "added": DiffStatus.ADDED,
     "modified": DiffStatus.MODIFIED,
