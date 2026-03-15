@@ -228,6 +228,7 @@ def _build_review_input(
             pr_number=pr_number,
             token=token,
             max_files=settings.max_pr_files,
+            rate_limit_warn_threshold=settings.github_rate_limit_warn_threshold,
         )
 
     if diff is not None:

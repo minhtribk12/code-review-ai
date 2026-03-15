@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -25,14 +29,12 @@ _PR_REF_PATTERN = re.compile(
     r"(?P<number>\d+)$"
 )
 
-_RATE_LIMIT_WARNING_THRESHOLD = 100
 _PAGE_RETRY_ATTEMPTS = 3
 
 # Server errors that are safe to retry (transient).
 _RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
 
 # Client errors that indicate a permanent auth/permission problem.
-# These should abort the entire fetch, not return partial results.
 _ABORT_STATUS_CODES = {401, 403}
 
 
@@ -44,12 +46,110 @@ class GitHubAuthError(Exception):
     """Raised when GitHub API returns 401/403 (auth or permission failure)."""
 
 
+class GitHubRateLimitExhausted(Exception):
+    """Raised when GitHub API rate limit hits 0."""
+
+
 @dataclass(frozen=True)
 class _PageResult:
     """Result from fetching a single page of PR files."""
 
     data: list[dict[str, Any]]
     response: httpx.Response
+
+
+@dataclass
+class GitHubRateLimitState:
+    """Tracks GitHub API rate limit across requests.
+
+    Updated from response headers after each API call. Provides proactive
+    checking before requests and exhaustion detection.
+    """
+
+    remaining: int | None = None
+    limit: int | None = None
+    reset_at: float | None = None
+    warn_threshold: int = 100
+
+    def update_from_response(self, resp: httpx.Response) -> None:
+        """Update state from GitHub API response headers."""
+        remaining_str = resp.headers.get("X-RateLimit-Remaining")
+        if remaining_str is not None:
+            with contextlib.suppress(ValueError):
+                self.remaining = int(remaining_str)
+
+        limit_str = resp.headers.get("X-RateLimit-Limit")
+        if limit_str is not None:
+            with contextlib.suppress(ValueError):
+                self.limit = int(limit_str)
+
+        reset_str = resp.headers.get("X-RateLimit-Reset")
+        if reset_str is not None:
+            with contextlib.suppress(ValueError):
+                self.reset_at = float(reset_str)
+
+    @property
+    def is_exhausted(self) -> bool:
+        """Return True if rate limit is known to be exhausted."""
+        if self.remaining is None:
+            return False
+        if self.remaining > 0:
+            return False
+        # remaining == 0 and reset is in the future
+        if self.reset_at is not None and self.reset_at > time.time():
+            return True
+        return self.remaining == 0
+
+    @property
+    def is_low(self) -> bool:
+        """Return True if rate limit is below the warning threshold."""
+        if self.remaining is None:
+            return False
+        return self.remaining < self.warn_threshold
+
+    @property
+    def reset_at_utc(self) -> str | None:
+        """Return reset time as human-readable UTC string."""
+        if self.reset_at is None:
+            return None
+        return datetime.fromtimestamp(self.reset_at, tz=UTC).strftime("%H:%M UTC")
+
+    def check_and_warn(self, warnings: list[str]) -> None:
+        """Log warning and add to fetch_warnings if rate limit is low."""
+        if self.remaining is None:
+            return
+
+        if self.is_exhausted:
+            reset_str = self.reset_at_utc or "unknown"
+            warning_msg = (
+                f"GitHub API rate limit exhausted (0/{self.limit} remaining). "
+                f"Resets at {reset_str}."
+            )
+            warnings.append(warning_msg)
+            logger.error(
+                "github api rate limit exhausted",
+                remaining=0,
+                limit=self.limit,
+                reset_at=reset_str,
+            )
+        elif self.is_low:
+            reset_str = self.reset_at_utc or "unknown"
+            warning_msg = (
+                f"GitHub API rate limit low: {self.remaining}/{self.limit} "
+                f"remaining (resets at {reset_str})."
+            )
+            warnings.append(warning_msg)
+            logger.warning(
+                "github api rate limit low",
+                remaining=self.remaining,
+                limit=self.limit,
+                reset_at=reset_str,
+            )
+
+
+# Type for the optional callback when rate limit is exhausted (TUI seam).
+# Returns True to wait for reset, False to abort.
+OnRateLimitExhausted = Callable[[GitHubRateLimitState], bool]
 
 
 def parse_pr_reference(pr_ref: str) -> tuple[str, str, int]:
@@ -88,6 +188,8 @@ def fetch_pr_diff(
     pr_number: int,
     token: str | None,
     max_files: int = 200,
+    rate_limit_warn_threshold: int = 100,
+    on_rate_limit_exhausted: OnRateLimitExhausted | None = None,
 ) -> ReviewInput:
     """Fetch PR diff and metadata from the GitHub API.
 
@@ -103,6 +205,8 @@ def fetch_pr_diff(
     }
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
+
+    rate_limit = GitHubRateLimitState(warn_threshold=rate_limit_warn_threshold)
 
     logger.info(
         "fetching pr metadata",
@@ -123,7 +227,7 @@ def fetch_pr_diff(
             msg = f"PR not found: {owner}/{repo}#{pr_number}.{hint}"
             raise ValueError(msg)
         meta_resp.raise_for_status()
-        _check_github_rate_limit(meta_resp)
+        rate_limit.update_from_response(meta_resp)
         meta = meta_resp.json()
 
         pr_title: str = meta.get("title", "")
@@ -141,10 +245,17 @@ def fetch_pr_diff(
             headers=headers,
             max_files=max_files,
             warnings=warnings,
+            rate_limit=rate_limit,
+            on_rate_limit_exhausted=on_rate_limit_exhausted,
         )
 
     # Deduplicate files by filename (last wins).
     files_data = _deduplicate_files(files_data, warnings)
+
+    # Add rate limit warning to fetch_warnings if low (not exhausted --
+    # exhaustion is already handled inside _fetch_all_pr_files).
+    if rate_limit.is_low and not rate_limit.is_exhausted:
+        rate_limit.check_and_warn(warnings)
 
     diff_files: list[DiffFile] = []
     skipped = 0
@@ -187,18 +298,43 @@ def _fetch_all_pr_files(
     headers: dict[str, str],
     max_files: int,
     warnings: list[str],
+    rate_limit: GitHubRateLimitState,
+    on_rate_limit_exhausted: OnRateLimitExhausted | None = None,
 ) -> list[dict[str, Any]]:
     """Paginate the GitHub PR files endpoint with retry and partial recovery.
 
     Fetches up to ``max_files`` files with ``per_page=100``.
     On transient page fetch failure (after retries), stops pagination and
     returns files collected so far. Auth errors (401/403) are propagated
-    immediately.
+    immediately. Rate limit exhaustion aborts with partial results (CLI)
+    or invokes callback for user choice (TUI).
     """
     all_files: list[dict[str, Any]] = []
     page = 1
 
     while len(all_files) < max_files:
+        # Proactive rate limit check before making the request.
+        if rate_limit.is_exhausted:
+            should_wait = on_rate_limit_exhausted is not None and on_rate_limit_exhausted(
+                rate_limit
+            )
+            if should_wait and rate_limit.reset_at is not None:
+                wait_seconds = max(0.0, rate_limit.reset_at - time.time() + 1)
+                logger.info(
+                    "waiting for github rate limit reset",
+                    wait_seconds=round(wait_seconds, 0),
+                )
+                time.sleep(wait_seconds)
+                # Reset state -- the limit should have refreshed
+                rate_limit.remaining = None
+            else:
+                rate_limit.check_and_warn(warnings)
+                logger.warning(
+                    "aborting pr file fetch, rate limit exhausted",
+                    files_collected=len(all_files),
+                )
+                break
+
         try:
             page_result = _fetch_page(
                 client=client,
@@ -223,7 +359,7 @@ def _fetch_all_pr_files(
             )
             break
 
-        _check_github_rate_limit(page_result.response)
+        rate_limit.update_from_response(page_result.response)
 
         if not page_result.data:
             break
@@ -299,22 +435,6 @@ def _deduplicate_files(files: list[dict[str, Any]], warnings: list[str]) -> list
         warnings.append(f"Removed {removed_count} duplicate file(s) from PR file list.")
 
     return list(seen.values())
-
-
-def _check_github_rate_limit(resp: httpx.Response) -> None:
-    """Log a warning if GitHub API rate limit is running low."""
-    remaining = resp.headers.get("X-RateLimit-Remaining")
-    if remaining is not None:
-        try:
-            remaining_int = int(remaining)
-        except ValueError:
-            return
-        if remaining_int < _RATE_LIMIT_WARNING_THRESHOLD:
-            logger.warning(
-                "github api rate limit low",
-                remaining=remaining_int,
-                limit=resp.headers.get("X-RateLimit-Limit"),
-            )
 
 
 _GITHUB_STATUS_MAP: dict[str, DiffStatus] = {
