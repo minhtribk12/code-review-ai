@@ -599,53 +599,18 @@ class FindingsViewer:
 # ---------------------------------------------------------------------------
 
 
-def cmd_findings(args: list[str], session: SessionState) -> None:
-    """Launch the interactive findings navigator."""
-    console = Console()
-    report: ReviewReport | None = None
+def run_findings_app(
+    *,
+    report: ReviewReport,
+    github_token: str | None = None,
+) -> None:
+    """Launch the full-screen findings navigator.
 
-    # Load report: from arg (review ID) or last review
-    if args and args[0].isdigit():
-        review_id = int(args[0])
-        try:
-            from code_review_agent.storage import ReviewStorage
+    Shared entry point used by both the TUI ``findings`` command and the
+    CLI ``--findings`` flag / ``findings`` subcommand.
+    """
+    viewer = FindingsViewer(report, github_token=github_token)
 
-            storage = ReviewStorage(session.effective_settings.history_db_path)
-            review_dict = storage.get_review(review_id)
-            if review_dict is None:
-                console.print(f"[red]Review #{review_id} not found.[/red]")
-                return
-            report = ReviewReport.model_validate_json(
-                review_dict["report_json"],
-            )
-        except Exception as exc:
-            console.print(f"[red]Failed to load review #{review_id}: {exc}[/red]")
-            return
-    else:
-        report = session.last_review_report
-
-    if report is None:
-        console.print(
-            "[yellow]No review available. "
-            "Run 'review' first or specify a review ID: "
-            "findings <review_id>[/yellow]"
-        )
-        return
-
-    findings = _flatten_findings(report)
-    if not findings:
-        console.print("[dim]No findings to display.[/dim]")
-        return
-
-    # Resolve GitHub token for PR posting
-    settings = session.effective_settings
-    token: str | None = None
-    if settings.github_token is not None:
-        token = settings.github_token.get_secret_value()
-
-    viewer = FindingsViewer(report, github_token=token)
-
-    # -- Key bindings --
     kb = KeyBindings()
 
     @kb.add("up")
@@ -723,7 +688,6 @@ def cmd_findings(args: list[str], session: SessionState) -> None:
         if viewer.mode == _ViewerMode.NAVIGATE:
             event.app.exit()
 
-    # -- Layout and run --
     control = FormattedTextControl(viewer.render)
     window = Window(content=control, wrap_lines=True)
     layout = Layout(HSplit([window]))
@@ -736,7 +700,8 @@ def cmd_findings(args: list[str], session: SessionState) -> None:
     )
     app.run()
 
-    # -- Post-TUI summary --
+    # Post-TUI summary
+    console = Console()
     fp_count = sum(1 for v in viewer.triage.values() if v == TriageAction.FALSE_POSITIVE)
     ign_count = sum(1 for v in viewer.triage.values() if v == TriageAction.IGNORED)
 
@@ -749,3 +714,50 @@ def cmd_findings(args: list[str], session: SessionState) -> None:
         if viewer.comments_posted:
             console.print(f"  {viewer.comments_posted} comment(s) posted to PR")
         console.print()
+
+
+def cmd_findings(args: list[str], session: SessionState) -> None:
+    """Launch the interactive findings navigator."""
+    console = Console()
+    report: ReviewReport | None = None
+
+    # Load report: from arg (review ID) or last review
+    if args and args[0].isdigit():
+        review_id = int(args[0])
+        try:
+            from code_review_agent.storage import ReviewStorage
+
+            storage = ReviewStorage(session.effective_settings.history_db_path)
+            review_dict = storage.get_review(review_id)
+            if review_dict is None:
+                console.print(f"[red]Review #{review_id} not found.[/red]")
+                return
+            report = ReviewReport.model_validate_json(
+                review_dict["report_json"],
+            )
+        except Exception as exc:
+            console.print(f"[red]Failed to load review #{review_id}: {exc}[/red]")
+            return
+    else:
+        report = session.last_review_report
+
+    if report is None:
+        console.print(
+            "[yellow]No review available. "
+            "Run 'review' first or specify a review ID: "
+            "findings <review_id>[/yellow]"
+        )
+        return
+
+    findings = _flatten_findings(report)
+    if not findings:
+        console.print("[dim]No findings to display.[/dim]")
+        return
+
+    # Resolve GitHub token for PR posting
+    settings = session.effective_settings
+    token: str | None = None
+    if settings.github_token is not None:
+        token = settings.github_token.get_secret_value()
+
+    run_findings_app(report=report, github_token=token)

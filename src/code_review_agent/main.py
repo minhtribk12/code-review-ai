@@ -121,6 +121,11 @@ def review(
         "--format",
         help="Output format: rich (terminal) or json (machine-readable).",
     ),
+    navigate: bool = typer.Option(
+        False,
+        "--findings",
+        help="Open interactive findings navigator after review completes.",
+    ),
 ) -> None:
     """Run multi-agent code review on a GitHub PR or local diff."""
     if pr is None and diff is None:
@@ -165,10 +170,51 @@ def review(
             save_report(report=report, path=output, output_format=output_format)
             typer.echo(f"Report saved to {output}")
 
+        if navigate and output_format != OutputFormat.JSON:
+            _launch_findings_navigator(report=report, settings=settings)
+
     except Exception as exc:
         logger.error("review failed", error=str(exc))
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
+
+
+@app.command()
+def findings(
+    review_id: int = typer.Argument(
+        ...,
+        help="Review ID from history to navigate.",
+    ),
+) -> None:
+    """Open interactive findings navigator for a saved review."""
+    from code_review_agent.interactive.commands.findings_cmd import (
+        _flatten_findings,
+    )
+    from code_review_agent.storage import ReviewStorage
+
+    try:
+        settings = _load_settings()
+    except SystemExit:
+        raise
+    except Exception as exc:
+        typer.echo(f"Error loading settings: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    storage = ReviewStorage(settings.history_db_path)
+    review_dict = storage.get_review(review_id)
+    if review_dict is None:
+        typer.echo(f"Error: review #{review_id} not found", err=True)
+        raise typer.Exit(code=1)
+
+    from code_review_agent.models import ReviewReport
+
+    report = ReviewReport.model_validate_json(review_dict["report_json"])
+
+    if not _flatten_findings(report):
+        typer.echo("No findings to display.")
+        raise typer.Exit()
+
+    _launch_findings_navigator(report=report, settings=settings)
 
 
 @app.command()
@@ -185,6 +231,21 @@ def interactive() -> None:
         raise typer.Exit(code=1) from None
 
     run_repl(settings=settings)
+
+
+def _launch_findings_navigator(
+    *,
+    report: object,
+    settings: Settings,
+) -> None:
+    """Launch the full-screen findings navigator for a ReviewReport."""
+    from code_review_agent.interactive.commands.findings_cmd import run_findings_app
+
+    token: str | None = None
+    if settings.github_token is not None:
+        token = settings.github_token.get_secret_value()
+
+    run_findings_app(report=report, github_token=token)  # type: ignore[arg-type]
 
 
 def _parse_agent_names(agents_arg: str | None) -> list[str] | None:
