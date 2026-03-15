@@ -19,10 +19,12 @@ dependencies = [
     "pygithub",
     "structlog",
     "tenacity>=9.1.4",
+    "prompt-toolkit>=3.0",
 ]
 
 [project.scripts]
 code-review-agent = "code_review_agent.main:app"
+cra = "code_review_agent.main:app"
 
 [dependency-groups]
 dev = [

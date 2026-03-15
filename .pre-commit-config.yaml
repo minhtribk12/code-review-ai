@@ -24,6 +24,7 @@ repos:
           - httpx
           - openai
           - tenacity
+          - prompt-toolkit>=3.0
         args: [--strict]
         pass_filenames: false
         entry: mypy src/

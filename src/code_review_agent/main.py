@@ -171,6 +171,22 @@ def review(
         raise typer.Exit(code=1) from None
 
 
+@app.command()
+def interactive() -> None:
+    """Launch interactive TUI mode with REPL prompt."""
+    from code_review_agent.interactive.repl import run_repl
+
+    try:
+        settings = _load_settings()
+    except SystemExit:
+        raise
+    except Exception as exc:
+        typer.echo(f"Error loading settings: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    run_repl(settings=settings)
+
+
 def _parse_agent_names(agents_arg: str | None) -> list[str] | None:
     """Parse the --agents CLI flag into a list of agent names.
 
