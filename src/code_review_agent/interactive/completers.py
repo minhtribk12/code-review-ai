@@ -25,6 +25,17 @@ def build_static_completer() -> NestedCompleter:
                 "-n": None,
             },
             "show": None,
+            "branch": {
+                "switch": None,
+                "create": None,
+                "delete": {"--force": None},
+                "rename": None,
+                "-r": None,
+            },
+            "add": None,
+            "unstage": None,
+            "commit": {"-m": None},
+            "stash": {"pop": None, "list": None},
             "review": {
                 "staged": None,
                 "--agents": None,

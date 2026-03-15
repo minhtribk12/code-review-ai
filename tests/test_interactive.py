@@ -208,6 +208,135 @@ class TestGitOps:
             _run("not-a-real-command")
 
 
+class TestGitWriteCommands:
+    """Test git write command handlers."""
+
+    def test_branch_list_dispatches(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.list_branches.return_value = "main\nfeat/x\n"
+            mock_git.current_branch.return_value = "main"
+            with patch("code_review_agent.interactive.commands.git_write.console"):
+                _dispatch("branch", session)
+        mock_git.list_branches.assert_called_once()
+
+    def test_branch_switch_dirty_tree_blocked(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.is_working_tree_dirty.return_value = True
+            with patch("code_review_agent.interactive.commands.git_write.console") as mock_con:
+                _dispatch("branch switch feat/x", session)
+        mock_git.switch_branch.assert_not_called()
+        assert "uncommitted" in str(mock_con.print.call_args).lower()
+
+    def test_branch_switch_clean_tree(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.is_working_tree_dirty.return_value = False
+            mock_git.switch_branch.return_value = ""
+            with patch("code_review_agent.interactive.commands.git_write.console"):
+                _dispatch("branch switch feat/x", session)
+        mock_git.switch_branch.assert_called_once_with("feat/x")
+
+    def test_branch_create(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.create_branch.return_value = ""
+            with patch("code_review_agent.interactive.commands.git_write.console"):
+                _dispatch("branch create feat/new", session)
+        mock_git.create_branch.assert_called_once_with("feat/new", None)
+
+    def test_branch_create_from_ref(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.create_branch.return_value = ""
+            with patch("code_review_agent.interactive.commands.git_write.console"):
+                _dispatch("branch create feat/new main", session)
+        mock_git.create_branch.assert_called_once_with("feat/new", "main")
+
+    def test_branch_delete_unmerged_blocked(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.current_branch.return_value = "main"
+            mock_git.is_branch_merged.return_value = False
+            with patch("code_review_agent.interactive.commands.git_write.console") as mock_con:
+                _dispatch("branch delete feat/old", session)
+        mock_git.delete_branch.assert_not_called()
+        assert "not merged" in str(mock_con.print.call_args).lower()
+
+    def test_branch_delete_force(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.current_branch.return_value = "main"
+            mock_git.delete_branch.return_value = ""
+            with patch("code_review_agent.interactive.commands.git_write.console"):
+                _dispatch("branch delete feat/old --force", session)
+        mock_git.delete_branch.assert_called_once_with("feat/old", force=True)
+
+    def test_branch_delete_current_blocked(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.current_branch.return_value = "main"
+            with patch("code_review_agent.interactive.commands.git_write.console") as mock_con:
+                _dispatch("branch delete main", session)
+        mock_git.delete_branch.assert_not_called()
+        assert "current branch" in str(mock_con.print.call_args).lower()
+
+    def test_add_files(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.add_files.return_value = ""
+            with patch("code_review_agent.interactive.commands.git_write.console"):
+                _dispatch("add src/main.py", session)
+        mock_git.add_files.assert_called_once_with("src/main.py")
+
+    def test_add_dot_shows_files(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.list_changed_files.return_value = ["a.py", "b.py"]
+            mock_git.list_untracked_files.return_value = ["c.py"]
+            mock_git.add_files.return_value = ""
+            with patch("code_review_agent.interactive.commands.git_write.console") as mock_con:
+                _dispatch("add .", session)
+        mock_git.add_files.assert_called_once_with(".")
+        output = str(mock_con.print.call_args_list)
+        assert "3 file(s)" in output
+
+    def test_unstage_files(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.unstage_files.return_value = ""
+            with patch("code_review_agent.interactive.commands.git_write.console"):
+                _dispatch("unstage src/main.py", session)
+        mock_git.unstage_files.assert_called_once_with("src/main.py")
+
+    def test_commit_with_message(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.list_staged_files.return_value = ["a.py"]
+            mock_git.commit.return_value = "[main abc123] fix: something\n"
+            with patch("code_review_agent.interactive.commands.git_write.console"):
+                _dispatch('commit -m "fix: something"', session)
+        mock_git.commit.assert_called_once_with("fix: something")
+
+    def test_commit_no_staged_warns(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.list_staged_files.return_value = []
+            with patch("code_review_agent.interactive.commands.git_write.console") as mock_con:
+                _dispatch('commit -m "test"', session)
+        mock_git.commit.assert_not_called()
+        assert "nothing staged" in str(mock_con.print.call_args).lower()
+
+    def test_stash_push(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.stash_push.return_value = "Saved working directory"
+            with patch("code_review_agent.interactive.commands.git_write.console"):
+                _dispatch("stash", session)
+        mock_git.stash_push.assert_called_once()
+
+    def test_stash_pop(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.stash_pop.return_value = "On branch main"
+            with patch("code_review_agent.interactive.commands.git_write.console"):
+                _dispatch("stash pop", session)
+        mock_git.stash_pop.assert_called_once()
+
+    def test_stash_list(self, session: SessionState) -> None:
+        with patch("code_review_agent.interactive.commands.git_write.git_ops") as mock_git:
+            mock_git.stash_list.return_value = "stash@{0}: WIP on main\n"
+            with patch("code_review_agent.interactive.commands.git_write.console"):
+                _dispatch("stash list", session)
+        mock_git.stash_list.assert_called_once()
+
+
 class TestCLIInteractiveCommand:
     """Test the interactive Typer command registration."""
 

@@ -19,11 +19,23 @@ _VERSION = "0.1.0"
 
 # Command registry: (name, description) grouped by category.
 COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
-    "Git": [
+    "Git Read": [
         ("status", "Show git status (branch, changed files)"),
         ("diff [staged|file|ref..ref]", "Show git diff"),
         ("log [-n N] [branch]", "Show git log (compact)"),
         ("show <commit>", "Show commit details with diff"),
+    ],
+    "Git Write": [
+        ("branch", "List local branches"),
+        ("branch -r", "List remote branches"),
+        ("branch switch <name>", "Switch to branch"),
+        ("branch create <name> [from]", "Create and switch to new branch"),
+        ("branch delete <name> [--force]", "Delete branch"),
+        ("branch rename <old> <new>", "Rename branch"),
+        ("add <file> | add .", "Stage files"),
+        ("unstage <file>", "Unstage files"),
+        ('commit -m "message"', "Create commit"),
+        ("stash [pop|list]", "Stash management"),
     ],
     "Review": [
         ("review [staged|HEAD~N|branch|file]", "Run code review on diff"),

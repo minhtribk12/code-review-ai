@@ -19,6 +19,13 @@ from code_review_agent.interactive.commands.git_read import (
     cmd_show,
     cmd_status,
 )
+from code_review_agent.interactive.commands.git_write import (
+    cmd_add,
+    cmd_branch,
+    cmd_commit,
+    cmd_stash,
+    cmd_unstage,
+)
 from code_review_agent.interactive.commands.meta import (
     cmd_agents,
     cmd_clear,
@@ -46,6 +53,11 @@ _COMMANDS: dict[str, CommandHandler] = {
     "diff": cmd_diff,
     "log": cmd_log,
     "show": cmd_show,
+    "branch": cmd_branch,
+    "add": cmd_add,
+    "unstage": cmd_unstage,
+    "commit": cmd_commit,
+    "stash": cmd_stash,
     "review": cmd_review,
     "config": cmd_config,
     "usage": cmd_usage,
