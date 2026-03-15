@@ -58,5 +58,5 @@ Desktop.ini
 # Local planning (not for repo)
 plan/
 
-# Interactive test generated output
-interactive_tests/**/output/
+# Interactive tests (local only, not for repo)
+interactive_tests/
