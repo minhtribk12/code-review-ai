@@ -272,11 +272,18 @@ fi
 
 echo ""
 echo "--- Test 11: All existing tests still pass ---"
-run_pytest tests/test_interactive.py -x
+# Run with clean env to avoid mock vars leaking into settings tests
+set +e
+PYTEST_11=$(env -u LLM_BASE_URL -u LLM_MODEL -u LLM_PROVIDER -u LLM_TEMPERATURE \
+    -u REQUEST_TIMEOUT_SECONDS -u TOKEN_TIER -u DEDUP_STRATEGY -u MAX_REVIEW_SECONDS \
+    -u MAX_PR_FILES -u MAX_CONCURRENT_AGENTS -u GITHUB_TOKEN \
+    uv run pytest tests/test_interactive.py -x -q 2>&1)
+PYTEST_EXIT=$?
+set -e
 if [ $PYTEST_EXIT -eq 0 ]; then
     pass_test "All existing interactive tests still pass"
 else
-    fail_test "Regression in existing tests" "$PYTEST_STDOUT"
+    fail_test "Regression in existing tests" "$PYTEST_11"
 fi
 
 echo ""
