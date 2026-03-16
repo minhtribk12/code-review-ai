@@ -533,6 +533,102 @@ class TestRendering:
 
 
 # ---------------------------------------------------------------------------
+# Column configuration
+# ---------------------------------------------------------------------------
+
+
+class TestColumnConfig:
+    def test_open_columns_builds_options(self, viewer: FindingsViewer) -> None:
+        viewer.open_columns()
+        assert viewer.mode == "columns"
+        assert len(viewer.column_options) == 10  # all available columns
+
+    def test_column_toggle(self, viewer: FindingsViewer) -> None:
+        viewer.open_columns()
+        # Find "repo" column (should be unchecked by default)
+        repo_idx = next(i for i, (_, key, _) in enumerate(viewer.column_options) if key == "repo")
+        viewer.column_cursor = repo_idx
+        viewer.column_toggle()
+        assert viewer.column_options[repo_idx][2] is True
+
+    def test_column_confirm_updates_visible(self, viewer: FindingsViewer) -> None:
+        viewer.open_columns()
+        # Toggle repo on
+        repo_idx = next(i for i, (_, key, _) in enumerate(viewer.column_options) if key == "repo")
+        viewer.column_cursor = repo_idx
+        viewer.column_toggle()
+        viewer.column_confirm()
+        assert "repo" in viewer.visible_columns
+        assert viewer.mode == "navigate"
+
+    def test_column_cancel_preserves_state(self, viewer: FindingsViewer) -> None:
+        original = list(viewer.visible_columns)
+        viewer.open_columns()
+        viewer.cancel_columns()
+        assert viewer.visible_columns == original
+        assert viewer.mode == "navigate"
+
+    def test_render_columns_mode(self, viewer: FindingsViewer) -> None:
+        viewer.open_columns()
+        result = viewer.render()
+        text = "".join(t for _, t in result)
+        assert "Column Configuration" in text
+        assert "columns visible" in text
+
+    def test_dynamic_table_header(self, viewer: FindingsViewer) -> None:
+        viewer.visible_columns = ["severity", "title"]
+        result = viewer.render()
+        text = "".join(t for _, t in result)
+        assert "Sev" in text
+        assert "Title" in text
+        # Agent should not appear
+        assert "Agent" not in text.split("\n")[3]  # header line
+
+
+# ---------------------------------------------------------------------------
+# Advanced filters
+# ---------------------------------------------------------------------------
+
+
+class TestAdvancedFilters:
+    def test_filter_includes_triage_when_triaged(self, viewer: FindingsViewer) -> None:
+        viewer.mark_false_positive()  # triage index 0
+        viewer.open_filter()
+        keys = [key for _, key, _ in viewer.filter_options]
+        assert "triage:none" in keys
+        assert "triage:false_positive" in keys
+
+    def test_filter_excludes_triage_when_none_triaged(self, viewer: FindingsViewer) -> None:
+        viewer.open_filter()
+        keys = [key for _, key, _ in viewer.filter_options]
+        assert "triage:none" not in keys
+
+    def test_filter_includes_pr_status_when_staged(self, viewer: FindingsViewer) -> None:
+        viewer.toggle_stage_for_pr()  # stage index 0
+        viewer.open_filter()
+        keys = [key for _, key, _ in viewer.filter_options]
+        assert "prstatus:staged" in keys
+
+    def test_filter_by_triage(self, viewer: FindingsViewer) -> None:
+        viewer.mark_false_positive()  # mark index 0 as FP
+        viewer.filter_triage = {"false_positive"}
+        viewer._apply_filters()
+        assert len(viewer.visible_rows) == 1
+        assert viewer.visible_rows[0].index == 0
+
+    def test_finding_row_has_repo_and_pr(self, report: ReviewReport) -> None:
+        rows = _flatten_findings(report)
+        assert rows[0].repo == "acme/app"
+        assert rows[0].pr_number == 42
+
+    def test_finding_row_no_pr_url(self) -> None:
+        report = _make_report(pr_url=None)
+        rows = _flatten_findings(report)
+        assert rows[0].repo is None
+        assert rows[0].pr_number is None
+
+
+# ---------------------------------------------------------------------------
 # cmd_findings entry point
 # ---------------------------------------------------------------------------
 

@@ -70,6 +70,8 @@ class FindingRow(BaseModel):
     line_number: int | None = None
     suggestion: str | None = None
     confidence: Confidence = Confidence.MEDIUM
+    repo: str | None = None
+    pr_number: int | None = None
 
 
 class TriageAction(StrEnum):
@@ -83,7 +85,33 @@ class TriageAction(StrEnum):
 class _ViewerMode(StrEnum):
     NAVIGATE = "navigate"
     FILTER = "filter"
+    COLUMNS = "columns"
     HELP = "help"
+
+
+# All available columns with display config
+_ALL_COLUMNS: list[tuple[str, str, int]] = [
+    # (key, header_label, width)
+    ("severity", "Sev", 5),
+    ("agent_name", "Agent", 13),
+    ("file_line", "File:Line", 27),
+    ("title", "Title", 21),
+    ("triage", "Triage", 8),
+    ("pr_status", "PR", 9),
+    ("repo", "Repo", 16),
+    ("pr_number", "PR#", 5),
+    ("confidence", "Conf", 7),
+    ("category", "Category", 14),
+]
+
+_DEFAULT_VISIBLE: list[str] = [
+    "severity",
+    "agent_name",
+    "file_line",
+    "title",
+    "triage",
+    "pr_status",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +121,16 @@ class _ViewerMode(StrEnum):
 
 def _flatten_findings(report: ReviewReport) -> list[FindingRow]:
     """Extract all findings from a report into a flat list of FindingRow."""
+    # Extract repo/PR from pr_url if available
+    repo_name: str | None = None
+    pr_num: int | None = None
+    if report.pr_url:
+        try:
+            owner, repo, pr_num = parse_pr_reference(report.pr_url)
+            repo_name = f"{owner}/{repo}"
+        except ValueError:
+            pass
+
     rows: list[FindingRow] = []
     idx = 0
     for result in report.agent_results:
@@ -109,6 +147,8 @@ def _flatten_findings(report: ReviewReport) -> list[FindingRow]:
                     line_number=finding.line_number,
                     suggestion=finding.suggestion,
                     confidence=finding.confidence,
+                    repo=repo_name,
+                    pr_number=pr_num,
                 )
             )
             idx += 1
@@ -169,11 +209,22 @@ class FindingsViewer:
         self.sort_index: int = 0
         self.is_sort_reversed: bool = False
 
-        # Filter
+        # Filter (extended with triage/pr_status/repo/pr_number)
         self.filter_severity: set[Severity] = set(Severity)
         self.filter_agents: set[str] = {r.agent_name for r in report.agent_results}
+        self.filter_triage: set[str] = {"none", "false_positive", "ignored"}
+        self.filter_pr_status: set[str] = {"none", "staged", "posted"}
+        self.filter_repos: set[str] = {r.repo for r in self.all_rows if r.repo}
+        self.filter_pr_numbers: set[int] = {
+            r.pr_number for r in self.all_rows if r.pr_number is not None
+        }
         self.filter_cursor: int = 0
         self.filter_options: list[tuple[str, str, bool]] = []
+
+        # Column configuration
+        self.visible_columns: list[str] = list(_DEFAULT_VISIBLE)
+        self.column_cursor: int = 0
+        self.column_options: list[tuple[str, str, bool]] = []
 
         # PR posting tracking
         self.comments_posted: int = 0
@@ -240,6 +291,8 @@ class FindingsViewer:
 
     def _build_filter_options(self) -> None:
         self.filter_options = []
+
+        # Severity (always shown)
         for sev in Severity:
             self.filter_options.append(
                 (
@@ -248,6 +301,8 @@ class FindingsViewer:
                     sev in self.filter_severity,
                 )
             )
+
+        # Agent (always shown)
         all_agents = sorted({r.agent_name for r in self.report.agent_results})
         for agent in all_agents:
             self.filter_options.append(
@@ -257,6 +312,48 @@ class FindingsViewer:
                     agent in self.filter_agents,
                 )
             )
+
+        # Triage (only if any findings are triaged)
+        if self.triage:
+            for label, key in [
+                ("None (untriaged)", "triage:none"),
+                ("False Positive", "triage:false_positive"),
+                ("Ignored", "triage:ignored"),
+            ]:
+                self.filter_options.append(
+                    (f"[Triage] {label}", key, key[7:] in self.filter_triage)
+                )
+
+        # PR Status (only if any findings are staged or posted)
+        if self.staged_for_pr or self.posted_indices:
+            for label, key in [
+                ("Not staged", "prstatus:none"),
+                ("Staged", "prstatus:staged"),
+                ("Posted", "prstatus:posted"),
+            ]:
+                self.filter_options.append(
+                    (f"[PR Status] {label}", key, key[9:] in self.filter_pr_status)
+                )
+
+        # Repo (only if multiple repos)
+        all_repos = sorted({r.repo for r in self.all_rows if r.repo})
+        if len(all_repos) > 1:
+            for repo in all_repos:
+                self.filter_options.append(
+                    (f"[Repo] {repo}", f"repo:{repo}", repo in self.filter_repos)
+                )
+
+        # PR number (only if multiple PRs)
+        all_prs = sorted({r.pr_number for r in self.all_rows if r.pr_number is not None})
+        if len(all_prs) > 1:
+            for pr_num in all_prs:
+                self.filter_options.append(
+                    (
+                        f"[PR] #{pr_num}",
+                        f"prnum:{pr_num}",
+                        pr_num in self.filter_pr_numbers,
+                    )
+                )
 
     def filter_move_up(self) -> None:
         if self.filter_cursor > 0:
@@ -275,6 +372,10 @@ class FindingsViewer:
     def filter_confirm(self) -> None:
         self.filter_severity = set()
         self.filter_agents = set()
+        self.filter_triage = set()
+        self.filter_pr_status = set()
+        self.filter_repos = set()
+        self.filter_pr_numbers = set()
         for _label, key, checked in self.filter_options:
             if not checked:
                 continue
@@ -282,18 +383,64 @@ class FindingsViewer:
                 self.filter_severity.add(Severity(key[4:]))
             elif key.startswith("agent:"):
                 self.filter_agents.add(key[6:])
+            elif key.startswith("triage:"):
+                self.filter_triage.add(key[7:])
+            elif key.startswith("prstatus:"):
+                self.filter_pr_status.add(key[9:])
+            elif key.startswith("repo:"):
+                self.filter_repos.add(key[5:])
+            elif key.startswith("prnum:"):
+                self.filter_pr_numbers.add(int(key[6:]))
+
+        # If no triage/prstatus/repo/prnum options were in the filter,
+        # keep the defaults (show all)
+        if not any(k.startswith("triage:") for _, k, _ in self.filter_options):
+            self.filter_triage = {"none", "false_positive", "ignored"}
+        if not any(k.startswith("prstatus:") for _, k, _ in self.filter_options):
+            self.filter_pr_status = {"none", "staged", "posted"}
+        if not any(k.startswith("repo:") for _, k, _ in self.filter_options):
+            self.filter_repos = {r.repo for r in self.all_rows if r.repo}
+        if not any(k.startswith("prnum:") for _, k, _ in self.filter_options):
+            self.filter_pr_numbers = {
+                r.pr_number for r in self.all_rows if r.pr_number is not None
+            }
+
         self._apply_filters()
         self.mode = _ViewerMode.NAVIGATE
 
     def cancel_filter(self) -> None:
         self.mode = _ViewerMode.NAVIGATE
 
+    def _get_finding_triage_key(self, index: int) -> str:
+        """Return the triage filter key for a finding index."""
+        action = self.triage.get(index, TriageAction.NONE)
+        return action.value
+
+    def _get_finding_pr_status_key(self, index: int) -> str:
+        """Return the PR status filter key for a finding index."""
+        if index in self.posted_indices:
+            return "posted"
+        if index in self.staged_for_pr:
+            return "staged"
+        return "none"
+
     def _apply_filters(self) -> None:
-        self.visible_rows = [
-            r
-            for r in self.all_rows
-            if r.severity in self.filter_severity and r.agent_name in self.filter_agents
-        ]
+        filtered: list[FindingRow] = []
+        for r in self.all_rows:
+            if r.severity not in self.filter_severity:
+                continue
+            if r.agent_name not in self.filter_agents:
+                continue
+            if self._get_finding_triage_key(r.index) not in self.filter_triage:
+                continue
+            if self._get_finding_pr_status_key(r.index) not in self.filter_pr_status:
+                continue
+            if r.repo and r.repo not in self.filter_repos:
+                continue
+            if r.pr_number is not None and r.pr_number not in self.filter_pr_numbers:
+                continue
+            filtered.append(r)
+        self.visible_rows = filtered
         self._apply_sort()
         self.cursor = min(self.cursor, max(0, len(self.visible_rows) - 1))
 
@@ -495,6 +642,40 @@ class FindingsViewer:
     def dismiss_help(self) -> None:
         self.mode = _ViewerMode.NAVIGATE
 
+    # -- Column config --
+
+    def open_columns(self) -> None:
+        self.status_message = ""
+        self.mode = _ViewerMode.COLUMNS
+        self.column_cursor = 0
+        self._build_column_options()
+
+    def _build_column_options(self) -> None:
+        self.column_options = [
+            (label, key, key in self.visible_columns) for key, label, _width in _ALL_COLUMNS
+        ]
+
+    def column_move_up(self) -> None:
+        if self.column_cursor > 0:
+            self.column_cursor -= 1
+
+    def column_move_down(self) -> None:
+        if self.column_cursor < len(self.column_options) - 1:
+            self.column_cursor += 1
+
+    def column_toggle(self) -> None:
+        if not self.column_options:
+            return
+        label, key, checked = self.column_options[self.column_cursor]
+        self.column_options[self.column_cursor] = (label, key, not checked)
+
+    def column_confirm(self) -> None:
+        self.visible_columns = [key for _label, key, checked in self.column_options if checked]
+        self.mode = _ViewerMode.NAVIGATE
+
+    def cancel_columns(self) -> None:
+        self.mode = _ViewerMode.NAVIGATE
+
     # -- Rendering --
 
     def render(self) -> FormattedText:
@@ -502,6 +683,8 @@ class FindingsViewer:
             return self._render_help()
         if self.mode == _ViewerMode.FILTER:
             return self._render_filter()
+        if self.mode == _ViewerMode.COLUMNS:
+            return self._render_columns()
         return self._render_navigate()
 
     def _pr_status_label(self, index: int) -> tuple[str, str]:
@@ -520,6 +703,58 @@ class FindingsViewer:
         if action == TriageAction.IGNORED:
             return (theme.muted, "[IGN]")
         return ("", "")
+
+    def _render_cell(
+        self,
+        row: FindingRow,
+        col_key: str,
+        width: int,
+        base_style: str,
+        triage_action: TriageAction,
+    ) -> tuple[str, str]:
+        """Render a single table cell, returning (style, text)."""
+        if col_key == "severity":
+            label = _format_severity(row.severity.value)
+            style = _SEVERITY_STYLES.get(row.severity.value, "")
+            if triage_action != TriageAction.NONE:
+                style = base_style
+            return (style, f"{label:<{width}}")
+
+        if col_key == "agent_name":
+            return (base_style, f"{row.agent_name:<{width}}")
+
+        if col_key == "file_line":
+            loc = _format_location(row.file_path, row.line_number)
+            return (base_style, f"{loc:<{width}}")
+
+        if col_key == "title":
+            title = row.title[: width - 1]
+            return (base_style, f"{title:<{width}}")
+
+        if col_key == "triage":
+            tri_style, tri_label = self._triage_label(row.index)
+            return (tri_style, f"{tri_label:<{width}}")
+
+        if col_key == "pr_status":
+            pr_style, pr_label = self._pr_status_label(row.index)
+            return (pr_style, f"{pr_label:<{width}}")
+
+        if col_key == "repo":
+            repo = row.repo or ""
+            return (base_style, f"{repo:<{width}}")
+
+        if col_key == "pr_number":
+            pr_str = f"#{row.pr_number}" if row.pr_number is not None else ""
+            return (base_style, f"{pr_str:<{width}}")
+
+        if col_key == "confidence":
+            return (base_style, f"{row.confidence.value:<{width}}")
+
+        if col_key == "category":
+            cat = row.category[: width - 1]
+            return (base_style, f"{cat:<{width}}")
+
+        return (base_style, f"{'':<{width}}")
 
     def _render_navigate(self) -> FormattedText:
         lines: list[tuple[str, str]] = []
@@ -562,15 +797,18 @@ class FindingsViewer:
         visible_start = max(0, self.cursor - viewport_size // 2)
         visible_end = min(len(self.visible_rows), visible_start + viewport_size)
 
+        # Build column metadata for visible columns
+        col_meta = [
+            (key, label, width)
+            for key, label, width in _ALL_COLUMNS
+            if key in self.visible_columns
+        ]
+
         # Table header
-        lines.append(
-            (
-                "bold " + theme.muted,
-                "   Sev  Agent        File:Line"
-                "                      Title                Triage  PR\n",
-            )
-        )
-        lines.append((theme.muted, "   " + "-" * 90 + "\n"))
+        header = "   " + "".join(f"{label:<{width}}" for _, label, width in col_meta)
+        lines.append(("bold " + theme.muted, header + "\n"))
+        total_width = sum(w for _, _, w in col_meta) + 3
+        lines.append((theme.muted, "   " + "-" * total_width + "\n"))
 
         # Table rows
         for i in range(visible_start, visible_end):
@@ -594,31 +832,16 @@ class FindingsViewer:
             else:
                 base_style = ""
 
-            # Severity
-            sev_label = _format_severity(row.severity.value)
-            sev_style = _SEVERITY_STYLES.get(row.severity.value, "")
-            if triage_action != TriageAction.NONE:
-                sev_style = base_style
-            lines.append((sev_style, f"{sev_label} "))
-
-            # Agent
-            lines.append((base_style, f"{row.agent_name:<12} "))
-
-            # Location
-            loc = _format_location(row.file_path, row.line_number)
-            lines.append((base_style, f"{loc:<26} "))
-
-            # Title (truncated)
-            title = row.title[:20]
-            lines.append((base_style, f"{title:<20} "))
-
-            # Triage column
-            tri_style, tri_label = self._triage_label(row.index)
-            lines.append((tri_style, f"{tri_label:<8}"))
-
-            # PR status column
-            pr_style, pr_label = self._pr_status_label(row.index)
-            lines.append((pr_style, pr_label))
+            # Render each visible column
+            for col_key, _label, width in col_meta:
+                cell_style, cell_text = self._render_cell(
+                    row,
+                    col_key,
+                    width,
+                    base_style,
+                    triage_action,
+                )
+                lines.append((cell_style, cell_text))
 
             lines.append(("", "\n"))
 
@@ -677,6 +900,8 @@ class FindingsViewer:
             ("", "ilter "),
             (theme.accent, "[s]"),
             ("", "ort "),
+            (theme.accent, "[c]"),
+            ("", "ols "),
             (theme.accent, "[m]"),
             ("", "ark FP "),
             (theme.accent, "[i]"),
@@ -752,6 +977,7 @@ class FindingsViewer:
                 [
                     ("f", "Open filter modal"),
                     ("s", "Cycle sort column"),
+                    ("c", "Configure visible columns"),
                     ("?", "Show this help"),
                     ("q / Esc", "Quit to REPL"),
                 ],
@@ -797,6 +1023,34 @@ class FindingsViewer:
 
         return FormattedText(lines)
 
+    def _render_columns(self) -> FormattedText:
+        lines: list[tuple[str, str]] = []
+
+        lines.append(("bold", " Column Configuration\n"))
+        lines.append(
+            (theme.muted, " (Up/Down navigate, Enter/Space toggle, Tab confirm, Esc cancel)\n")
+        )
+        lines.append(("", "\n"))
+
+        for i, (label, _key, checked) in enumerate(self.column_options):
+            is_selected = i == self.column_cursor
+            checkbox = "[x]" if checked else "[ ]"
+
+            if is_selected:
+                lines.append((theme.highlight, " > "))
+            else:
+                lines.append(("", "   "))
+
+            style = "bold" if is_selected else ""
+            lines.append((style, f"{checkbox} {label}\n"))
+
+        lines.append(("", "\n"))
+        checked_count = sum(1 for _, _, c in self.column_options if c)
+        total = len(self.column_options)
+        lines.append((theme.muted, f" {checked_count}/{total} columns visible\n"))
+
+        return FormattedText(lines)
+
 
 # ---------------------------------------------------------------------------
 # Command entry point
@@ -823,6 +1077,8 @@ def run_findings_app(
             viewer.move_up()
         elif viewer.mode == _ViewerMode.FILTER:
             viewer.filter_move_up()
+        elif viewer.mode == _ViewerMode.COLUMNS:
+            viewer.column_move_up()
 
     @kb.add("down")
     def on_down(_event: KeyPressEvent) -> None:
@@ -830,6 +1086,8 @@ def run_findings_app(
             viewer.move_down()
         elif viewer.mode == _ViewerMode.FILTER:
             viewer.filter_move_down()
+        elif viewer.mode == _ViewerMode.COLUMNS:
+            viewer.column_move_down()
 
     @kb.add("enter")
     def on_enter(_event: KeyPressEvent) -> None:
@@ -837,6 +1095,8 @@ def run_findings_app(
             viewer.toggle_detail()
         elif viewer.mode == _ViewerMode.FILTER:
             viewer.filter_toggle()
+        elif viewer.mode == _ViewerMode.COLUMNS:
+            viewer.column_toggle()
 
     @kb.add("space")
     def on_space(_event: KeyPressEvent) -> None:
@@ -844,6 +1104,8 @@ def run_findings_app(
             viewer.toggle_detail()
         elif viewer.mode == _ViewerMode.FILTER:
             viewer.filter_toggle()
+        elif viewer.mode == _ViewerMode.COLUMNS:
+            viewer.column_toggle()
 
     @kb.add("f")
     def on_filter(_event: KeyPressEvent) -> None:
@@ -880,6 +1142,11 @@ def run_findings_app(
         if viewer.mode == _ViewerMode.NAVIGATE:
             viewer.delete_posted_comments()
 
+    @kb.add("c")
+    def on_columns(_event: KeyPressEvent) -> None:
+        if viewer.mode == _ViewerMode.NAVIGATE:
+            viewer.open_columns()
+
     @kb.add("?")
     def on_help(_event: KeyPressEvent) -> None:
         if viewer.mode == _ViewerMode.NAVIGATE:
@@ -889,6 +1156,8 @@ def run_findings_app(
     def on_tab(_event: KeyPressEvent) -> None:
         if viewer.mode == _ViewerMode.FILTER:
             viewer.filter_confirm()
+        elif viewer.mode == _ViewerMode.COLUMNS:
+            viewer.column_confirm()
 
     @kb.add("escape")
     def on_escape(event: KeyPressEvent) -> None:
@@ -896,6 +1165,8 @@ def run_findings_app(
             viewer.dismiss_help()
         elif viewer.mode == _ViewerMode.FILTER:
             viewer.cancel_filter()
+        elif viewer.mode == _ViewerMode.COLUMNS:
+            viewer.cancel_columns()
         else:
             event.app.exit()
 
