@@ -83,6 +83,7 @@ class TriageAction(StrEnum):
 class _ViewerMode(StrEnum):
     NAVIGATE = "navigate"
     FILTER = "filter"
+    HELP = "help"
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +177,7 @@ class FindingsViewer:
 
         # PR posting tracking
         self.comments_posted: int = 0
+        self.posted_indices: set[int] = set()
         self.last_review_id: int | None = None
         self.last_comment_ids: list[int] = []
         self.comments_deleted: int = 0
@@ -404,6 +406,7 @@ class FindingsViewer:
             posted_inline = result.get("comments_posted", len(inline_comments))
             total_posted = posted_inline + len(general_findings)
             self.comments_posted += total_posted
+            self.posted_indices.update(self.staged_for_pr)
             self.staged_for_pr.clear()
 
             # Track posted review for deletion
@@ -474,6 +477,7 @@ class FindingsViewer:
             self.comments_deleted += deleted
             self.last_comment_ids.clear()
             self.last_review_id = None
+            self.posted_indices.clear()
             self.status_message = (
                 f"Deleted {deleted} comment(s). Stage findings and press 'P' to re-post."
             )
@@ -483,52 +487,61 @@ class FindingsViewer:
             logger.exception("comment deletion failed")
             self.status_message = f"! Error deleting comments: {exc}"
 
+    # -- Help --
+
+    def show_help(self) -> None:
+        self.mode = _ViewerMode.HELP
+
+    def dismiss_help(self) -> None:
+        self.mode = _ViewerMode.NAVIGATE
+
     # -- Rendering --
 
     def render(self) -> FormattedText:
+        if self.mode == _ViewerMode.HELP:
+            return self._render_help()
         if self.mode == _ViewerMode.FILTER:
             return self._render_filter()
         return self._render_navigate()
 
+    def _pr_status_label(self, index: int) -> tuple[str, str]:
+        """Return (style, label) for a finding's PR posting status."""
+        if index in self.posted_indices:
+            return (theme.success, "[POSTED]")
+        if index in self.staged_for_pr:
+            return (theme.accent, "[STAGED]")
+        return ("", "")
+
+    def _triage_label(self, index: int) -> tuple[str, str]:
+        """Return (style, label) for a finding's triage status."""
+        action = self.triage.get(index, TriageAction.NONE)
+        if action == TriageAction.FALSE_POSITIVE:
+            return (theme.muted, "[FP]")
+        if action == TriageAction.IGNORED:
+            return (theme.muted, "[IGN]")
+        return ("", "")
+
     def _render_navigate(self) -> FormattedText:
         lines: list[tuple[str, str]] = []
 
-        # Header
-        lines.append(("bold", " Findings Navigator"))
-        lines.append(("", "  ("))
-        lines.append((theme.accent, "Up/Down"))
-        lines.append(("", " nav, "))
-        lines.append((theme.accent, "Enter"))
-        lines.append(("", " detail, "))
-        lines.append((theme.accent, "f"))
-        lines.append(("", "ilter, "))
-        lines.append((theme.accent, "s"))
-        lines.append(("", "ort, "))
-        lines.append((theme.accent, "m"))
-        lines.append(("", "ark FP, "))
-        lines.append((theme.accent, "i"))
-        lines.append(("", "gnore, "))
-        lines.append((theme.accent, "p"))
-        lines.append(("", "/"))
-        lines.append((theme.accent, "P"))
-        lines.append(("", " PR, "))
-        lines.append((theme.accent, "D"))
-        lines.append(("", "el PR, "))
-        lines.append((theme.accent, "q"))
-        lines.append(("", "uit)\n"))
+        # Title
+        lines.append(("bold", " Findings Navigator\n"))
 
         # Status bar
         total = len(self.visible_rows)
         all_total = len(self.all_rows)
         sort_col = self.sort_columns[self.sort_index]
         staged = len(self.staged_for_pr)
+        posted = len(self.posted_indices)
 
         status_parts: list[str] = [f" {total}/{all_total} findings"]
         if total < all_total:
             status_parts.append("(filtered)")
         status_parts.append(f"| sort: {sort_col}")
         if staged:
-            status_parts.append(f"| {staged} staged for PR")
+            status_parts.append(f"| {staged} staged")
+        if posted:
+            status_parts.append(f"| {posted} posted")
         lines.append((theme.muted, " ".join(status_parts) + "\n"))
 
         # Status message
@@ -540,24 +553,30 @@ class FindingsViewer:
 
         if not self.visible_rows:
             lines.append((theme.muted, "  No findings match current filters.\n"))
+            lines.extend(self._render_footer())
             return FormattedText(lines)
 
         # Determine viewport
         detail_lines = 12 if self.is_detail_open else 0
-        viewport_size = max(10, 30 - detail_lines)
+        viewport_size = max(10, 28 - detail_lines)
         visible_start = max(0, self.cursor - viewport_size // 2)
         visible_end = min(len(self.visible_rows), visible_start + viewport_size)
 
         # Table header
-        lines.append(("bold dim", "   Sev  Agent        File:Line                      Title\n"))
-        lines.append((theme.muted, "   " + "-" * 75 + "\n"))
+        lines.append(
+            (
+                "bold " + theme.muted,
+                "   Sev  Agent        File:Line"
+                "                      Title                Triage  PR\n",
+            )
+        )
+        lines.append((theme.muted, "   " + "-" * 90 + "\n"))
 
         # Table rows
         for i in range(visible_start, visible_end):
             row = self.visible_rows[i]
             is_selected = i == self.cursor
             triage_action = self.triage.get(row.index, TriageAction.NONE)
-            is_staged = row.index in self.staged_for_pr
 
             # Row prefix
             if is_selected:
@@ -587,26 +606,26 @@ class FindingsViewer:
 
             # Location
             loc = _format_location(row.file_path, row.line_number)
-            lines.append((base_style, f"{loc:<30} "))
+            lines.append((base_style, f"{loc:<26} "))
 
             # Title (truncated)
-            title = row.title[:40]
-            lines.append((base_style, title))
+            title = row.title[:20]
+            lines.append((base_style, f"{title:<20} "))
 
-            # Triage / staged indicator
-            if triage_action == TriageAction.FALSE_POSITIVE:
-                lines.append((theme.muted, " [FP]"))
-            elif triage_action == TriageAction.IGNORED:
-                lines.append((theme.muted, " [IGN]"))
-            elif is_staged:
-                lines.append((theme.accent, " [PR]"))
+            # Triage column
+            tri_style, tri_label = self._triage_label(row.index)
+            lines.append((tri_style, f"{tri_label:<8}"))
+
+            # PR status column
+            pr_style, pr_label = self._pr_status_label(row.index)
+            lines.append((pr_style, pr_label))
 
             lines.append(("", "\n"))
 
         # Detail panel
         if self.is_detail_open and self.visible_rows:
             lines.append(("", "\n"))
-            lines.append((theme.muted, "   " + "=" * 75 + "\n"))
+            lines.append((theme.muted, "   " + "=" * 90 + "\n"))
             row = self.visible_rows[self.cursor]
 
             lines.append(("bold", f"   {row.title}\n"))
@@ -637,6 +656,116 @@ class FindingsViewer:
                 lines.append((theme.muted, "   Suggestion:\n"))
                 for sug_line in row.suggestion.split("\n"):
                     lines.append((theme.success, f"     {sug_line}\n"))
+
+        # Footer
+        lines.extend(self._render_footer())
+
+        return FormattedText(lines)
+
+    def _render_footer(self) -> list[tuple[str, str]]:
+        """Render the persistent key hints footer bar."""
+        lines: list[tuple[str, str]] = []
+        lines.append(("", "\n"))
+        lines.append((theme.muted, " " + "-" * 90 + "\n"))
+
+        staged = len(self.staged_for_pr)
+        posted = len(self.posted_indices)
+
+        # Key hints -- highlight actionable keys
+        hints: list[tuple[str, str]] = [
+            (theme.accent, " [f]"),
+            ("", "ilter "),
+            (theme.accent, "[s]"),
+            ("", "ort "),
+            (theme.accent, "[m]"),
+            ("", "ark FP "),
+            (theme.accent, "[i]"),
+            ("", "gnore "),
+            (theme.accent, "[p]"),
+            ("", "stage "),
+        ]
+
+        # Highlight P when items are staged
+        p_style = "bold " + theme.accent if staged else theme.accent
+        hints.extend(
+            [
+                (p_style, "[P]"),
+                ("", "ost "),
+            ]
+        )
+
+        # Highlight D when items are posted
+        d_style = "bold " + theme.accent if posted else theme.muted
+        hints.extend(
+            [
+                (d_style, "[D]"),
+                ("", "elete "),
+            ]
+        )
+
+        hints.extend(
+            [
+                (theme.accent, "[?]"),
+                ("", "help "),
+                (theme.accent, "[q]"),
+                ("", "uit"),
+            ]
+        )
+
+        lines.extend(hints)
+        lines.append(("", "\n"))
+
+        return lines
+
+    def _render_help(self) -> FormattedText:
+        """Render the help overlay with all keybindings."""
+        lines: list[tuple[str, str]] = []
+
+        lines.append(("bold", "\n  Findings Navigator -- Keyboard Reference\n"))
+        lines.append(("", "\n"))
+
+        sections: list[tuple[str, list[tuple[str, str]]]] = [
+            (
+                "Navigation",
+                [
+                    ("Up / Down", "Move between findings"),
+                    ("Enter / Space", "Toggle detail panel"),
+                ],
+            ),
+            (
+                "Triage",
+                [
+                    ("m", "Mark / unmark as false positive"),
+                    ("i", "Ignore / unignore finding"),
+                ],
+            ),
+            (
+                "PR Posting",
+                [
+                    ("p", "Stage / unstage finding for PR"),
+                    ("P", "Post all staged findings to PR"),
+                    ("D", "Delete previously posted comments"),
+                ],
+            ),
+            (
+                "View",
+                [
+                    ("f", "Open filter modal"),
+                    ("s", "Cycle sort column"),
+                    ("?", "Show this help"),
+                    ("q / Esc", "Quit to REPL"),
+                ],
+            ),
+        ]
+
+        for section_title, bindings in sections:
+            lines.append(("bold", f"  {section_title}\n"))
+            for key, desc in bindings:
+                lines.append((theme.accent, f"    {key:<16}"))
+                lines.append(("", f"{desc}\n"))
+            lines.append(("", "\n"))
+
+        lines.append((theme.muted, "  Press any key to dismiss.\n"))
 
         return FormattedText(lines)
 
@@ -751,6 +880,11 @@ def run_findings_app(
         if viewer.mode == _ViewerMode.NAVIGATE:
             viewer.delete_posted_comments()
 
+    @kb.add("?")
+    def on_help(_event: KeyPressEvent) -> None:
+        if viewer.mode == _ViewerMode.NAVIGATE:
+            viewer.show_help()
+
     @kb.add("tab")
     def on_tab(_event: KeyPressEvent) -> None:
         if viewer.mode == _ViewerMode.FILTER:
@@ -758,15 +892,24 @@ def run_findings_app(
 
     @kb.add("escape")
     def on_escape(event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.FILTER:
+        if viewer.mode == _ViewerMode.HELP:
+            viewer.dismiss_help()
+        elif viewer.mode == _ViewerMode.FILTER:
             viewer.cancel_filter()
         else:
             event.app.exit()
 
     @kb.add("q")
     def on_quit(event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
+        if viewer.mode == _ViewerMode.HELP:
+            viewer.dismiss_help()
+        elif viewer.mode == _ViewerMode.NAVIGATE:
             event.app.exit()
+
+    @kb.add("<any>")
+    def on_any(_event: KeyPressEvent) -> None:
+        if viewer.mode == _ViewerMode.HELP:
+            viewer.dismiss_help()
 
     control = FormattedTextControl(viewer.render)
     window = Window(content=control, wrap_lines=True)

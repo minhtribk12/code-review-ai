@@ -406,6 +406,29 @@ class TestPrPosting:
         assert viewer.last_review_id == 100
         assert viewer.last_comment_ids == [1001, 1002]
 
+    def test_posted_indices_tracked(self, viewer: FindingsViewer) -> None:
+        """Posted finding indices are recorded for status display."""
+        viewer.staged_for_pr = {0, 2}
+        with (
+            patch(
+                "code_review_agent.interactive.commands.findings_cmd"
+                ".submit_pr_review_with_comments"
+            ) as mock_submit,
+            patch(
+                "code_review_agent.interactive.commands.findings_cmd.get_review_comments",
+                return_value=[{"id": 1001}],
+            ),
+        ):
+            mock_submit.return_value = {
+                "id": 100,
+                "state": "COMMENTED",
+                "html_url": "",
+                "comments_posted": 2,
+            }
+            viewer.submit_to_pr()
+
+        assert viewer.posted_indices == {0, 2}
+
     def test_blocks_double_posting(self, viewer: FindingsViewer) -> None:
         """Cannot re-post if comments already exist -- must delete first."""
         viewer.last_comment_ids = [1001, 1002]
@@ -413,9 +436,10 @@ class TestPrPosting:
         viewer.submit_to_pr()
         assert "delete first" in viewer.status_message.lower()
 
-    def test_delete_posted_comments(self, viewer: FindingsViewer) -> None:
+    def test_delete_clears_posted_indices(self, viewer: FindingsViewer) -> None:
         viewer.last_comment_ids = [1001, 1002]
         viewer.last_review_id = 100
+        viewer.posted_indices = {0, 2}
         with patch(
             "code_review_agent.interactive.commands.findings_cmd.delete_review_comments",
             return_value=2,
@@ -424,6 +448,7 @@ class TestPrPosting:
 
         assert viewer.last_comment_ids == []
         assert viewer.last_review_id is None
+        assert viewer.posted_indices == set()
         assert viewer.comments_deleted == 2
         assert "Deleted 2" in viewer.status_message
 
@@ -456,6 +481,55 @@ class TestRendering:
         result = viewer.render()
         text = "".join(t for _, t in result)
         assert "No findings" in text
+
+    def test_render_help_mode(self, viewer: FindingsViewer) -> None:
+        viewer.show_help()
+        result = viewer.render()
+        text = "".join(t for _, t in result)
+        assert "Keyboard Reference" in text
+        assert "Mark / unmark" in text
+        assert "Press any key" in text
+
+    def test_dismiss_help(self, viewer: FindingsViewer) -> None:
+        viewer.show_help()
+        assert viewer.mode == "help"
+        viewer.dismiss_help()
+        assert viewer.mode == "navigate"
+
+    def test_footer_contains_key_hints(self, viewer: FindingsViewer) -> None:
+        result = viewer.render()
+        text = "".join(t for _, t in result)
+        assert "[f]" in text
+        assert "[s]" in text
+        assert "[p]" in text
+        assert "[P]" in text
+        assert "[D]" in text
+        assert "[?]" in text
+        assert "[q]" in text
+
+    def test_triage_column_in_table(self, viewer: FindingsViewer) -> None:
+        viewer.mark_false_positive()  # marks index 0
+        result = viewer.render()
+        text = "".join(t for _, t in result)
+        assert "[FP]" in text
+
+    def test_pr_status_column_staged(self, viewer: FindingsViewer) -> None:
+        viewer.toggle_stage_for_pr()  # stages index 0
+        result = viewer.render()
+        text = "".join(t for _, t in result)
+        assert "[STAGED]" in text
+
+    def test_pr_status_column_posted(self, viewer: FindingsViewer) -> None:
+        viewer.posted_indices = {0}
+        result = viewer.render()
+        text = "".join(t for _, t in result)
+        assert "[POSTED]" in text
+
+    def test_table_header_has_triage_and_pr_columns(self, viewer: FindingsViewer) -> None:
+        result = viewer.render()
+        text = "".join(t for _, t in result)
+        assert "Triage" in text
+        assert "PR" in text
 
 
 # ---------------------------------------------------------------------------
