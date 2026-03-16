@@ -146,6 +146,40 @@ def _format_token_count(count: int) -> str:
     return str(count)
 
 
+def _print_welcome() -> None:
+    """Print a friendly welcome banner with getting-started guidance."""
+    console.print()
+    console.print(f"  [bold]Code Review Agent[/bold] v{_VERSION}")
+    console.print("  Multi-agent code review powered by LLM. I can review your code")
+    console.print("  for security, performance, style, and test coverage issues.")
+    console.print()
+    console.print("  [bold]Getting started:[/bold]")
+    console.print()
+    console.print(
+        "    [bold cyan]review --diff <file>[/bold cyan]       Review a local diff or patch file"
+    )
+    console.print(
+        "    [bold cyan]repo select <owner/repo>[/bold cyan]  Set the active GitHub repository"
+    )
+    console.print("    [bold cyan]pr list[/bold cyan]                  List open pull requests")
+    console.print(
+        "    [bold cyan]pr review <number>[/bold cyan]"
+        "        Review a PR (fetches diff from GitHub)"
+    )
+    console.print(
+        "    [bold cyan]findings[/bold cyan]                 Browse, triage, and post findings"
+    )
+    console.print(
+        "    [bold cyan]config edit[/bold cyan]              Open the interactive config editor"
+    )
+    console.print(
+        "    [bold cyan]help[/bold cyan]                     Show all available commands"
+    )
+    console.print()
+    console.print("  [dim]Tab for autocomplete | Ctrl+D to exit[/dim]")
+    console.print()
+
+
 def run_repl(settings: Settings) -> None:
     """Launch the interactive REPL loop."""
     session = SessionState(settings=settings)
@@ -164,10 +198,7 @@ def run_repl(settings: Settings) -> None:
         vi_mode=settings.interactive_vi_mode,
     )
 
-    console.print(f"\n  [bold]code-review-agent[/bold] v{_VERSION}")
-    console.print(
-        "  Type [bold cyan]help[/bold cyan] for commands, Tab for autocomplete, Ctrl+D to exit.\n"
-    )
+    _print_welcome()
 
     while True:
         try:
