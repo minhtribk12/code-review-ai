@@ -233,6 +233,24 @@ def interactive() -> None:
     run_repl(settings=settings)
 
 
+@app.command()
+def tui() -> None:
+    """Launch tabbed TUI mode with Textual interface."""
+    from code_review_agent.interactive.session import SessionState
+    from code_review_agent.interactive.tui_app import run_tui
+
+    try:
+        settings = _load_settings()
+    except SystemExit:
+        raise
+    except Exception as exc:
+        typer.echo(f"Error loading settings: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    session = SessionState(settings=settings)
+    run_tui(session=session)
+
+
 def _launch_findings_navigator(
     *,
     report: object,

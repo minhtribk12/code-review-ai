@@ -20,6 +20,7 @@ dependencies = [
     "structlog",
     "tenacity>=9.1.4",
     "prompt-toolkit>=3.0",
+    "textual>=0.50",
 ]
 
 [project.scripts]
@@ -71,6 +72,17 @@ ignore = ["S101"]
 
 [tool.mypy]
 strict = true
+
+[[tool.mypy.overrides]]
+module = "textual.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "code_review_agent.interactive.tui_app",
+    "code_review_agent.interactive.tabs.*",
+]
+disallow_subclassing_any = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
