@@ -108,6 +108,21 @@ def show_commit(ref: str) -> str:
     return _run("show", ref).stdout
 
 
+def show_commit_oneline(ref: str) -> str:
+    """Return compact one-line commit info: hash subject | date | author."""
+    return _run(
+        "log",
+        "-1",
+        "--format=%h %s | %cr | %an",
+        ref,
+    ).stdout.strip()
+
+
+def checkout_ref(ref: str) -> str:
+    """Checkout a commit/branch ref. May detach HEAD."""
+    return _run("checkout", ref).stdout
+
+
 def list_branches(*, remote: bool = False) -> str:
     """Return branch list."""
     args = ["branch"]

@@ -80,11 +80,9 @@ def cmd_log(args: list[str], session: SessionState) -> None:
             i += 1
 
     if is_graph:
-        raw = git_ops.log_graph(count=count, branches=branches or None)
-        if not raw.strip():
-            console.print("[dim]No commits.[/dim]")
-            return
-        _render_graph_log(raw, count)
+        from code_review_agent.interactive.commands.graph_nav import run_graph_app
+
+        run_graph_app(count=count, branches=branches or None)
     else:
         branch = branches[0] if branches else None
         output = git_ops.log_oneline(count=count, branch=branch)
