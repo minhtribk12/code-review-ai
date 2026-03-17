@@ -68,6 +68,8 @@ class LLMClient:
     ) -> None:
         self._model = settings.llm_model
         self._temperature = settings.llm_temperature
+        self._top_p = settings.llm_top_p
+        self._max_tokens = settings.llm_max_tokens
         self._rate_limiter = rate_limiter or create_rate_limiter(settings)
         self._client = openai.OpenAI(
             api_key=settings.llm_api_key.get_secret_value(),
@@ -192,6 +194,8 @@ class LLMClient:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=self._temperature,
+                top_p=self._top_p,
+                max_tokens=self._max_tokens,
             )
         except openai.RateLimitError as err:
             # Adapt rate limiter from provider feedback before re-raising

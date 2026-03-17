@@ -178,6 +178,8 @@ class TestLLMClientComplete:
             client = LLMClient.__new__(LLMClient)
             client._model = "test-model"
             client._temperature = 0.1
+            client._top_p = 0.95
+            client._max_tokens = 4096
             client._client = MagicMock()
             client._rate_limiter = NoOpRateLimiter()
             client._usage_lock = threading.Lock()
