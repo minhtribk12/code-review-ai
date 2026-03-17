@@ -22,7 +22,7 @@ COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
     "Git Read": [
         ("status", "Show git status (branch, changed files)"),
         ("diff [staged|file|ref..ref]", "Show git diff"),
-        ("log [-n N] [branch]", "Show git log (compact)"),
+        ("log [-n N] [--graph] [branch...]", "Show git log (compact or graph)"),
         ("show <commit>", "Show commit details with diff"),
     ],
     "Git Write": [

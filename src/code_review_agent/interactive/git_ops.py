@@ -81,6 +81,28 @@ def log_oneline(*, count: int = 20, branch: str | None = None) -> str:
     return _run(*args).stdout
 
 
+def log_graph(
+    *,
+    count: int = 30,
+    branches: list[str] | None = None,
+) -> str:
+    """Return graph log with branch topology and commit metadata."""
+    args = [
+        "log",
+        "--graph",
+        "--oneline",
+        "--decorate",
+        f"-{count}",
+        "--color=never",
+        "--format=%h %d %s (%cr, %an)",
+    ]
+    if branches:
+        args.extend(branches)
+    else:
+        args.append("--all")
+    return _run(*args).stdout
+
+
 def show_commit(ref: str) -> str:
     """Return full commit details with diff."""
     return _run("show", ref).stdout

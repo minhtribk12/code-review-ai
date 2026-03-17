@@ -15,6 +15,7 @@ def build_static_completer() -> NestedCompleter:
             },
             "log": {
                 "-n": None,
+                "--graph": None,
             },
             "show": None,
             "branch": {
