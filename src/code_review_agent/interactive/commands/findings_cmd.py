@@ -1,138 +1,56 @@
-"""Interactive findings navigator with triage actions and PR posting.
+"""Findings navigator entry point.
 
-Full-screen TUI launched via the ``findings`` REPL command. Users can
-browse, filter, sort, triage findings, and post them as inline PR
-review comments.
+Thin wrapper that wires together the findings/ package and launches
+the full-screen TUI.
 """
 
 from __future__ import annotations
 
-import shutil
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-import httpx
-import structlog
 from prompt_toolkit import Application
-from prompt_toolkit.formatted_text import FormattedText
-from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
-from prompt_toolkit.layout.containers import HSplit, Window
+from prompt_toolkit.layout.containers import (
+    ConditionalContainer,
+    Float,
+    FloatContainer,
+    HSplit,
+    Window,
+)
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.layout import Layout
-from pydantic import BaseModel
 from rich.console import Console
 
-from code_review_agent.github_client import (
-    GitHubAuthError,
-    delete_review_comments,
-    get_review_comments,
-    parse_pr_reference,
-    submit_pr_review_with_comments,
+from code_review_agent.interactive.commands.findings.keybindings import (
+    build_key_bindings,
 )
-from code_review_agent.models import (
-    Confidence,
-    ReviewReport,
-    Severity,
+from code_review_agent.interactive.commands.findings.models import (
+    FindingRow,
+    TriageAction,
+    ViewerMode,
 )
-from code_review_agent.theme import SEVERITY_STYLES as _SEVERITY_STYLES
+from code_review_agent.interactive.commands.findings.renderer import (
+    render_confirm,
+    render_detail,
+    render_filter,
+    render_footer,
+    render_header,
+    render_help,
+    render_table,
+)
+from code_review_agent.interactive.commands.findings.state import FindingsViewer
+from code_review_agent.models import Confidence, ReviewReport, Severity
 from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
     from code_review_agent.storage import ReviewStorage
 
-logger = structlog.get_logger(__name__)
-
-# Severity sort order: critical first
-_SEVERITY_ORDER: list[Severity] = [
-    Severity.CRITICAL,
-    Severity.HIGH,
-    Severity.MEDIUM,
-    Severity.LOW,
-]
-
-
-# ---------------------------------------------------------------------------
-# Data models
-# ---------------------------------------------------------------------------
-
-
-class FindingRow(BaseModel):
-    """Finding loaded from the database for display in the navigator."""
-
-    model_config = {"frozen": True}
-
-    finding_db_id: int | None = None
-    review_id: int | None = None
-    index: int
-    severity: Severity
-    agent_name: str
-    category: str
-    title: str
-    description: str
-    file_path: str | None = None
-    line_number: int | None = None
-    suggestion: str | None = None
-    confidence: Confidence = Confidence.MEDIUM
-    repo: str | None = None
-    pr_number: int | None = None
-    triage_action: str = "none"
-    is_posted: bool = False
-
-
-class TriageAction(StrEnum):
-    """Triage annotation for a finding, persisted to SQLite."""
-
-    NONE = "none"
-    FALSE_POSITIVE = "false_positive"
-    IGNORED = "ignored"
-    SOLVED = "solved"
-
-
-class _ViewerMode(StrEnum):
-    NAVIGATE = "navigate"
-    FILTER = "filter"
-    COLUMNS = "columns"
-    HELP = "help"
-
-
-# Column definitions with proportional weights
-_COLUMN_DEFS: list[tuple[str, str, float, int]] = [
-    # (key, label, weight, min_width)
-    ("severity", "Sev", 0.05, 5),
-    ("agent_name", "Agent", 0.10, 6),
-    ("file_line", "File:Line", 0.22, 10),
-    ("title", "Title", 0.20, 8),
-    ("triage", "Status", 0.07, 6),
-    ("pr_status", "PR", 0.06, 4),
-    ("repo", "Repo", 0.12, 6),
-    ("pr_number", "PR#", 0.04, 4),
-    ("confidence", "Conf", 0.06, 4),
-    ("category", "Category", 0.08, 6),
-]
-
-# Legacy compat: used by column config modal
-_ALL_COLUMNS: list[tuple[str, str, int]] = [
-    (key, label, min_w) for key, label, _w, min_w in _COLUMN_DEFS
-]
-
-_DEFAULT_VISIBLE: list[str] = [
-    "severity",
-    "agent_name",
-    "file_line",
-    "title",
-    "triage",
-    "pr_status",
-]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _flatten_findings(report: ReviewReport) -> list[FindingRow]:
     """Extract all findings from a report into a flat list of FindingRow."""
+    from code_review_agent.github_client import parse_pr_reference
+
     repo_name: str | None = None
     pr_num: int | None = None
     if report.pr_url:
@@ -184,1162 +102,11 @@ def _rows_from_db(db_rows: list[dict[str, Any]]) -> list[FindingRow]:
             confidence=Confidence(row.get("confidence", "medium")),
             repo=row.get("repo"),
             pr_number=row.get("pr_number"),
-            triage_action=row.get("triage_action", "none"),
+            triage_action=row.get("triage_action", "open"),
             is_posted=bool(row.get("is_posted", 0)),
         )
         for row in db_rows
     ]
-
-
-def _format_severity(sev: str) -> str:
-    """Format severity as a fixed-width uppercase label."""
-    return sev.upper()[:4].ljust(4)
-
-
-def _truncate(text: str, width: int) -> str:
-    """Truncate text to width, adding ... if needed."""
-    if len(text) <= width:
-        return text
-    if width <= 3:
-        return text[:width]
-    return text[: width - 3] + "..."
-
-
-def _format_location(file_path: str | None, line_number: int | None, width: int = 30) -> str:
-    """Format file:line, truncating from the left if too long."""
-    if file_path is None:
-        return ""
-    loc = file_path
-    if line_number is not None:
-        loc = f"{file_path}:{line_number}"
-    if len(loc) > width:
-        loc = "..." + loc[-(width - 3) :]
-    return loc
-
-
-# ---------------------------------------------------------------------------
-# FindingsViewer state machine
-# ---------------------------------------------------------------------------
-
-
-class FindingsViewer:
-    """State machine driving the findings navigator TUI.
-
-    Accepts either pre-built rows (from DB) or a ReviewReport (legacy).
-    All triage/posted state lives on FindingRow and is persisted to the
-    findings table in SQLite via the storage parameter.
-    """
-
-    def __init__(
-        self,
-        *,
-        rows: list[FindingRow] | None = None,
-        report: ReviewReport | None = None,
-        github_token: str | None = None,
-        storage: ReviewStorage | None = None,
-    ) -> None:
-        self.github_token = github_token
-        self._storage = storage
-
-        # Build rows from DB data or from report (legacy/CLI path)
-        if rows is not None:
-            self.all_rows = list(rows)
-            self.report = report
-        elif report is not None:
-            self.all_rows = _flatten_findings(report)
-            self.report = report
-        else:
-            self.all_rows = []
-            self.report = None
-
-        # Initialize triage/posted from row data (already loaded from DB)
-        self.triage: dict[int, TriageAction] = {}
-        self.posted_indices: set[int] = set()
-        for row in self.all_rows:
-            if row.triage_action != "none":
-                self.triage[row.index] = TriageAction(row.triage_action)
-            if row.is_posted:
-                self.posted_indices.add(row.index)
-
-        self.visible_rows: list[FindingRow] = list(self.all_rows)
-        self.cursor: int = 0
-        self.is_detail_open: bool = False
-        self.mode: _ViewerMode = _ViewerMode.NAVIGATE
-        self.status_message: str = ""
-        self.staged_for_pr: set[int] = set()
-
-        # Sort
-        self.sort_columns: list[str] = [
-            "severity",
-            "agent_name",
-            "file_path",
-            "title",
-        ]
-        self.sort_index: int = 0
-        self.is_sort_reversed: bool = False
-
-        # Filter -- hide solved findings by default
-        self.filter_severity: set[Severity] = set(Severity)
-        self.filter_agents: set[str] = {r.agent_name for r in self.all_rows}
-        self.filter_triage: set[str] = {"none", "false_positive", "ignored"}
-        self.filter_pr_status: set[str] = {"none", "staged", "posted"}
-        self.filter_repos: set[str] = {r.repo for r in self.all_rows if r.repo}
-        self.filter_pr_numbers: set[int] = {
-            r.pr_number for r in self.all_rows if r.pr_number is not None
-        }
-        self.filter_cursor: int = 0
-        self.filter_options: list[tuple[str, str, bool]] = []
-
-        # Column configuration -- load persisted config if available
-        self.visible_columns: list[str] = self._load_persisted_columns()
-        self.column_cursor: int = 0
-        self.column_options: list[tuple[str, str, bool]] = []
-
-        # Horizontal scroll
-        self.h_offset: int = 0
-
-        # PR posting tracking
-        self.comments_posted: int = 0
-        self.last_review_id: int | None = None
-        self.last_comment_ids: list[int] = []
-        self.comments_deleted: int = 0
-
-        # Apply initial filter (hides solved by default)
-        self._apply_filters()
-
-    def _load_persisted_columns(self) -> list[str]:
-        """Load column config from SQLite, falling back to defaults."""
-        if self._storage is None:
-            return list(_DEFAULT_VISIBLE)
-        try:
-            raw = self._storage.load_finding_setting("visible_columns")
-            if raw:
-                cols = raw.split(",")
-                valid = {key for key, _, _ in _ALL_COLUMNS}
-                return [c for c in cols if c in valid] or list(_DEFAULT_VISIBLE)
-        except Exception:
-            logger.debug("failed to load persisted columns", exc_info=True)
-        return list(_DEFAULT_VISIBLE)
-
-    def _persist_triage(self, row: FindingRow, action: TriageAction) -> None:
-        """Persist triage change to the findings table by PK."""
-        if self._storage is None or row.finding_db_id is None:
-            return
-        try:
-            self._storage.update_finding_triage(row.finding_db_id, action.value)
-        except Exception:
-            logger.debug("failed to persist triage", exc_info=True)
-
-    def _persist_posted(self, row: FindingRow, *, is_posted: bool) -> None:
-        """Persist posted status to the findings table by PK."""
-        if self._storage is None or row.finding_db_id is None:
-            return
-        try:
-            self._storage.update_finding_posted(row.finding_db_id, is_posted=is_posted)
-        except Exception:
-            logger.debug("failed to persist posted state", exc_info=True)
-
-    def _persist_columns(self) -> None:
-        """Persist current column config to SQLite."""
-        if self._storage is None:
-            return
-        try:
-            self._storage.save_finding_setting(
-                "visible_columns",
-                ",".join(self.visible_columns),
-            )
-        except Exception:
-            logger.debug("failed to persist columns", exc_info=True)
-
-    # -- Navigation --
-
-    def move_up(self) -> None:
-        self.status_message = ""
-        if self.cursor > 0:
-            self.cursor -= 1
-
-    def move_down(self) -> None:
-        self.status_message = ""
-        if self.cursor < len(self.visible_rows) - 1:
-            self.cursor += 1
-
-    def toggle_detail(self) -> None:
-        self.status_message = ""
-        self.is_detail_open = not self.is_detail_open
-
-    # -- Sort --
-
-    def cycle_sort(self) -> None:
-        self.status_message = ""
-        self.sort_index = (self.sort_index + 1) % len(self.sort_columns)
-        self._apply_sort()
-        self.cursor = 0
-
-    def _apply_sort(self) -> None:
-        col = self.sort_columns[self.sort_index]
-
-        def _sort_by_severity(r: FindingRow) -> int:
-            return _SEVERITY_ORDER.index(r.severity)
-
-        def _sort_by_agent(r: FindingRow) -> str:
-            return r.agent_name
-
-        def _sort_by_file(r: FindingRow) -> str:
-            return r.file_path or "zzz"
-
-        def _sort_by_title(r: FindingRow) -> str:
-            return r.title.lower()
-
-        sort_fns: dict[str, Any] = {
-            "severity": _sort_by_severity,
-            "agent_name": _sort_by_agent,
-            "file_path": _sort_by_file,
-            "title": _sort_by_title,
-        }
-        key_fn = sort_fns.get(col, _sort_by_severity)
-        self.visible_rows.sort(key=key_fn, reverse=self.is_sort_reversed)
-
-    # -- Filter --
-
-    def open_filter(self) -> None:
-        self.status_message = ""
-        self.mode = _ViewerMode.FILTER
-        self.filter_cursor = 0
-        self._build_filter_options()
-
-    def _build_filter_options(self) -> None:
-        self.filter_options = []
-
-        # Severity (always shown)
-        for sev in Severity:
-            self.filter_options.append(
-                (
-                    f"[Severity] {sev.value}",
-                    f"sev:{sev.value}",
-                    sev in self.filter_severity,
-                )
-            )
-
-        # Agent (always shown)
-        all_agents = sorted({r.agent_name for r in self.all_rows})
-        for agent in all_agents:
-            self.filter_options.append(
-                (
-                    f"[Agent] {agent}",
-                    f"agent:{agent}",
-                    agent in self.filter_agents,
-                )
-            )
-
-        # Triage (always shown so users can reveal solved findings)
-        for triage_label, triage_key in [
-            ("None (untriaged)", "triage:none"),
-            ("False Positive", "triage:false_positive"),
-            ("Ignored", "triage:ignored"),
-            ("Solved", "triage:solved"),
-        ]:
-            self.filter_options.append(
-                (f"[Triage] {triage_label}", triage_key, triage_key[7:] in self.filter_triage)
-            )
-
-        # PR Status (only if any findings are staged or posted)
-        if self.staged_for_pr or self.posted_indices:
-            for label, key in [
-                ("Not staged", "prstatus:none"),
-                ("Staged", "prstatus:staged"),
-                ("Posted", "prstatus:posted"),
-            ]:
-                self.filter_options.append(
-                    (f"[PR Status] {label}", key, key[9:] in self.filter_pr_status)
-                )
-
-        # Repo (only if multiple repos)
-        all_repos = sorted({r.repo for r in self.all_rows if r.repo})
-        if len(all_repos) > 1:
-            for repo in all_repos:
-                self.filter_options.append(
-                    (f"[Repo] {repo}", f"repo:{repo}", repo in self.filter_repos)
-                )
-
-        # PR number (only if multiple PRs)
-        all_prs = sorted({r.pr_number for r in self.all_rows if r.pr_number is not None})
-        if len(all_prs) > 1:
-            for pr_num in all_prs:
-                self.filter_options.append(
-                    (
-                        f"[PR] #{pr_num}",
-                        f"prnum:{pr_num}",
-                        pr_num in self.filter_pr_numbers,
-                    )
-                )
-
-    def filter_move_up(self) -> None:
-        if self.filter_cursor > 0:
-            self.filter_cursor -= 1
-
-    def filter_move_down(self) -> None:
-        if self.filter_cursor < len(self.filter_options) - 1:
-            self.filter_cursor += 1
-
-    def filter_toggle(self) -> None:
-        if not self.filter_options:
-            return
-        label, key, checked = self.filter_options[self.filter_cursor]
-        self.filter_options[self.filter_cursor] = (label, key, not checked)
-
-    def filter_confirm(self) -> None:
-        self.filter_severity = set()
-        self.filter_agents = set()
-        self.filter_triage = set()
-        self.filter_pr_status = set()
-        self.filter_repos = set()
-        self.filter_pr_numbers = set()
-        for _label, key, checked in self.filter_options:
-            if not checked:
-                continue
-            if key.startswith("sev:"):
-                self.filter_severity.add(Severity(key[4:]))
-            elif key.startswith("agent:"):
-                self.filter_agents.add(key[6:])
-            elif key.startswith("triage:"):
-                self.filter_triage.add(key[7:])
-            elif key.startswith("prstatus:"):
-                self.filter_pr_status.add(key[9:])
-            elif key.startswith("repo:"):
-                self.filter_repos.add(key[5:])
-            elif key.startswith("prnum:"):
-                self.filter_pr_numbers.add(int(key[6:]))
-
-        # If no triage/prstatus/repo/prnum options were in the filter,
-        # keep the defaults (show all)
-        if not any(k.startswith("triage:") for _, k, _ in self.filter_options):
-            self.filter_triage = {"none", "false_positive", "ignored", "solved"}
-        if not any(k.startswith("prstatus:") for _, k, _ in self.filter_options):
-            self.filter_pr_status = {"none", "staged", "posted"}
-        if not any(k.startswith("repo:") for _, k, _ in self.filter_options):
-            self.filter_repos = {r.repo for r in self.all_rows if r.repo}
-        if not any(k.startswith("prnum:") for _, k, _ in self.filter_options):
-            self.filter_pr_numbers = {
-                r.pr_number for r in self.all_rows if r.pr_number is not None
-            }
-
-        self._apply_filters()
-        self.mode = _ViewerMode.NAVIGATE
-
-    def cancel_filter(self) -> None:
-        self.mode = _ViewerMode.NAVIGATE
-
-    def _get_finding_triage_key(self, index: int) -> str:
-        """Return the triage filter key for a finding index."""
-        action = self.triage.get(index, TriageAction.NONE)
-        return action.value
-
-    def _get_finding_pr_status_key(self, index: int) -> str:
-        """Return the PR status filter key for a finding index."""
-        if index in self.posted_indices:
-            return "posted"
-        if index in self.staged_for_pr:
-            return "staged"
-        return "none"
-
-    def _apply_filters(self) -> None:
-        filtered: list[FindingRow] = []
-        for r in self.all_rows:
-            if r.severity not in self.filter_severity:
-                continue
-            if r.agent_name not in self.filter_agents:
-                continue
-            if self._get_finding_triage_key(r.index) not in self.filter_triage:
-                continue
-            if self._get_finding_pr_status_key(r.index) not in self.filter_pr_status:
-                continue
-            if r.repo and r.repo not in self.filter_repos:
-                continue
-            if r.pr_number is not None and r.pr_number not in self.filter_pr_numbers:
-                continue
-            filtered.append(r)
-        self.visible_rows = filtered
-        self._apply_sort()
-        self.cursor = min(self.cursor, max(0, len(self.visible_rows) - 1))
-
-    # -- Triage --
-
-    def _toggle_triage(self, action: TriageAction, label: str) -> None:
-        """Toggle a triage action on the current finding and persist it."""
-        if not self.visible_rows:
-            return
-        row = self.visible_rows[self.cursor]
-        current = self.triage.get(row.index, TriageAction.NONE)
-        if current == action:
-            self.triage.pop(row.index, None)
-            self._persist_triage(row, TriageAction.NONE)
-            self.status_message = f"Unmarked: {row.title}"
-        else:
-            self.triage[row.index] = action
-            self._persist_triage(row, action)
-            self.status_message = f"{label}: {row.title}"
-
-    def mark_false_positive(self) -> None:
-        self._toggle_triage(TriageAction.FALSE_POSITIVE, "Marked as false positive")
-
-    def mark_ignored(self) -> None:
-        self._toggle_triage(TriageAction.IGNORED, "Ignored")
-
-    def mark_solved(self) -> None:
-        self._toggle_triage(TriageAction.SOLVED, "Marked as solved")
-
-    # -- PR staging --
-
-    def toggle_stage_for_pr(self) -> None:
-        if not self.visible_rows:
-            return
-        row = self.visible_rows[self.cursor]
-        if row.index in self.staged_for_pr:
-            self.staged_for_pr.discard(row.index)
-            self.status_message = f"Unstaged: {row.title}"
-        else:
-            self.staged_for_pr.add(row.index)
-            self.status_message = f"Staged for PR: {row.title}"
-
-    def _resolve_pr_url(self) -> str | None:
-        """Get the PR URL for posting, from report or from staged findings."""
-        if self.report is not None and self.report.pr_url:
-            return self.report.pr_url
-        # In multi-repo mode, get PR info from the first staged finding
-        for row in self.all_rows:
-            if row.index in self.staged_for_pr and row.repo and row.pr_number:
-                return f"https://github.com/{row.repo}/pull/{row.pr_number}"
-        return None
-
-    def submit_to_pr(self) -> None:
-        """Post staged findings as inline PR review comments."""
-        pr_url = self._resolve_pr_url()
-        if not pr_url:
-            self.status_message = "! Not a PR review (local diff)"
-            return
-        if not self.github_token:
-            self.status_message = "! GITHUB_TOKEN required for PR posting"
-            return
-        if not self.staged_for_pr:
-            self.status_message = "! No findings staged (use 'p' to stage)"
-            return
-        if self.last_comment_ids:
-            self.status_message = (
-                "! Comments already posted. Press 'D' to delete first, then re-post."
-            )
-            return
-
-        try:
-            owner, repo, pr_number = parse_pr_reference(pr_url)
-        except ValueError as exc:
-            self.status_message = f"! Invalid PR URL: {exc}"
-            return
-
-        # Split staged findings: inline (have location) vs general (no location)
-        inline_comments: list[dict[str, Any]] = []
-        general_findings: list[str] = []
-        for row in self.all_rows:
-            if row.index not in self.staged_for_pr:
-                continue
-            comment_body = (
-                f"**{row.severity.value.upper()}** ({row.agent_name}): "
-                f"{row.title}\n\n{row.description}"
-            )
-            if row.suggestion:
-                comment_body += f"\n\n**Suggestion:** {row.suggestion}"
-
-            if row.file_path is not None and row.line_number is not None:
-                inline_comments.append(
-                    {
-                        "path": row.file_path,
-                        "line": row.line_number,
-                        "body": comment_body,
-                    }
-                )
-            else:
-                general_findings.append(comment_body)
-
-        # Build review body: include general findings without location
-        body_parts = ["Code review findings from automated analysis."]
-        if general_findings:
-            body_parts.append("")
-            body_parts.append("---")
-            body_parts.append("")
-            for gf in general_findings:
-                body_parts.append(gf)
-                body_parts.append("")
-        review_body = "\n".join(body_parts)
-
-        try:
-            result = submit_pr_review_with_comments(
-                owner=owner,
-                repo=repo,
-                token=self.github_token,
-                pr_number=pr_number,
-                body=review_body,
-                comments=inline_comments,
-            )
-            posted_inline = result.get("comments_posted", len(inline_comments))
-            total_posted = posted_inline + len(general_findings)
-            self.comments_posted += total_posted
-            for idx in self.staged_for_pr:
-                self.posted_indices.add(idx)
-                posted_row = next((r for r in self.all_rows if r.index == idx), None)
-                if posted_row is not None:
-                    self._persist_posted(posted_row, is_posted=True)
-            self.staged_for_pr.clear()
-
-            # Track posted review for deletion
-            review_id = result.get("id")
-            if review_id is not None:
-                self.last_review_id = review_id
-                self._fetch_comment_ids(owner, repo, pr_number, review_id)
-
-            self.status_message = (
-                f"Posted {total_posted} findings to PR #{pr_number}"
-                f" ({posted_inline} inline, {len(general_findings)} in body)"
-            )
-        except GitHubAuthError:
-            self.status_message = "! Permission denied (check token scope)"
-        except httpx.HTTPStatusError as exc:
-            self.status_message = f"! GitHub API error: {exc.response.status_code}"
-        except Exception as exc:
-            logger.exception("pr review posting failed")
-            self.status_message = f"! Error posting review: {exc}"
-
-    def _fetch_comment_ids(
-        self,
-        owner: str,
-        repo: str,
-        pr_number: int,
-        review_id: int,
-    ) -> None:
-        """Fetch and store comment IDs from the last posted review."""
-        if self.github_token is None:
-            return
-        try:
-            comments = get_review_comments(
-                owner=owner,
-                repo=repo,
-                token=self.github_token,
-                pr_number=pr_number,
-                review_id=review_id,
-            )
-            self.last_comment_ids = [c["id"] for c in comments if "id" in c]
-        except Exception:
-            logger.debug("could not fetch review comment IDs", exc_info=True)
-
-    def delete_posted_comments(self) -> None:
-        """Delete previously posted PR review comments."""
-        if not self.last_comment_ids:
-            self.status_message = "! No posted comments to delete"
-            return
-        pr_url = self._resolve_pr_url()
-        if not pr_url:
-            self.status_message = "! Not a PR review (local diff)"
-            return
-        if not self.github_token:
-            self.status_message = "! GITHUB_TOKEN required"
-            return
-
-        try:
-            owner, repo, _pr_number = parse_pr_reference(pr_url)
-        except ValueError as exc:
-            self.status_message = f"! Invalid PR URL: {exc}"
-            return
-
-        try:
-            deleted = delete_review_comments(
-                owner=owner,
-                repo=repo,
-                token=self.github_token,
-                comment_ids=self.last_comment_ids,
-            )
-            self.comments_deleted += deleted
-            self.last_comment_ids.clear()
-            self.last_review_id = None
-            for idx in list(self.posted_indices):
-                unpost_row = next((r for r in self.all_rows if r.index == idx), None)
-                if unpost_row is not None:
-                    self._persist_posted(unpost_row, is_posted=False)
-            self.posted_indices.clear()
-            self.status_message = (
-                f"Deleted {deleted} comment(s). Stage findings and press 'P' to re-post."
-            )
-        except GitHubAuthError:
-            self.status_message = "! Permission denied (check token scope)"
-        except Exception as exc:
-            logger.exception("comment deletion failed")
-            self.status_message = f"! Error deleting comments: {exc}"
-
-    # -- Help --
-
-    def show_help(self) -> None:
-        self.mode = _ViewerMode.HELP
-
-    def dismiss_help(self) -> None:
-        self.mode = _ViewerMode.NAVIGATE
-
-    # -- Column config --
-
-    def open_columns(self) -> None:
-        self.status_message = ""
-        self.mode = _ViewerMode.COLUMNS
-        self.column_cursor = 0
-        self._build_column_options()
-
-    def _build_column_options(self) -> None:
-        self.column_options = [
-            (label, key, key in self.visible_columns) for key, label, _width in _ALL_COLUMNS
-        ]
-
-    def column_move_up(self) -> None:
-        if self.column_cursor > 0:
-            self.column_cursor -= 1
-
-    def column_move_down(self) -> None:
-        if self.column_cursor < len(self.column_options) - 1:
-            self.column_cursor += 1
-
-    def column_toggle(self) -> None:
-        if not self.column_options:
-            return
-        label, key, checked = self.column_options[self.column_cursor]
-        self.column_options[self.column_cursor] = (label, key, not checked)
-
-    def column_confirm(self) -> None:
-        self.visible_columns = [key for _label, key, checked in self.column_options if checked]
-        self._persist_columns()
-        self.mode = _ViewerMode.NAVIGATE
-
-    def cancel_columns(self) -> None:
-        self.mode = _ViewerMode.NAVIGATE
-
-    # -- Rendering --
-
-    def render(self) -> FormattedText:
-        if self.mode == _ViewerMode.HELP:
-            return self._render_help()
-        if self.mode == _ViewerMode.FILTER:
-            return self._render_filter()
-        if self.mode == _ViewerMode.COLUMNS:
-            return self._render_columns()
-        return self._render_navigate()
-
-    def _pr_status_label(self, index: int) -> tuple[str, str]:
-        """Return (style, label) for a finding's PR posting status."""
-        if index in self.posted_indices:
-            return (theme.success, "[POSTED]")
-        if index in self.staged_for_pr:
-            return (theme.accent, "[STAGED]")
-        return ("", "")
-
-    def _triage_label(self, index: int) -> tuple[str, str]:
-        """Return (style, label) for a finding's triage + posted status."""
-        action = self.triage.get(index, TriageAction.NONE)
-        is_posted = index in self.posted_indices
-
-        parts: list[str] = []
-        if action == TriageAction.FALSE_POSITIVE:
-            parts.append("FP")
-        elif action == TriageAction.IGNORED:
-            parts.append("IGN")
-        elif action == TriageAction.SOLVED:
-            parts.append("DONE")
-        if is_posted:
-            parts.append("POST")
-
-        if not parts:
-            return ("", "")
-
-        label = "[" + "|".join(parts) + "]"
-        if action == TriageAction.SOLVED:
-            return (theme.success, label)
-        if is_posted:
-            return (theme.accent, label)
-        return (theme.muted, label)
-
-    def _render_cell(
-        self,
-        row: FindingRow,
-        col_key: str,
-        width: int,
-        base_style: str,
-        triage_action: TriageAction,
-    ) -> tuple[str, str]:
-        """Render a single table cell, returning (style, text)."""
-        if col_key == "severity":
-            label = _format_severity(row.severity.value)
-            style = _SEVERITY_STYLES.get(row.severity.value, "")
-            if triage_action != TriageAction.NONE:
-                style = base_style
-            return (style, f"{label:<{width}}")
-
-        if col_key == "agent_name":
-            return (base_style, f"{_truncate(row.agent_name, width):<{width}}")
-
-        if col_key == "file_line":
-            loc = _format_location(row.file_path, row.line_number, width)
-            return (base_style, f"{loc:<{width}}")
-
-        if col_key == "title":
-            return (base_style, f"{_truncate(row.title, width):<{width}}")
-
-        if col_key == "triage":
-            tri_style, tri_label = self._triage_label(row.index)
-            return (tri_style, f"{_truncate(tri_label, width):<{width}}")
-
-        if col_key == "pr_status":
-            pr_style, pr_label = self._pr_status_label(row.index)
-            return (pr_style, f"{_truncate(pr_label, width):<{width}}")
-
-        if col_key == "repo":
-            repo = row.repo or ""
-            return (base_style, f"{_truncate(repo, width):<{width}}")
-
-        if col_key == "pr_number":
-            pr_str = f"#{row.pr_number}" if row.pr_number is not None else ""
-            return (base_style, f"{pr_str:<{width}}")
-
-        if col_key == "confidence":
-            return (base_style, f"{row.confidence.value:<{width}}")
-
-        if col_key == "category":
-            return (base_style, f"{_truncate(row.category, width):<{width}}")
-
-        return (base_style, f"{'':<{width}}")
-
-    def _compute_column_widths(self, term_width: int) -> list[tuple[str, str, int]]:
-        """Compute proportional column widths based on terminal width.
-
-        Each column gets a share of the available width based on its weight,
-        clamped to its minimum. Remaining space is distributed to the widest
-        columns so the table fills the terminal exactly.
-        """
-        visible_defs = [
-            (key, label, weight, min_w)
-            for key, label, weight, min_w in _COLUMN_DEFS
-            if key in self.visible_columns
-        ]
-
-        if not visible_defs:
-            return []
-
-        prefix_width = 3  # " > " or "   "
-        available = term_width - prefix_width
-
-        # Calculate raw proportional widths
-        total_weight = sum(w for _, _, w, _ in visible_defs)
-        raw_widths: list[int] = []
-        for _, _, weight, min_w in visible_defs:
-            raw = max(min_w, int(available * weight / total_weight))
-            raw_widths.append(raw)
-
-        # Distribute remaining space to largest columns
-        used = sum(raw_widths)
-        remaining = available - used
-        if remaining > 0:
-            # Give extra space to columns with highest weight
-            sorted_indices = sorted(
-                range(len(visible_defs)),
-                key=lambda i: visible_defs[i][2],
-                reverse=True,
-            )
-            for i in sorted_indices:
-                if remaining <= 0:
-                    break
-                raw_widths[i] += 1
-                remaining -= 1
-
-        return [(key, label, raw_widths[i]) for i, (key, label, _, _) in enumerate(visible_defs)]
-
-    # -- Horizontal scrolling --
-
-    def scroll_left(self) -> None:
-        self.h_offset = max(0, self.h_offset - 4)
-
-    def scroll_right(self) -> None:
-        self.h_offset = min(self._max_h_offset(), self.h_offset + 4)
-
-    def _max_h_offset(self) -> int:
-        term_width = shutil.get_terminal_size((120, 40)).columns
-        col_meta = self._compute_column_widths(term_width)
-        total_col_width = sum(w for _, _, w in col_meta)
-        return max(0, total_col_width - (term_width - 3))
-
-    @staticmethod
-    def _slice_styled_line(
-        fragments: list[tuple[str, str]],
-        start: int,
-        length: int,
-    ) -> list[tuple[str, str]]:
-        """Slice styled text fragments to [start:start+length] char positions.
-
-        Walks through fragments, skipping characters before ``start``,
-        collecting characters until ``length`` is reached. Preserves
-        styles across fragment boundaries.
-        """
-        result: list[tuple[str, str]] = []
-        pos = 0
-        remaining = length
-
-        for style, text in fragments:
-            frag_len = len(text)
-
-            # Skip fragments entirely before the start
-            if pos + frag_len <= start:
-                pos += frag_len
-                continue
-
-            # Calculate the slice within this fragment
-            skip = max(0, start - pos)
-            take = min(frag_len - skip, remaining)
-
-            if take > 0:
-                result.append((style, text[skip : skip + take]))
-                remaining -= take
-
-            pos += frag_len
-            if remaining <= 0:
-                break
-
-        return result
-
-    def _render_navigate(self) -> FormattedText:
-        lines: list[tuple[str, str]] = []
-
-        # Title
-        lines.append(("bold", " Findings Navigator\n"))
-
-        # Status bar
-        total = len(self.visible_rows)
-        all_total = len(self.all_rows)
-        sort_col = self.sort_columns[self.sort_index]
-        staged = len(self.staged_for_pr)
-        posted = len(self.posted_indices)
-
-        status_parts: list[str] = [f" {total}/{all_total} findings"]
-        if total < all_total:
-            status_parts.append("(filtered)")
-        status_parts.append(f"| sort: {sort_col}")
-        if staged:
-            status_parts.append(f"| {staged} staged")
-        if posted:
-            status_parts.append(f"| {posted} posted")
-        lines.append((theme.muted, " ".join(status_parts) + "\n"))
-
-        # Status message
-        if self.status_message:
-            style = theme.error if self.status_message.startswith("!") else theme.success
-            lines.append((style, f" {self.status_message}\n"))
-
-        lines.append(("", "\n"))
-
-        if not self.visible_rows:
-            lines.append((theme.muted, "  No findings match current filters.\n"))
-            lines.extend(self._render_footer())
-            return FormattedText(lines)
-
-        # Determine viewport
-        detail_lines = 12 if self.is_detail_open else 0
-        viewport_size = max(10, 28 - detail_lines)
-        visible_start = max(0, self.cursor - viewport_size // 2)
-        visible_end = min(len(self.visible_rows), visible_start + viewport_size)
-
-        # Build column widths adapted to terminal size
-        term_width = shutil.get_terminal_size((120, 40)).columns
-        col_meta = self._compute_column_widths(term_width)
-
-        # Horizontal scroll state
-        total_col_width = sum(w for _, _, w in col_meta)
-        content_width = term_width - 3  # available for columns after prefix
-        is_scrollable = total_col_width > content_width
-        h = self.h_offset if is_scrollable else 0
-
-        # Table header
-        header_frags: list[tuple[str, str]] = [
-            ("bold " + theme.muted, f"{label:<{width}}") for _, label, width in col_meta
-        ]
-        if is_scrollable:
-            header_frags = self._slice_styled_line(header_frags, h, content_width)
-        scroll_hint = ""
-        if is_scrollable:
-            scroll_hint = " <" if h > 0 else "  "
-            scroll_hint += ">" if h < self._max_h_offset() else " "
-        lines.append(("", "  "))
-        lines.append((theme.muted, scroll_hint[:1] if scroll_hint else " "))
-        lines.extend(header_frags)
-        lines.append(("", "\n"))
-
-        sep_width = min(total_col_width, content_width)
-        lines.append(("", "   "))
-        lines.append((theme.muted, "-" * sep_width + "\n"))
-
-        # Table rows
-        for i in range(visible_start, visible_end):
-            row = self.visible_rows[i]
-            is_selected = i == self.cursor
-            triage_action = self.triage.get(row.index, TriageAction.NONE)
-
-            # Row prefix (fixed, never scrolls)
-            if is_selected:
-                lines.append((theme.highlight, " > "))
-            else:
-                lines.append(("", "   "))
-
-            # Determine base style for triaged rows
-            if triage_action == TriageAction.FALSE_POSITIVE:
-                base_style = "strike dim"
-            elif triage_action in (TriageAction.IGNORED, TriageAction.SOLVED):
-                base_style = "dim"
-            elif is_selected:
-                base_style = "bold"
-            else:
-                base_style = ""
-
-            # Build column fragments for this row
-            row_frags: list[tuple[str, str]] = []
-            for col_key, _label, width in col_meta:
-                cell_style, cell_text = self._render_cell(
-                    row,
-                    col_key,
-                    width,
-                    base_style,
-                    triage_action,
-                )
-                row_frags.append((cell_style, cell_text))
-
-            # Apply horizontal scroll
-            if is_scrollable:
-                row_frags = self._slice_styled_line(row_frags, h, content_width)
-            lines.extend(row_frags)
-            lines.append(("", "\n"))
-
-        # Detail panel
-        if self.is_detail_open and self.visible_rows:
-            lines.append(("", "\n"))
-            lines.append((theme.muted, "   " + "=" * 90 + "\n"))
-            row = self.visible_rows[self.cursor]
-
-            lines.append(("bold", f"   {row.title}\n"))
-            lines.append(("", "\n"))
-
-            lines.append((theme.muted, "   Agent: "))
-            lines.append(("", f"{row.agent_name}"))
-            lines.append((theme.muted, "  |  Severity: "))
-            sev_style = _SEVERITY_STYLES.get(row.severity.value, "")
-            lines.append((sev_style, row.severity.value.upper()))
-            lines.append((theme.muted, "  |  Confidence: "))
-            lines.append(("", f"{row.confidence.value}\n"))
-
-            if row.file_path:
-                loc = row.file_path
-                if row.line_number is not None:
-                    loc = f"{row.file_path}:{row.line_number}"
-                lines.append((theme.muted, "   File: "))
-                lines.append((theme.accent, f"{loc}\n"))
-
-            lines.append(("", "\n"))
-            lines.append((theme.muted, "   Description:\n"))
-            for desc_line in row.description.split("\n"):
-                lines.append(("", f"     {desc_line}\n"))
-
-            if row.suggestion:
-                lines.append(("", "\n"))
-                lines.append((theme.muted, "   Suggestion:\n"))
-                for sug_line in row.suggestion.split("\n"):
-                    lines.append((theme.success, f"     {sug_line}\n"))
-
-        # Footer
-        lines.extend(self._render_footer())
-
-        return FormattedText(lines)
-
-    def _render_footer(self) -> list[tuple[str, str]]:
-        """Render the persistent key hints footer bar."""
-        lines: list[tuple[str, str]] = []
-        lines.append(("", "\n"))
-        lines.append((theme.muted, " " + "-" * 90 + "\n"))
-
-        staged = len(self.staged_for_pr)
-        posted = len(self.posted_indices)
-
-        # Key hints -- highlight actionable keys
-        hints: list[tuple[str, str]] = [
-            (theme.accent, " [f]"),
-            ("", "ilter "),
-            (theme.accent, "[s]"),
-            ("", "ort "),
-            (theme.accent, "[c]"),
-            ("", "ols "),
-            (theme.accent, "[m]"),
-            ("", "ark FP "),
-            (theme.accent, "[i]"),
-            ("", "gnore "),
-            (theme.accent, "[x]"),
-            ("", "solved "),
-            (theme.accent, "[p]"),
-            ("", "stage "),
-        ]
-
-        # Highlight P when items are staged
-        p_style = "bold " + theme.accent if staged else theme.accent
-        hints.extend(
-            [
-                (p_style, "[P]"),
-                ("", "ost "),
-            ]
-        )
-
-        # Highlight D when items are posted
-        d_style = "bold " + theme.accent if posted else theme.muted
-        hints.extend(
-            [
-                (d_style, "[D]"),
-                ("", "elete "),
-            ]
-        )
-
-        hints.extend(
-            [
-                (theme.accent, "[?]"),
-                ("", "help "),
-                (theme.accent, "[q]"),
-                ("", "uit"),
-            ]
-        )
-
-        # Add scroll hint when table is horizontally scrollable
-        if self._max_h_offset() > 0:
-            hints.extend(
-                [
-                    ("", " "),
-                    (theme.muted, "["),
-                    (theme.accent, "<>"),
-                    (theme.muted, "]scroll"),
-                ]
-            )
-
-        lines.extend(hints)
-        lines.append(("", "\n"))
-
-        return lines
-
-    def _render_help(self) -> FormattedText:
-        """Render the help overlay with all keybindings."""
-        lines: list[tuple[str, str]] = []
-
-        lines.append(("bold", "\n  Findings Navigator -- Keyboard Reference\n"))
-        lines.append(("", "\n"))
-
-        sections: list[tuple[str, list[tuple[str, str]]]] = [
-            (
-                "Navigation",
-                [
-                    ("Up / Down", "Move between findings"),
-                    ("Left / Right", "Scroll table horizontally"),
-                    ("Enter / Space", "Toggle detail panel"),
-                ],
-            ),
-            (
-                "Triage",
-                [
-                    ("m", "Mark / unmark as false positive"),
-                    ("i", "Ignore / unignore finding"),
-                    ("x", "Mark / unmark as solved (hidden by default)"),
-                ],
-            ),
-            (
-                "PR Posting",
-                [
-                    ("p", "Stage / unstage finding for PR"),
-                    ("P", "Post all staged findings to PR"),
-                    ("D", "Delete previously posted comments"),
-                ],
-            ),
-            (
-                "View",
-                [
-                    ("f", "Open filter modal"),
-                    ("s", "Cycle sort column"),
-                    ("c", "Configure visible columns"),
-                    ("?", "Show this help"),
-                    ("q / Esc", "Quit to REPL"),
-                ],
-            ),
-        ]
-
-        for section_title, bindings in sections:
-            lines.append(("bold", f"  {section_title}\n"))
-            for key, desc in bindings:
-                lines.append((theme.accent, f"    {key:<16}"))
-                lines.append(("", f"{desc}\n"))
-            lines.append(("", "\n"))
-
-        lines.append((theme.muted, "  Press any key to dismiss.\n"))
-
-        return FormattedText(lines)
-
-    def _render_filter(self) -> FormattedText:
-        lines: list[tuple[str, str]] = []
-
-        lines.append(("bold", " Filter Findings\n"))
-        lines.append(
-            (theme.muted, " (Up/Down navigate, Enter/Space toggle, Tab confirm, Esc cancel)\n")
-        )
-        lines.append(("", "\n"))
-
-        for i, (label, _key, checked) in enumerate(self.filter_options):
-            is_selected = i == self.filter_cursor
-            checkbox = "[x]" if checked else "[ ]"
-
-            if is_selected:
-                lines.append((theme.highlight, " > "))
-            else:
-                lines.append(("", "   "))
-
-            style = "bold" if is_selected else ""
-            lines.append((style, f"{checkbox} {label}\n"))
-
-        lines.append(("", "\n"))
-        checked_count = sum(1 for _, _, c in self.filter_options if c)
-        total = len(self.filter_options)
-        lines.append((theme.muted, f" {checked_count}/{total} selected\n"))
-
-        return FormattedText(lines)
-
-    def _render_columns(self) -> FormattedText:
-        lines: list[tuple[str, str]] = []
-
-        lines.append(("bold", " Column Configuration\n"))
-        lines.append(
-            (theme.muted, " (Up/Down navigate, Enter/Space toggle, Tab confirm, Esc cancel)\n")
-        )
-        lines.append(("", "\n"))
-
-        for i, (label, _key, checked) in enumerate(self.column_options):
-            is_selected = i == self.column_cursor
-            checkbox = "[x]" if checked else "[ ]"
-
-            if is_selected:
-                lines.append((theme.highlight, " > "))
-            else:
-                lines.append(("", "   "))
-
-            style = "bold" if is_selected else ""
-            lines.append((style, f"{checkbox} {label}\n"))
-
-        lines.append(("", "\n"))
-        checked_count = sum(1 for _, _, c in self.column_options if c)
-        total = len(self.column_options)
-        lines.append((theme.muted, f" {checked_count}/{total} columns visible\n"))
-
-        return FormattedText(lines)
-
-
-# ---------------------------------------------------------------------------
-# Command entry point
-# ---------------------------------------------------------------------------
 
 
 def run_findings_app(
@@ -1349,10 +116,11 @@ def run_findings_app(
     github_token: str | None = None,
     storage: ReviewStorage | None = None,
 ) -> None:
-    """Launch the full-screen findings navigator.
+    """Launch the full-screen findings navigator."""
+    import shutil
 
-    Accepts either pre-built rows (from DB) or a ReviewReport (legacy).
-    """
+    from prompt_toolkit.filters import Condition
+
     viewer = FindingsViewer(
         rows=rows,
         report=report,
@@ -1360,137 +128,73 @@ def run_findings_app(
         storage=storage,
     )
 
-    kb = KeyBindings()
+    def get_term_width() -> int:
+        return shutil.get_terminal_size((120, 40)).columns
 
-    @kb.add("up")
-    def on_up(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.move_up()
-        elif viewer.mode == _ViewerMode.FILTER:
-            viewer.filter_move_up()
-        elif viewer.mode == _ViewerMode.COLUMNS:
-            viewer.column_move_up()
+    # Controls
+    header_control = FormattedTextControl(lambda: render_header(viewer))
+    table_control = FormattedTextControl(lambda: render_table(viewer, get_term_width()))
+    detail_control = FormattedTextControl(lambda: render_detail(viewer))
+    footer_control = FormattedTextControl(lambda: render_footer(viewer))
+    filter_control = FormattedTextControl(lambda: render_filter(viewer))
+    help_control = FormattedTextControl(lambda: render_help(viewer))
+    confirm_control = FormattedTextControl(lambda: render_confirm(viewer))
 
-    @kb.add("down")
-    def on_down(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.move_down()
-        elif viewer.mode == _ViewerMode.FILTER:
-            viewer.filter_move_down()
-        elif viewer.mode == _ViewerMode.COLUMNS:
-            viewer.column_move_down()
+    is_detail = Condition(
+        lambda: viewer.mode in (ViewerMode.DETAIL, ViewerMode.CONFIRM),
+    )
+    is_filter = Condition(lambda: viewer.mode == ViewerMode.FILTER)
+    is_help = Condition(lambda: viewer.mode == ViewerMode.HELP)
+    is_confirm = Condition(lambda: viewer.mode == ViewerMode.CONFIRM)
 
-    @kb.add("enter")
-    def on_enter(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.toggle_detail()
-        elif viewer.mode == _ViewerMode.FILTER:
-            viewer.filter_toggle()
-        elif viewer.mode == _ViewerMode.COLUMNS:
-            viewer.column_toggle()
+    body = FloatContainer(
+        content=HSplit(
+            [
+                Window(header_control, height=4, wrap_lines=True),
+                Window(table_control, wrap_lines=False),
+                ConditionalContainer(
+                    Window(
+                        detail_control,
+                        height=Dimension(min=8, max=20),
+                        wrap_lines=True,
+                    ),
+                    filter=is_detail,
+                ),
+                Window(footer_control, height=3, wrap_lines=True),
+            ]
+        ),
+        floats=[
+            Float(
+                ConditionalContainer(
+                    Window(filter_control, wrap_lines=True),
+                    filter=is_filter,
+                ),
+                top=3,
+                left=2,
+                right=2,
+                bottom=4,
+            ),
+            Float(
+                ConditionalContainer(
+                    Window(help_control, wrap_lines=True),
+                    filter=is_help,
+                ),
+                top=1,
+                left=1,
+                right=1,
+                bottom=1,
+            ),
+            Float(
+                ConditionalContainer(
+                    Window(confirm_control, height=7, width=50),
+                    filter=is_confirm,
+                ),
+            ),
+        ],
+    )
 
-    @kb.add("space")
-    def on_space(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.toggle_detail()
-        elif viewer.mode == _ViewerMode.FILTER:
-            viewer.filter_toggle()
-        elif viewer.mode == _ViewerMode.COLUMNS:
-            viewer.column_toggle()
-
-    @kb.add("f")
-    def on_filter(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.open_filter()
-
-    @kb.add("s")
-    def on_sort(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.cycle_sort()
-
-    @kb.add("m")
-    def on_mark_fp(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.mark_false_positive()
-
-    @kb.add("i")
-    def on_ignore(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.mark_ignored()
-
-    @kb.add("x")
-    def on_solved(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.mark_solved()
-
-    @kb.add("p")
-    def on_stage_pr(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.toggle_stage_for_pr()
-
-    @kb.add("P")  # Shift+P
-    def on_submit_pr(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.submit_to_pr()
-
-    @kb.add("D")  # Shift+D
-    def on_delete_comments(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.delete_posted_comments()
-
-    @kb.add("c")
-    def on_columns(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.open_columns()
-
-    @kb.add("left")
-    def on_scroll_left(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.scroll_left()
-
-    @kb.add("right")
-    def on_scroll_right(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.scroll_right()
-
-    @kb.add("?")
-    def on_help(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.NAVIGATE:
-            viewer.show_help()
-
-    @kb.add("tab")
-    def on_tab(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.FILTER:
-            viewer.filter_confirm()
-        elif viewer.mode == _ViewerMode.COLUMNS:
-            viewer.column_confirm()
-
-    @kb.add("escape")
-    def on_escape(event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.HELP:
-            viewer.dismiss_help()
-        elif viewer.mode == _ViewerMode.FILTER:
-            viewer.cancel_filter()
-        elif viewer.mode == _ViewerMode.COLUMNS:
-            viewer.cancel_columns()
-        else:
-            event.app.exit()
-
-    @kb.add("q")
-    def on_quit(event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.HELP:
-            viewer.dismiss_help()
-        elif viewer.mode == _ViewerMode.NAVIGATE:
-            event.app.exit()
-
-    @kb.add("<any>")
-    def on_any(_event: KeyPressEvent) -> None:
-        if viewer.mode == _ViewerMode.HELP:
-            viewer.dismiss_help()
-
-    control = FormattedTextControl(viewer.render)
-    window = Window(content=control, wrap_lines=False)
-    layout = Layout(HSplit([window]))
+    kb = build_key_bindings(viewer)
+    layout = Layout(body)
 
     app: Application[None] = Application(
         layout=layout,
@@ -1502,21 +206,19 @@ def run_findings_app(
 
     # Post-TUI summary
     console = Console()
-    fp_count = sum(1 for v in viewer.triage.values() if v == TriageAction.FALSE_POSITIVE)
-    ign_count = sum(1 for v in viewer.triage.values() if v == TriageAction.IGNORED)
-    solved_count = sum(1 for v in viewer.triage.values() if v == TriageAction.SOLVED)
+    solved = sum(1 for v in viewer.triage.values() if v == TriageAction.SOLVED)
+    fp = sum(1 for v in viewer.triage.values() if v == TriageAction.FALSE_POSITIVE)
+    ign = sum(1 for v in viewer.triage.values() if v == TriageAction.IGNORED)
 
-    has_activity = (
-        fp_count or ign_count or solved_count or viewer.comments_posted or viewer.comments_deleted
-    )
+    has_activity = solved or fp or ign or viewer.comments_posted or viewer.comments_deleted
     if has_activity:
         console.print()
-        if fp_count:
-            console.print(f"  {fp_count} finding(s) marked as false positive")
-        if ign_count:
-            console.print(f"  {ign_count} finding(s) ignored")
-        if solved_count:
-            console.print(f"  {solved_count} finding(s) marked as solved")
+        if solved:
+            console.print(f"  {solved} finding(s) marked as solved")
+        if fp:
+            console.print(f"  {fp} finding(s) marked as false positive")
+        if ign:
+            console.print(f"  {ign} finding(s) ignored")
         if viewer.comments_posted:
             console.print(f"  {viewer.comments_posted} comment(s) posted to PR")
         if viewer.comments_deleted:
@@ -1527,8 +229,8 @@ def run_findings_app(
 def cmd_findings(args: list[str], session: SessionState) -> None:
     """Launch the interactive findings navigator.
 
-    Without args: loads ALL unsolved findings from the database across
-    all repos. With a numeric arg: loads findings for that review ID.
+    Without args: loads ALL unsolved findings from the database.
+    With a numeric arg: loads findings for that review ID.
     """
     from code_review_agent.storage import ReviewStorage
 
@@ -1537,7 +239,6 @@ def cmd_findings(args: list[str], session: SessionState) -> None:
     storage = ReviewStorage(settings.history_db_path)
 
     if args and args[0].isdigit():
-        # Load findings for a specific review
         review_id = int(args[0])
         try:
             db_rows = storage.load_findings_for_review(review_id)
@@ -1551,7 +252,6 @@ def cmd_findings(args: list[str], session: SessionState) -> None:
             return
         rows = _rows_from_db(db_rows)
     else:
-        # Load ALL unsolved findings across all repos
         try:
             db_rows = storage.load_unsolved_findings()
         except Exception as exc:

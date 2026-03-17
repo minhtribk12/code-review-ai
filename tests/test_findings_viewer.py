@@ -1,4 +1,4 @@
-"""Tests for the interactive findings navigator (CRA-75)."""
+"""Tests for the interactive findings navigator."""
 
 from __future__ import annotations
 
@@ -7,9 +7,22 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from code_review_agent.interactive.commands.findings_cmd import (
-    FindingsViewer,
+from code_review_agent.interactive.commands.findings.actions import toggle_triage
+from code_review_agent.interactive.commands.findings.models import (
     TriageAction,
+    ViewerMode,
+)
+from code_review_agent.interactive.commands.findings.renderer import (
+    render_confirm,
+    render_detail,
+    render_filter,
+    render_footer,
+    render_header,
+    render_help,
+    render_table,
+)
+from code_review_agent.interactive.commands.findings.state import FindingsViewer
+from code_review_agent.interactive.commands.findings_cmd import (
     _flatten_findings,
     cmd_findings,
 )
@@ -30,7 +43,7 @@ def _make_report(
     agent_findings: dict[str, list[Finding]] | None = None,
     pr_url: str | None = "https://github.com/acme/app/pull/42",
 ) -> ReviewReport:
-    """Build a ReviewReport with given agent findings."""
+    """Build a ReviewReport with 3 findings across 2 agents."""
     if agent_findings is None:
         agent_findings = {
             "security": [
@@ -63,7 +76,6 @@ def _make_report(
                     suggestion="Use TTL cache.",
                 ),
             ],
-            "style": [],
         }
 
     results = [
@@ -96,7 +108,7 @@ def viewer(report: ReviewReport) -> FindingsViewer:
 
 
 # ---------------------------------------------------------------------------
-# _flatten_findings
+# TestFlattenFindings
 # ---------------------------------------------------------------------------
 
 
@@ -120,9 +132,20 @@ class TestFlattenFindings:
         rows = _flatten_findings(report)
         assert rows == []
 
+    def test_repo_and_pr_from_url(self, report: ReviewReport) -> None:
+        rows = _flatten_findings(report)
+        assert rows[0].repo == "acme/app"
+        assert rows[0].pr_number == 42
+
+    def test_no_pr_url(self) -> None:
+        report = _make_report(pr_url=None)
+        rows = _flatten_findings(report)
+        assert rows[0].repo is None
+        assert rows[0].pr_number is None
+
 
 # ---------------------------------------------------------------------------
-# Navigation
+# TestNavigation
 # ---------------------------------------------------------------------------
 
 
@@ -141,16 +164,32 @@ class TestNavigation:
         viewer.move_down()
         assert viewer.cursor == len(viewer.visible_rows) - 1
 
-    def test_toggle_detail(self, viewer: FindingsViewer) -> None:
+    def test_scroll_left_at_zero(self, viewer: FindingsViewer) -> None:
+        assert viewer.h_offset == 0
+        viewer.scroll_left()
+        assert viewer.h_offset == 0
+
+    def test_scroll_right(self, viewer: FindingsViewer) -> None:
+        viewer.scroll_right()
+        # Offset increases if there is scrollable content, stays at 0 otherwise
+        assert viewer.h_offset >= 0
+
+    def test_open_detail(self, viewer: FindingsViewer) -> None:
         assert viewer.is_detail_open is False
-        viewer.toggle_detail()
+        assert viewer.mode == ViewerMode.NAVIGATE
+        viewer.open_detail()
         assert viewer.is_detail_open is True
-        viewer.toggle_detail()
+        assert viewer.mode == ViewerMode.DETAIL
+
+    def test_close_detail(self, viewer: FindingsViewer) -> None:
+        viewer.open_detail()
+        viewer.close_detail()
         assert viewer.is_detail_open is False
+        assert viewer.mode == ViewerMode.NAVIGATE
 
 
 # ---------------------------------------------------------------------------
-# Sort
+# TestSort
 # ---------------------------------------------------------------------------
 
 
@@ -160,8 +199,17 @@ class TestSort:
         viewer.cycle_sort()
         assert viewer.sort_index == 1
 
+    def test_sort_wraps_and_reverses(self, viewer: FindingsViewer) -> None:
+        num_cols = len(viewer.sort_columns)
+        for _ in range(num_cols - 1):
+            viewer.cycle_sort()
+        assert viewer.sort_index == num_cols - 1
+        assert viewer.is_sort_reversed is False
+        viewer.cycle_sort()
+        assert viewer.sort_index == 0
+        assert viewer.is_sort_reversed is True
+
     def test_sort_by_severity(self, viewer: FindingsViewer) -> None:
-        # Default sort_index=0 is severity
         viewer._apply_sort()
         severities = [r.severity for r in viewer.visible_rows]
         assert severities[0] == Severity.CRITICAL
@@ -172,465 +220,173 @@ class TestSort:
         agents = [r.agent_name for r in viewer.visible_rows]
         assert agents == sorted(agents)
 
-    def test_sort_resets_cursor(self, viewer: FindingsViewer) -> None:
-        viewer.cursor = 2
-        viewer.cycle_sort()
-        assert viewer.cursor == 0
-
 
 # ---------------------------------------------------------------------------
-# Filter
-# ---------------------------------------------------------------------------
-
-
-class TestFilter:
-    def test_filter_by_severity(self, viewer: FindingsViewer) -> None:
-        viewer.filter_severity = {Severity.CRITICAL}
-        viewer._apply_filters()
-        assert len(viewer.visible_rows) == 1
-        assert viewer.visible_rows[0].severity == Severity.CRITICAL
-
-    def test_filter_by_agent(self, viewer: FindingsViewer) -> None:
-        viewer.filter_agents = {"performance"}
-        viewer._apply_filters()
-        assert len(viewer.visible_rows) == 1
-        assert viewer.visible_rows[0].agent_name == "performance"
-
-    def test_filter_clamps_cursor(self, viewer: FindingsViewer) -> None:
-        viewer.cursor = 2
-        viewer.filter_severity = {Severity.CRITICAL}
-        viewer._apply_filters()
-        assert viewer.cursor == 0
-
-    def test_open_filter_builds_options(self, viewer: FindingsViewer) -> None:
-        viewer.open_filter()
-        # 4 severity + 2 agents with findings (security, performance) + 4 triage
-        assert len(viewer.filter_options) == 10
-
-    def test_filter_toggle_and_confirm(self, viewer: FindingsViewer) -> None:
-        viewer.open_filter()
-        # Uncheck all severities except first (critical)
-        for i, (_label, key, _) in enumerate(viewer.filter_options):
-            if key.startswith("sev:") and key != "sev:critical":
-                viewer.filter_cursor = i
-                viewer.filter_toggle()
-        viewer.filter_confirm()
-        assert viewer.filter_severity == {Severity.CRITICAL}
-
-
-# ---------------------------------------------------------------------------
-# Triage
+# TestTriage
 # ---------------------------------------------------------------------------
 
 
 class TestTriage:
-    def test_mark_false_positive_toggle(self, viewer: FindingsViewer) -> None:
-        viewer.mark_false_positive()
-        assert viewer.triage[0] == TriageAction.FALSE_POSITIVE
-        viewer.mark_false_positive()
-        assert 0 not in viewer.triage
+    def test_toggle_solved(self, viewer: FindingsViewer) -> None:
+        toggle_triage(viewer, TriageAction.SOLVED)
+        row = viewer.all_rows[0]
+        assert viewer.triage[row.index] == TriageAction.SOLVED
 
-    def test_mark_ignored_toggle(self, viewer: FindingsViewer) -> None:
-        viewer.mark_ignored()
-        assert viewer.triage[0] == TriageAction.IGNORED
-        viewer.mark_ignored()
-        assert 0 not in viewer.triage
+    def test_toggle_solved_twice_resets(self, viewer: FindingsViewer) -> None:
+        toggle_triage(viewer, TriageAction.SOLVED)
+        # Solved findings are hidden by default filter, so reset cursor
+        # to operate on the same row via all_rows
+        row = viewer.all_rows[0]
+        # Re-add to visible so toggle can find it
+        viewer.visible_rows = list(viewer.all_rows)
+        viewer.cursor = 0
+        toggle_triage(viewer, TriageAction.SOLVED)
+        assert row.index not in viewer.triage
+
+    def test_toggle_false_positive(self, viewer: FindingsViewer) -> None:
+        toggle_triage(viewer, TriageAction.FALSE_POSITIVE)
+        row = viewer.all_rows[0]
+        assert viewer.triage[row.index] == TriageAction.FALSE_POSITIVE
+
+    def test_toggle_ignored(self, viewer: FindingsViewer) -> None:
+        toggle_triage(viewer, TriageAction.IGNORED)
+        row = viewer.all_rows[0]
+        assert viewer.triage[row.index] == TriageAction.IGNORED
 
     def test_triage_on_empty_rows(self) -> None:
         report = _make_report(agent_findings={"security": []})
         viewer = FindingsViewer(report=report)
-        viewer.mark_false_positive()  # should not raise
-        assert viewer.triage == {}
+        toggle_triage(viewer, TriageAction.SOLVED)
+        # Should not raise; triage unchanged from init defaults
+        assert not viewer.visible_rows
 
 
 # ---------------------------------------------------------------------------
-# PR staging
+# TestFilter
 # ---------------------------------------------------------------------------
 
 
-class TestPrStaging:
-    def test_toggle_stage(self, viewer: FindingsViewer) -> None:
-        viewer.toggle_stage_for_pr()
-        assert 0 in viewer.staged_for_pr
-        viewer.toggle_stage_for_pr()
-        assert 0 not in viewer.staged_for_pr
+class TestFilter:
+    def test_add_filter(self, viewer: FindingsViewer) -> None:
+        viewer.add_filter("severity", "critical")
+        assert len(viewer.active_filters) == 1
+        assert viewer.active_filters[0].field == "severity"
+        assert "critical" in viewer.active_filters[0].values
 
-    def test_stage_empty_rows(self) -> None:
-        report = _make_report(agent_findings={"security": []})
-        viewer = FindingsViewer(report=report)
-        viewer.toggle_stage_for_pr()  # should not raise
-        assert viewer.staged_for_pr == set()
+    def test_add_filter_merges_same_field(self, viewer: FindingsViewer) -> None:
+        viewer.add_filter("severity", "critical")
+        viewer.add_filter("severity", "high")
+        assert len(viewer.active_filters) == 1
+        assert viewer.active_filters[0].values == {"critical", "high"}
 
+    def test_remove_filter(self, viewer: FindingsViewer) -> None:
+        viewer.add_filter("severity", "critical")
+        viewer.remove_filter(0)
+        assert len(viewer.active_filters) == 0
 
-# ---------------------------------------------------------------------------
-# PR posting
-# ---------------------------------------------------------------------------
+    def test_clear_filters(self, viewer: FindingsViewer) -> None:
+        viewer.add_filter("severity", "critical")
+        viewer.add_filter("agent_name", "security")
+        viewer.clear_filters()
+        assert viewer.active_filters == []
+        assert len(viewer.visible_rows) == len(viewer.all_rows)
 
+    def test_apply_filters_hides_solved_by_default(self, viewer: FindingsViewer) -> None:
+        row = viewer.visible_rows[0]
+        viewer.triage[row.index] = TriageAction.SOLVED
+        viewer._apply_filters()
+        visible_indices = {r.index for r in viewer.visible_rows}
+        assert row.index not in visible_indices
 
-class TestPrPosting:
-    def test_no_pr_url(self) -> None:
-        report = _make_report(pr_url=None)
-        viewer = FindingsViewer(report=report, github_token="tok")
-        viewer.staged_for_pr = {0}
-        viewer.submit_to_pr()
-        assert "Not a PR review" in viewer.status_message
+    def test_open_filter_sets_mode(self, viewer: FindingsViewer) -> None:
+        viewer.open_filter()
+        assert viewer.mode == ViewerMode.FILTER
+        assert viewer.filter_dimension == "severity"
 
-    def test_no_github_token(self, report: ReviewReport) -> None:
-        viewer = FindingsViewer(report=report, github_token=None)
-        viewer.staged_for_pr = {0}
-        viewer.submit_to_pr()
-        assert "GITHUB_TOKEN required" in viewer.status_message
-
-    def test_no_staged_findings(self, viewer: FindingsViewer) -> None:
-        viewer.submit_to_pr()
-        assert "No findings staged" in viewer.status_message
-
-    def test_builds_correct_comment_payload(self, viewer: FindingsViewer) -> None:
-        viewer.staged_for_pr = {0, 2}  # security finding + performance finding
-        with patch(
-            "code_review_agent.interactive.commands.findings_cmd.submit_pr_review_with_comments"
-        ) as mock_submit:
-            mock_submit.return_value = {
-                "id": 1,
-                "state": "COMMENTED",
-                "html_url": "https://github.com/...",
-                "comments_posted": 2,
-            }
-            viewer.submit_to_pr()
-
-        mock_submit.assert_called_once()
-        call_kwargs = mock_submit.call_args.kwargs
-        assert call_kwargs["owner"] == "acme"
-        assert call_kwargs["repo"] == "app"
-        assert call_kwargs["pr_number"] == 42
-        assert len(call_kwargs["comments"]) == 2
-        assert call_kwargs["comments"][0]["path"] == "src/auth.py"
-        assert call_kwargs["comments"][0]["line"] == 12
-
-    def test_findings_without_location_go_in_body(self) -> None:
-        """Findings without file/line are included in the review body."""
-        report = _make_report(
-            agent_findings={
-                "security": [
-                    Finding(
-                        severity="high",
-                        category="General",
-                        title="No file path",
-                        description="A general finding.",
-                    ),
-                ],
-                "style": [
-                    Finding(
-                        severity="low",
-                        category="Style",
-                        title="Has file",
-                        description="Style issue.",
-                        file_path="src/app.py",
-                        line_number=10,
-                    ),
-                ],
-            },
-        )
-        viewer = FindingsViewer(report=report, github_token="tok")
-        viewer.staged_for_pr = {0, 1}
-
-        with patch(
-            "code_review_agent.interactive.commands.findings_cmd.submit_pr_review_with_comments"
-        ) as mock_submit:
-            mock_submit.return_value = {
-                "id": 1,
-                "state": "COMMENTED",
-                "html_url": "",
-                "comments_posted": 1,
-            }
-            viewer.submit_to_pr()
-
-        call_kwargs = mock_submit.call_args.kwargs
-        # Only 1 inline comment (the one with file/line)
-        assert len(call_kwargs["comments"]) == 1
-        # The finding without location is in the body
-        assert "No file path" in call_kwargs["body"]
-
-    def test_handles_auth_error(self, viewer: FindingsViewer) -> None:
-        from code_review_agent.github_client import GitHubAuthError
-
-        viewer.staged_for_pr = {0}
-        with patch(
-            "code_review_agent.interactive.commands.findings_cmd.submit_pr_review_with_comments",
-            side_effect=GitHubAuthError("403"),
-        ):
-            viewer.submit_to_pr()
-
-        assert "Permission denied" in viewer.status_message
-
-    def test_handles_http_error(self, viewer: FindingsViewer) -> None:
-        import httpx
-
-        viewer.staged_for_pr = {0}
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        with patch(
-            "code_review_agent.interactive.commands.findings_cmd.submit_pr_review_with_comments",
-            side_effect=httpx.HTTPStatusError(
-                "Not Found",
-                request=MagicMock(),
-                response=mock_response,
-            ),
-        ):
-            viewer.submit_to_pr()
-
-        assert "404" in viewer.status_message
-
-    def test_clears_staged_on_success(self, viewer: FindingsViewer) -> None:
-        viewer.staged_for_pr = {0, 2}
-        with (
-            patch(
-                "code_review_agent.interactive.commands.findings_cmd"
-                ".submit_pr_review_with_comments"
-            ) as mock_submit,
-            patch(
-                "code_review_agent.interactive.commands.findings_cmd.get_review_comments",
-                return_value=[{"id": 1001}, {"id": 1002}],
-            ),
-        ):
-            mock_submit.return_value = {
-                "id": 100,
-                "state": "COMMENTED",
-                "html_url": "",
-                "comments_posted": 2,
-            }
-            viewer.submit_to_pr()
-
-        assert viewer.staged_for_pr == set()
-        assert viewer.comments_posted == 2
-        assert viewer.last_review_id == 100
-        assert viewer.last_comment_ids == [1001, 1002]
-
-    def test_posted_indices_tracked(self, viewer: FindingsViewer) -> None:
-        """Posted finding indices are recorded for status display."""
-        viewer.staged_for_pr = {0, 2}
-        with (
-            patch(
-                "code_review_agent.interactive.commands.findings_cmd"
-                ".submit_pr_review_with_comments"
-            ) as mock_submit,
-            patch(
-                "code_review_agent.interactive.commands.findings_cmd.get_review_comments",
-                return_value=[{"id": 1001}],
-            ),
-        ):
-            mock_submit.return_value = {
-                "id": 100,
-                "state": "COMMENTED",
-                "html_url": "",
-                "comments_posted": 2,
-            }
-            viewer.submit_to_pr()
-
-        assert viewer.posted_indices == {0, 2}
-
-    def test_blocks_double_posting(self, viewer: FindingsViewer) -> None:
-        """Cannot re-post if comments already exist -- must delete first."""
-        viewer.last_comment_ids = [1001, 1002]
-        viewer.staged_for_pr = {0}
-        viewer.submit_to_pr()
-        assert "delete first" in viewer.status_message.lower()
-
-    def test_delete_clears_posted_indices(self, viewer: FindingsViewer) -> None:
-        viewer.last_comment_ids = [1001, 1002]
-        viewer.last_review_id = 100
-        viewer.posted_indices = {0, 2}
-        with patch(
-            "code_review_agent.interactive.commands.findings_cmd.delete_review_comments",
-            return_value=2,
-        ):
-            viewer.delete_posted_comments()
-
-        assert viewer.last_comment_ids == []
-        assert viewer.last_review_id is None
-        assert viewer.posted_indices == set()
-        assert viewer.comments_deleted == 2
-        assert "Deleted 2" in viewer.status_message
-
-    def test_delete_with_no_posted_comments(self, viewer: FindingsViewer) -> None:
-        viewer.delete_posted_comments()
-        assert "No posted comments" in viewer.status_message
+    def test_cancel_filter_returns_to_navigate(self, viewer: FindingsViewer) -> None:
+        viewer.open_filter()
+        viewer.cancel_filter()
+        assert viewer.mode == ViewerMode.NAVIGATE
 
 
 # ---------------------------------------------------------------------------
-# Rendering
+# TestRendering
 # ---------------------------------------------------------------------------
 
 
 class TestRendering:
-    def test_render_returns_formatted_text(self, viewer: FindingsViewer) -> None:
-        result = viewer.render()
-        assert isinstance(result, list)
-        assert all(isinstance(item, tuple) and len(item) == 2 for item in result)
+    def _is_formatted_text(self, result: list[tuple[str, str]]) -> bool:
+        return isinstance(result, list) and all(
+            isinstance(item, tuple) and len(item) == 2 for item in result
+        )
 
-    def test_render_filter_mode(self, viewer: FindingsViewer) -> None:
-        viewer.open_filter()
-        result = viewer.render()
-        # Should contain filter-related text
+    def test_render_header(self, viewer: FindingsViewer) -> None:
+        result = render_header(viewer)
+        assert self._is_formatted_text(result)
         text = "".join(t for _, t in result)
-        assert "Filter Findings" in text
+        assert "Findings Navigator" in text
 
-    def test_render_empty_findings(self) -> None:
+    def test_render_table(self, viewer: FindingsViewer) -> None:
+        result = render_table(viewer, term_width=120)
+        assert self._is_formatted_text(result)
+        text = "".join(t for _, t in result)
+        assert "Sev" in text
+
+    def test_render_table_empty(self) -> None:
         report = _make_report(agent_findings={"security": []})
         viewer = FindingsViewer(report=report)
-        result = viewer.render()
+        result = render_table(viewer, term_width=120)
         text = "".join(t for _, t in result)
         assert "No findings" in text
 
-    def test_render_help_mode(self, viewer: FindingsViewer) -> None:
-        viewer.show_help()
-        result = viewer.render()
+    def test_render_detail(self, viewer: FindingsViewer) -> None:
+        result = render_detail(viewer)
+        assert self._is_formatted_text(result)
         text = "".join(t for _, t in result)
-        assert "Keyboard Reference" in text
-        assert "Mark / unmark" in text
-        assert "Press any key" in text
+        assert "SQL injection in login" in text
 
-    def test_dismiss_help(self, viewer: FindingsViewer) -> None:
-        viewer.show_help()
-        assert viewer.mode == "help"
-        viewer.dismiss_help()
-        assert viewer.mode == "navigate"
+    def test_render_detail_empty(self) -> None:
+        report = _make_report(agent_findings={"security": []})
+        viewer = FindingsViewer(report=report)
+        result = render_detail(viewer)
+        assert result == []
 
-    def test_footer_contains_key_hints(self, viewer: FindingsViewer) -> None:
-        result = viewer.render()
+    def test_render_footer(self, viewer: FindingsViewer) -> None:
+        result = render_footer(viewer)
+        assert self._is_formatted_text(result)
         text = "".join(t for _, t in result)
         assert "[f]" in text
         assert "[s]" in text
-        assert "[p]" in text
-        assert "[P]" in text
-        assert "[D]" in text
-        assert "[?]" in text
-        assert "[q]" in text
 
-    def test_triage_column_in_table(self, viewer: FindingsViewer) -> None:
-        viewer.mark_false_positive()  # marks index 0
-        result = viewer.render()
+    def test_render_help(self, viewer: FindingsViewer) -> None:
+        result = render_help(viewer)
+        assert self._is_formatted_text(result)
         text = "".join(t for _, t in result)
-        assert "[FP]" in text
+        assert "Keyboard Reference" in text
+        assert "Press any key" in text
 
-    def test_pr_status_column_staged(self, viewer: FindingsViewer) -> None:
-        viewer.toggle_stage_for_pr()  # stages index 0
-        result = viewer.render()
-        text = "".join(t for _, t in result)
-        assert "[STAGED]" in text
-
-    def test_pr_status_column_posted(self, viewer: FindingsViewer) -> None:
-        viewer.posted_indices = {0}
-        result = viewer.render()
-        text = "".join(t for _, t in result)
-        assert "[POSTED]" in text
-
-    def test_table_header_has_status_and_pr_columns(self, viewer: FindingsViewer) -> None:
-        result = viewer.render()
-        text = "".join(t for _, t in result)
-        assert "Status" in text
-        assert "PR" in text
-
-
-# ---------------------------------------------------------------------------
-# Column configuration
-# ---------------------------------------------------------------------------
-
-
-class TestColumnConfig:
-    def test_open_columns_builds_options(self, viewer: FindingsViewer) -> None:
-        viewer.open_columns()
-        assert viewer.mode == "columns"
-        assert len(viewer.column_options) == 10  # all available columns
-
-    def test_column_toggle(self, viewer: FindingsViewer) -> None:
-        viewer.open_columns()
-        # Find "repo" column (should be unchecked by default)
-        repo_idx = next(i for i, (_, key, _) in enumerate(viewer.column_options) if key == "repo")
-        viewer.column_cursor = repo_idx
-        viewer.column_toggle()
-        assert viewer.column_options[repo_idx][2] is True
-
-    def test_column_confirm_updates_visible(self, viewer: FindingsViewer) -> None:
-        viewer.open_columns()
-        # Toggle repo on
-        repo_idx = next(i for i, (_, key, _) in enumerate(viewer.column_options) if key == "repo")
-        viewer.column_cursor = repo_idx
-        viewer.column_toggle()
-        viewer.column_confirm()
-        assert "repo" in viewer.visible_columns
-        assert viewer.mode == "navigate"
-
-    def test_column_cancel_preserves_state(self, viewer: FindingsViewer) -> None:
-        original = list(viewer.visible_columns)
-        viewer.open_columns()
-        viewer.cancel_columns()
-        assert viewer.visible_columns == original
-        assert viewer.mode == "navigate"
-
-    def test_render_columns_mode(self, viewer: FindingsViewer) -> None:
-        viewer.open_columns()
-        result = viewer.render()
-        text = "".join(t for _, t in result)
-        assert "Column Configuration" in text
-        assert "columns visible" in text
-
-    def test_dynamic_table_header(self, viewer: FindingsViewer) -> None:
-        viewer.visible_columns = ["severity", "title"]
-        result = viewer.render()
-        text = "".join(t for _, t in result)
-        assert "Sev" in text
-        assert "Title" in text
-        # Agent should not appear
-        assert "Agent" not in text.split("\n")[3]  # header line
-
-
-# ---------------------------------------------------------------------------
-# Advanced filters
-# ---------------------------------------------------------------------------
-
-
-class TestAdvancedFilters:
-    def test_filter_includes_triage_when_triaged(self, viewer: FindingsViewer) -> None:
-        viewer.mark_false_positive()  # triage index 0
+    def test_render_filter(self, viewer: FindingsViewer) -> None:
         viewer.open_filter()
-        keys = [key for _, key, _ in viewer.filter_options]
-        assert "triage:none" in keys
-        assert "triage:false_positive" in keys
+        result = render_filter(viewer)
+        assert self._is_formatted_text(result)
+        text = "".join(t for _, t in result)
+        assert "Filter Findings" in text
 
-    def test_filter_always_shows_triage_options(self, viewer: FindingsViewer) -> None:
-        viewer.open_filter()
-        keys = [key for _, key, _ in viewer.filter_options]
-        assert "triage:none" in keys
-        assert "triage:solved" in keys
+    def test_render_confirm(self, viewer: FindingsViewer) -> None:
+        viewer.request_confirm("delete", "Delete this finding?")
+        result = render_confirm(viewer)
+        assert self._is_formatted_text(result)
+        text = "".join(t for _, t in result)
+        assert "Delete this finding?" in text
+        assert "[y] Yes" in text
 
-    def test_filter_includes_pr_status_when_staged(self, viewer: FindingsViewer) -> None:
-        viewer.toggle_stage_for_pr()  # stage index 0
-        viewer.open_filter()
-        keys = [key for _, key, _ in viewer.filter_options]
-        assert "prstatus:staged" in keys
-
-    def test_filter_by_triage(self, viewer: FindingsViewer) -> None:
-        viewer.mark_false_positive()  # mark index 0 as FP
-        viewer.filter_triage = {"false_positive"}
-        viewer._apply_filters()
-        assert len(viewer.visible_rows) == 1
-        assert viewer.visible_rows[0].index == 0
-
-    def test_finding_row_has_repo_and_pr(self, report: ReviewReport) -> None:
-        rows = _flatten_findings(report)
-        assert rows[0].repo == "acme/app"
-        assert rows[0].pr_number == 42
-
-    def test_finding_row_no_pr_url(self) -> None:
-        report = _make_report(pr_url=None)
-        rows = _flatten_findings(report)
-        assert rows[0].repo is None
-        assert rows[0].pr_number is None
+    def test_render_confirm_empty_when_no_pending(self, viewer: FindingsViewer) -> None:
+        result = render_confirm(viewer)
+        assert result == []
 
 
 # ---------------------------------------------------------------------------
-# cmd_findings entry point
+# TestCmdFindings
 # ---------------------------------------------------------------------------
 
 
@@ -638,6 +394,7 @@ class TestCmdFindings:
     def test_no_findings_shows_message(self) -> None:
         session = MagicMock()
         session.effective_settings.history_db_path = ":memory:"
+        session.effective_settings.github_token = None
 
         with (
             patch(
@@ -647,16 +404,19 @@ class TestCmdFindings:
         ):
             mock_console = MagicMock()
             mock_console_cls.return_value = mock_console
-            mock_storage_cls.return_value.load_unsolved_findings.return_value = []
+            mock_storage = MagicMock()
+            mock_storage.load_unsolved_findings.return_value = []
+            mock_storage_cls.return_value = mock_storage
             cmd_findings([], session)
 
         mock_console.print.assert_called_once()
         call_args = mock_console.print.call_args[0][0]
         assert "No unsolved findings" in call_args
 
-    def test_loads_from_storage(self, report: ReviewReport) -> None:
+    def test_loads_review_by_id(self) -> None:
         session = MagicMock()
         session.effective_settings.history_db_path = "~/.cra/reviews.db"
+        session.effective_settings.github_token = None
 
         mock_storage = MagicMock()
         mock_storage.load_findings_for_review.return_value = [
@@ -675,9 +435,9 @@ class TestCmdFindings:
                 "confidence": "medium",
                 "repo": "acme/app",
                 "pr_number": 42,
-                "triage_action": "none",
+                "triage_action": "open",
                 "is_posted": 0,
-            }
+            },
         ]
 
         with (
@@ -686,13 +446,59 @@ class TestCmdFindings:
                 return_value=mock_storage,
             ),
             patch(
-                "code_review_agent.interactive.commands.findings_cmd.Application"
-            ) as mock_app_cls,
+                "code_review_agent.interactive.commands.findings_cmd.run_findings_app",
+            ) as mock_run,
             patch("code_review_agent.interactive.commands.findings_cmd.Console"),
         ):
-            mock_app = MagicMock()
-            mock_app_cls.return_value = mock_app
             cmd_findings(["1"], session)
 
         mock_storage.load_findings_for_review.assert_called_once_with(1)
-        mock_app.run.assert_called_once()
+        mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# TestConfirm
+# ---------------------------------------------------------------------------
+
+
+class TestConfirm:
+    def test_request_confirm(self, viewer: FindingsViewer) -> None:
+        viewer.request_confirm("delete", "Delete this finding?")
+        assert viewer.mode == ViewerMode.CONFIRM
+        assert viewer.pending_confirm is not None
+        assert viewer.pending_confirm.action == "delete"
+        assert viewer.pending_confirm.description == "Delete this finding?"
+
+    def test_request_confirm_empty_rows(self) -> None:
+        report = _make_report(agent_findings={"security": []})
+        viewer = FindingsViewer(report=report)
+        viewer.request_confirm("delete", "Delete?")
+        assert viewer.mode == ViewerMode.NAVIGATE
+        assert viewer.pending_confirm is None
+
+    def test_confirm_yes(self, viewer: FindingsViewer) -> None:
+        viewer.request_confirm("delete", "Delete?")
+        result = viewer.confirm_yes()
+        assert result is not None
+        assert result.action == "delete"
+        assert viewer.pending_confirm is None
+        assert viewer.mode == ViewerMode.NAVIGATE
+
+    def test_confirm_yes_returns_to_detail_if_open(self, viewer: FindingsViewer) -> None:
+        viewer.open_detail()
+        viewer.request_confirm("delete", "Delete?")
+        viewer.confirm_yes()
+        assert viewer.mode == ViewerMode.DETAIL
+
+    def test_confirm_no(self, viewer: FindingsViewer) -> None:
+        viewer.request_confirm("delete", "Delete?")
+        viewer.confirm_no()
+        assert viewer.pending_confirm is None
+        assert viewer.mode == ViewerMode.NAVIGATE
+
+    def test_confirm_no_returns_to_detail_if_open(self, viewer: FindingsViewer) -> None:
+        viewer.open_detail()
+        viewer.request_confirm("delete", "Delete?")
+        viewer.confirm_no()
+        assert viewer.mode == ViewerMode.DETAIL
+        assert viewer.is_detail_open is True

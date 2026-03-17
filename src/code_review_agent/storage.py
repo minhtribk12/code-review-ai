@@ -24,7 +24,7 @@ logger = structlog.get_logger(__name__)
 
 _DEFAULT_DB_PATH = "~/.cra/reviews.db"
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS reviews (
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS findings (
     confidence TEXT NOT NULL DEFAULT 'medium',
     repo TEXT,
     pr_number INTEGER,
-    triage_action TEXT NOT NULL DEFAULT 'none',
+    triage_action TEXT NOT NULL DEFAULT 'open',
     is_posted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(review_id, finding_index)
@@ -180,6 +180,10 @@ class ReviewStorage:
         # Backfill: populate findings from report_json if table exists but is empty
         if "findings" in tables:
             self._backfill_findings(conn)
+
+        # v4 -> v5: rename triage_action 'none' to 'open'
+        if "findings" in tables:
+            conn.execute("UPDATE findings SET triage_action = 'open' WHERE triage_action = 'none'")
 
     def _migrate_v3_to_v4(self, conn: sqlite3.Connection) -> None:
         """Migrate from finding_triage to the findings table.
@@ -728,6 +732,33 @@ class ReviewStorage:
         if row is None:
             return None
         return str(row["value"])
+
+    def get_distinct_finding_values(self, field: str) -> list[str]:
+        """Get distinct values for a finding field, for autocomplete.
+
+        Only allows whitelisted field names to prevent SQL injection.
+        """
+        allowed = {
+            "severity",
+            "agent_name",
+            "category",
+            "repo",
+            "file_path",
+            "triage_action",
+        }
+        if field not in allowed:
+            return []
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT DISTINCT {field} FROM findings "  # noqa: S608
+                f"WHERE {field} IS NOT NULL ORDER BY {field}",
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def delete_finding(self, finding_id: int) -> None:
+        """Delete a finding by its primary key."""
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM findings WHERE id = ?", (finding_id,))
 
     @property
     def db_path(self) -> Path:
