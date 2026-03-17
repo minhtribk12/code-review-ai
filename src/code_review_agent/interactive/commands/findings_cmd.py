@@ -7,6 +7,7 @@ review comments.
 
 from __future__ import annotations
 
+import shutil
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -93,7 +94,7 @@ class _ViewerMode(StrEnum):
 
 # All available columns with display config
 _ALL_COLUMNS: list[tuple[str, str, int]] = [
-    # (key, header_label, width)
+    # (key, header_label, preferred_width)
     ("severity", "Sev", 5),
     ("agent_name", "Agent", 13),
     ("file_line", "File:Line", 27),
@@ -105,6 +106,15 @@ _ALL_COLUMNS: list[tuple[str, str, int]] = [
     ("confidence", "Conf", 7),
     ("category", "Category", 14),
 ]
+
+# Columns that can shrink to fit the terminal (min width each)
+_FLEXIBLE_COLUMNS: dict[str, int] = {
+    "file_line": 12,
+    "title": 10,
+    "repo": 8,
+    "category": 8,
+    "agent_name": 8,
+}
 
 _DEFAULT_VISIBLE: list[str] = [
     "severity",
@@ -855,6 +865,45 @@ class FindingsViewer:
 
         return (base_style, f"{'':<{width}}")
 
+    def _compute_column_widths(self, term_width: int) -> list[tuple[str, str, int]]:
+        """Compute column widths to fit within the terminal.
+
+        Fixed columns keep their preferred width. Flexible columns shrink
+        proportionally when the total exceeds terminal width.
+        """
+        col_meta = [
+            (key, label, width)
+            for key, label, width in _ALL_COLUMNS
+            if key in self.visible_columns
+        ]
+
+        prefix_width = 3  # " > " or "   "
+        total_preferred = sum(w for _, _, w in col_meta) + prefix_width
+
+        if total_preferred <= term_width:
+            return col_meta
+
+        # Calculate how much we need to shrink
+        overflow = total_preferred - term_width
+        flex_cols = [(key, width) for key, _, width in col_meta if key in _FLEXIBLE_COLUMNS]
+        flex_shrinkable = sum(w - _FLEXIBLE_COLUMNS[k] for k, w in flex_cols)
+
+        if flex_shrinkable <= 0:
+            return col_meta
+
+        shrink_ratio = min(1.0, overflow / flex_shrinkable)
+
+        result: list[tuple[str, str, int]] = []
+        for key, label, width in col_meta:
+            if key in _FLEXIBLE_COLUMNS and shrink_ratio > 0:
+                min_w = _FLEXIBLE_COLUMNS[key]
+                new_width = max(min_w, width - int((width - min_w) * shrink_ratio))
+                result.append((key, label, new_width))
+            else:
+                result.append((key, label, width))
+
+        return result
+
     def _render_navigate(self) -> FormattedText:
         lines: list[tuple[str, str]] = []
 
@@ -896,18 +945,15 @@ class FindingsViewer:
         visible_start = max(0, self.cursor - viewport_size // 2)
         visible_end = min(len(self.visible_rows), visible_start + viewport_size)
 
-        # Build column metadata for visible columns
-        col_meta = [
-            (key, label, width)
-            for key, label, width in _ALL_COLUMNS
-            if key in self.visible_columns
-        ]
+        # Build column widths adapted to terminal size
+        term_width = shutil.get_terminal_size((120, 40)).columns
+        col_meta = self._compute_column_widths(term_width)
 
         # Table header
         header = "   " + "".join(f"{label:<{width}}" for _, label, width in col_meta)
         lines.append(("bold " + theme.muted, header + "\n"))
         total_width = sum(w for _, _, w in col_meta) + 3
-        lines.append((theme.muted, "   " + "-" * total_width + "\n"))
+        lines.append((theme.muted, "   " + "-" * min(total_width, term_width - 1) + "\n"))
 
         # Table rows
         for i in range(visible_start, visible_end):
@@ -1297,7 +1343,7 @@ def run_findings_app(
             viewer.dismiss_help()
 
     control = FormattedTextControl(viewer.render)
-    window = Window(content=control, wrap_lines=True)
+    window = Window(content=control, wrap_lines=False)
     layout = Layout(HSplit([window]))
 
     app: Application[None] = Application(
