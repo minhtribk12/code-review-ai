@@ -201,7 +201,7 @@ def _render_header(state: GraphState) -> _Lines:
     elif state.mode == GraphMode.CONFIRM:
         lines.append((theme.muted, " [y] checkout  [n] cancel\n"))
     else:
-        lines.append((theme.muted, " [Space] detail  [Enter] checkout  [q] quit\n"))
+        lines.append((theme.muted, " [Space] detail  [Enter] checkout  [r] refresh  [q] quit\n"))
 
     if state.status_message:
         style = theme.error if state.status_message.startswith("!") else theme.success
@@ -379,6 +379,8 @@ def _render_footer(state: GraphState) -> _Lines:
                 ("", " detail "),
                 (theme.accent, "[Enter]"),
                 ("", " checkout "),
+                (theme.accent, "[r]"),
+                ("", "efresh "),
                 (theme.muted, "[q]"),
                 ("", " quit\n"),
             ]
@@ -526,6 +528,12 @@ def run_graph_app(*, count: int = 30, branches: list[str] | None = None) -> None
     def _no(_e: KeyPressEvent) -> None:
         if state.mode == GraphMode.CONFIRM:
             state.cancel_confirm()
+
+    @kb.add("r")
+    def _refresh(_e: KeyPressEvent) -> None:
+        if state.mode == GraphMode.NAVIGATE:
+            state._refresh_graph()
+            state.status_message = "Refreshed"
 
     @kb.add("q")
     @kb.add("escape")
