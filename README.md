@@ -256,11 +256,18 @@ ReviewReport -> Rich terminal / JSON / Markdown
 
 See [docs/architecture.md](docs/architecture.md) for full design details.
 
+For the full command reference with all flags, smart behaviors, and
+workflows, see the detailed guides:
+- **[CLI Guide](docs/cli-guide.md)** -- all CLI commands, flags, CI/CD integration, exit codes
+- **[Interactive Guide](docs/interactive-guide.md)** -- all REPL commands, findings navigator, PR workflows
+
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [docs/architecture.md](docs/architecture.md) | System design, pipeline flow, component responsibilities, design decisions |
+| [docs/cli-guide.md](docs/cli-guide.md) | CLI commands, flags, CI/CD integration, cost control |
+| [docs/interactive-guide.md](docs/interactive-guide.md) | REPL commands, findings navigator, PR workflows |
+| [docs/architecture.md](docs/architecture.md) | System design, pipeline flow, component responsibilities |
 | [docs/configuration.md](docs/configuration.md) | All settings, provider URL resolution, secrets handling |
 | [docs/data-models.md](docs/data-models.md) | Pydantic models, StrEnums, LLM contracts |
 | [docs/custom-agents.md](docs/custom-agents.md) | YAML agent schema, examples, discovery, file patterns |
