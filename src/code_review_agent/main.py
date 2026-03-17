@@ -164,7 +164,14 @@ def review(
             if display is not None:
                 display.cancel()
                 display.stop()
-            typer.echo("Review cancelled by user.", err=True)
+            typer.echo("\nReview interrupted. Cancel review? (y/n)", err=True)
+            try:
+                answer = input("> ").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                answer = "y"
+            if answer != "y":
+                typer.echo("Review was already interrupted.", err=True)
+            typer.echo("Review cancelled.", err=True)
             raise typer.Exit(code=130) from None
         finally:
             if display is not None and not display.is_cancelled:

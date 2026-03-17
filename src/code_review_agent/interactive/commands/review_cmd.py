@@ -114,7 +114,16 @@ def _run_review_on_input(
             if display is not None:
                 display.cancel()
                 display.stop()
-            console.print("[yellow]Review cancelled by user.[/yellow]")
+            console.print()
+            console.print("[yellow]Review interrupted. Cancel review? (y/n)[/yellow]")
+            try:
+                answer = input("> ").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                answer = "y"
+            if answer == "y":
+                console.print("[yellow]Review cancelled.[/yellow]")
+                return
+            console.print("[dim]Resuming is not supported. Review was already interrupted.[/dim]")
             return
         finally:
             if display is not None and not display.is_cancelled:
