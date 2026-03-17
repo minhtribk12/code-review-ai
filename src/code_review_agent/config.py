@@ -83,6 +83,10 @@ class Settings(BaseSettings):
     history_db_path: str = "~/.cra/reviews.db"
     auto_save_history: bool = True
 
+    # Usage display window for toolbar and progress bar
+    # Options: session, hour, day, week, month, year, all
+    usage_window: str = Field(default="hour")
+
     @model_validator(mode="after")
     def _validate_custom_pricing(self) -> Settings:
         """Validate that custom pricing is either both set or both unset."""

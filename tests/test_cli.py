@@ -361,6 +361,8 @@ class TestReviewCommandWithDiff:
             settings_obj = MagicMock(spec=Settings)
             settings_obj.github_token = None
             settings_obj.token_tier = TokenTier.FREE
+            settings_obj.usage_window = "session"
+            settings_obj.history_db_path = "~/.cra/reviews.db"
             mock_settings.return_value = settings_obj
             mock_orch_cls.return_value.run.return_value = report
             mock_render.return_value = None
@@ -393,6 +395,8 @@ class TestReviewCommandWithDiff:
             settings_obj = MagicMock(spec=Settings)
             settings_obj.github_token = None
             settings_obj.token_tier = TokenTier.FREE
+            settings_obj.usage_window = "session"
+            settings_obj.history_db_path = "~/.cra/reviews.db"
             mock_settings.return_value = settings_obj
             mock_orch_cls.return_value.run.return_value = report
 
@@ -427,6 +431,8 @@ class TestReviewCommandWithDiff:
             settings_obj = MagicMock(spec=Settings)
             settings_obj.github_token = None
             settings_obj.token_tier = TokenTier.FREE
+            settings_obj.usage_window = "session"
+            settings_obj.history_db_path = "~/.cra/reviews.db"
             mock_settings.return_value = settings_obj
             mock_orch_cls.return_value.run.return_value = report
 

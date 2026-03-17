@@ -115,6 +115,27 @@ def _get_toolbar(session: SessionState) -> HTML:
         except Exception:
             repo_label = ""
 
+    # DB-backed usage stats for the configured window
+    usage_label = ""
+    try:
+        from code_review_agent.progress import USAGE_WINDOW_HOURS, USAGE_WINDOW_LABELS
+        from code_review_agent.storage import ReviewStorage
+
+        settings = session.effective_settings
+        window = settings.usage_window
+        if window != "session":
+            storage = ReviewStorage(settings.history_db_path)
+            hours = USAGE_WINDOW_HOURS.get(window)
+            stats = storage.get_usage_stats(hours=hours)
+            window_label = USAGE_WINDOW_LABELS.get(window, window)
+            tok = stats["total_tokens"]
+            tok_str = f"{tok / 1000:.1f}k" if tok >= 1000 else str(tok)
+            cost = stats["estimated_cost_usd"]
+            cost_str = f"${cost:.4f}" if 0 < cost < 0.01 else f"${cost:.2f}" if cost else "$0"
+            usage_label = f" | <b>{window_label}:</b> {tok_str} tokens, {cost_str}"
+    except Exception:  # noqa: S110
+        pass
+
     repo_part = f" | <b>Repo:</b> {repo_label}" if repo_label else ""
     separator = "\u2500" * 80
     return HTML(
@@ -124,6 +145,7 @@ def _get_toolbar(session: SessionState) -> HTML:
         f" | <b>Reviews:</b> {session.reviews_completed}"
         f" | <b>Tokens:</b> {tokens}"
         f" | <b>Tier:</b> {session.display_tier}"
+        f"{usage_label}"
         f"{'  !' if session.has_cost_warning else ''}"
     )
 

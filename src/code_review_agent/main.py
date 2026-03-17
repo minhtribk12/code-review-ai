@@ -149,6 +149,8 @@ def review(
         callback, display = create_progress_callback(
             agent_names=selected_names,
             is_quiet=is_quiet,
+            db_path=settings.history_db_path,
+            usage_window=settings.usage_window,
         )
 
         llm_client = LLMClient(settings=settings)
