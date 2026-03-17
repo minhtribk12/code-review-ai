@@ -232,9 +232,9 @@ class FindingsViewer:
         self.column_cursor: int = 0
         self.column_options: list[tuple[str, str, bool]] = []
 
-        # PR posting tracking
+        # PR posting tracking -- load posted state from storage
         self.comments_posted: int = 0
-        self.posted_indices: set[int] = set()
+        self.posted_indices: set[int] = self._load_persisted_posted()
         self.last_review_id: int | None = None
         self.last_comment_ids: list[int] = []
         self.comments_deleted: int = 0
@@ -266,6 +266,29 @@ class FindingsViewer:
         except Exception:
             logger.debug("failed to load persisted columns", exc_info=True)
         return list(_DEFAULT_VISIBLE)
+
+    def _load_persisted_posted(self) -> set[int]:
+        """Load posted indices from SQLite."""
+        if self._storage is None or self.review_id is None:
+            return set()
+        try:
+            return self._storage.load_posted(self.review_id)
+        except Exception:
+            logger.debug("failed to load persisted posted state", exc_info=True)
+            return set()
+
+    def _persist_posted(self, finding_index: int, *, is_posted: bool) -> None:
+        """Persist posted status to SQLite."""
+        if self._storage is None or self.review_id is None:
+            return
+        try:
+            self._storage.save_posted(
+                self.review_id,
+                finding_index,
+                is_posted=is_posted,
+            )
+        except Exception:
+            logger.debug("failed to persist posted state", exc_info=True)
 
     def _persist_triage(self, finding_index: int, action: TriageAction) -> None:
         """Persist a triage change to SQLite."""
@@ -608,7 +631,9 @@ class FindingsViewer:
             posted_inline = result.get("comments_posted", len(inline_comments))
             total_posted = posted_inline + len(general_findings)
             self.comments_posted += total_posted
-            self.posted_indices.update(self.staged_for_pr)
+            for idx in self.staged_for_pr:
+                self.posted_indices.add(idx)
+                self._persist_posted(idx, is_posted=True)
             self.staged_for_pr.clear()
 
             # Track posted review for deletion
@@ -679,6 +704,8 @@ class FindingsViewer:
             self.comments_deleted += deleted
             self.last_comment_ids.clear()
             self.last_review_id = None
+            for idx in list(self.posted_indices):
+                self._persist_posted(idx, is_posted=False)
             self.posted_indices.clear()
             self.status_message = (
                 f"Deleted {deleted} comment(s). Stage findings and press 'P' to re-post."
@@ -752,15 +779,29 @@ class FindingsViewer:
         return ("", "")
 
     def _triage_label(self, index: int) -> tuple[str, str]:
-        """Return (style, label) for a finding's triage status."""
+        """Return (style, label) for a finding's triage + posted status."""
         action = self.triage.get(index, TriageAction.NONE)
+        is_posted = index in self.posted_indices
+
+        parts: list[str] = []
         if action == TriageAction.FALSE_POSITIVE:
-            return (theme.muted, "[FP]")
-        if action == TriageAction.IGNORED:
-            return (theme.muted, "[IGN]")
+            parts.append("FP")
+        elif action == TriageAction.IGNORED:
+            parts.append("IGN")
+        elif action == TriageAction.SOLVED:
+            parts.append("DONE")
+        if is_posted:
+            parts.append("POST")
+
+        if not parts:
+            return ("", "")
+
+        label = "[" + "|".join(parts) + "]"
         if action == TriageAction.SOLVED:
-            return (theme.success, "[DONE]")
-        return ("", "")
+            return (theme.success, label)
+        if is_posted:
+            return (theme.accent, label)
+        return (theme.muted, label)
 
     def _render_cell(
         self,
@@ -964,6 +1005,8 @@ class FindingsViewer:
             ("", "ark FP "),
             (theme.accent, "[i]"),
             ("", "gnore "),
+            (theme.accent, "[x]"),
+            ("", "solved "),
             (theme.accent, "[p]"),
             ("", "stage "),
         ]

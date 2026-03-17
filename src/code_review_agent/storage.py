@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS finding_triage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     review_id INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
     finding_index INTEGER NOT NULL,
-    triage_action TEXT NOT NULL,
+    triage_action TEXT NOT NULL DEFAULT 'none',
+    is_posted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(review_id, finding_index)
 );
@@ -428,6 +429,43 @@ class ReviewStorage:
         reviews = self.list_reviews(repo=repo, limit=limit)
         return json.dumps(reviews, indent=2, default=str)
 
+    def get_reviews_with_unsolved_findings(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        """Get recent reviews that have at least one unsolved finding.
+
+        A finding is considered unsolved if it has no triage action or its
+        triage action is not 'solved'. Returns review metadata with
+        report_json for full reconstruction.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT r.id, r.repo, r.pr_number, r.pr_url, r.risk_level,
+                       r.total_findings, r.reviewed_at, r.report_json
+                FROM reviews r
+                WHERE r.total_findings > 0
+                  AND EXISTS (
+                    -- At least one finding index that is not 'solved'
+                    SELECT 1 FROM (
+                      -- Generate finding indices 0..total_findings-1
+                      WITH RECURSIVE cnt(x) AS (
+                        VALUES(0)
+                        UNION ALL
+                        SELECT x+1 FROM cnt WHERE x < r.total_findings - 1
+                      )
+                      SELECT x FROM cnt
+                      WHERE x NOT IN (
+                        SELECT finding_index FROM finding_triage
+                        WHERE review_id = r.id AND triage_action = 'solved'
+                      )
+                    )
+                  )
+                ORDER BY r.reviewed_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     # -- Finding triage persistence --
 
     def save_triage(
@@ -439,35 +477,82 @@ class ReviewStorage:
         """Persist a triage action for a specific finding.
 
         Uses INSERT OR REPLACE so repeated calls update the action.
-        If ``triage_action`` is ``"none"``, the row is deleted instead.
+        If ``triage_action`` is ``"none"``, resets triage but preserves
+        ``is_posted`` state.
         """
         with self._get_connection() as conn:
             if triage_action == "none":
+                # Reset triage but keep is_posted if row exists
                 conn.execute(
-                    "DELETE FROM finding_triage WHERE review_id = ? AND finding_index = ?",
+                    """
+                    UPDATE finding_triage SET triage_action = 'none'
+                    WHERE review_id = ? AND finding_index = ?
+                    """,
                     (review_id, finding_index),
                 )
             else:
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO finding_triage
+                    INSERT INTO finding_triage
                         (review_id, finding_index, triage_action, created_at)
                     VALUES (?, ?, ?, datetime('now'))
+                    ON CONFLICT(review_id, finding_index)
+                    DO UPDATE SET triage_action = excluded.triage_action,
+                                  created_at = excluded.created_at
                     """,
                     (review_id, finding_index, triage_action),
                 )
+
+    def save_posted(
+        self,
+        review_id: int,
+        finding_index: int,
+        *,
+        is_posted: bool,
+    ) -> None:
+        """Persist posted status for a specific finding.
+
+        Independent of triage action -- a finding can be both solved
+        and posted.
+        """
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO finding_triage
+                    (review_id, finding_index, is_posted, created_at)
+                VALUES (?, ?, ?, datetime('now'))
+                ON CONFLICT(review_id, finding_index)
+                DO UPDATE SET is_posted = excluded.is_posted
+                """,
+                (review_id, finding_index, int(is_posted)),
+            )
 
     def load_triage(self, review_id: int) -> dict[int, str]:
         """Load all triage actions for a review.
 
         Returns a dict mapping finding_index -> triage_action string.
+        Only includes entries with non-'none' triage action.
         """
         with self._get_connection() as conn:
             rows = conn.execute(
-                "SELECT finding_index, triage_action FROM finding_triage WHERE review_id = ?",
+                """SELECT finding_index, triage_action FROM finding_triage
+                   WHERE review_id = ? AND triage_action != 'none'""",
                 (review_id,),
             ).fetchall()
         return {row["finding_index"]: row["triage_action"] for row in rows}
+
+    def load_posted(self, review_id: int) -> set[int]:
+        """Load posted finding indices for a review.
+
+        Returns a set of finding indices that have been posted to PR.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """SELECT finding_index FROM finding_triage
+                   WHERE review_id = ? AND is_posted = 1""",
+                (review_id,),
+            ).fetchall()
+        return {row["finding_index"] for row in rows}
 
     # -- Finding settings persistence --
 

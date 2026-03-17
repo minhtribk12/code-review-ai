@@ -878,6 +878,7 @@ class TestPrReviewAutoStash:
         ):
             mock_info.return_value = ("acme", "app", "ghp_token")
             mock_git.is_working_tree_dirty.return_value = True
+            mock_git.stash_push.return_value = "Saved working directory"
             mock_fetch.return_value = MagicMock(diff_files=[])  # No files -> early return
 
             _dispatch("pr review 42", session_with_token)

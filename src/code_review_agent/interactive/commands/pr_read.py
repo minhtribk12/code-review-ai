@@ -310,10 +310,15 @@ def _pr_review(args: list[str], session: SessionState) -> None:
     pr_number = _parse_pr_number(args)
 
     # Auto-stash dirty working tree
-    is_dirty = git_ops.is_working_tree_dirty()
-    if is_dirty:
+    did_stash = False
+    if git_ops.is_working_tree_dirty():
         console.print("  [dim]Stashing local changes...[/dim]")
-        git_ops.stash_push()
+        try:
+            output = git_ops.stash_push()
+            # git stash push outputs "No local changes to save" when nothing to stash
+            did_stash = "No local changes" not in output
+        except git_ops.GitError:
+            did_stash = False
 
     try:
         console.print(f"  Fetching {owner}/{repo}#{pr_number}...")
@@ -343,7 +348,7 @@ def _pr_review(args: list[str], session: SessionState) -> None:
             output_format=output_format,
         )
     finally:
-        if is_dirty:
+        if did_stash:
             console.print("  [dim]Restoring stashed changes...[/dim]")
             try:
                 git_ops.stash_pop()
