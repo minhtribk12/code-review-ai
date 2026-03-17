@@ -7,6 +7,7 @@ class SecurityAgent(BaseAgent):
     """Agent specialized in security vulnerability detection."""
 
     name = "security"
+    priority = 0
 
     system_prompt = (
         "You are an expert security code reviewer. Analyze the provided code diff "

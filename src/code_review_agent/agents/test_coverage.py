@@ -7,6 +7,7 @@ class TestCoverageAgent(BaseAgent):
     """Agent specialized in test coverage and test quality review."""
 
     name = "test_coverage"
+    priority = 3
 
     system_prompt = (
         "You are an expert test coverage and quality reviewer. Analyze the provided "

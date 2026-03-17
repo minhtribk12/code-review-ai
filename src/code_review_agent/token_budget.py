@@ -137,7 +137,7 @@ class CharBasedEstimator:
 
     def estimate(self, text: str) -> int:
         """Return estimated token count for the given text."""
-        return len(text) // self._chars_per_token
+        return -(-len(text) // self._chars_per_token)
 
 
 def resolve_prompt_budget(settings: Settings) -> int:

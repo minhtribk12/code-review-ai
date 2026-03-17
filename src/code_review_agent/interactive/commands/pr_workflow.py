@@ -66,7 +66,10 @@ def _parse_limit(args: list[str], default: int = 30) -> tuple[list[str], int]:
     i = 0
     while i < len(args):
         if args[i] == "--limit" and i + 1 < len(args):
-            limit = int(args[i + 1])
+            try:
+                limit = int(args[i + 1])
+            except ValueError:
+                limit = default
             i += 2
         else:
             remaining.append(args[i])
@@ -181,7 +184,11 @@ def pr_stale(args: list[str], session: SessionState) -> None:
     i = 0
     while i < len(args):
         if args[i] == "--days" and i + 1 < len(args):
-            stale_days = int(args[i + 1])
+            try:
+                stale_days = int(args[i + 1])
+            except ValueError:
+                console.print(f"[red]Invalid --days value: {args[i + 1]} (expected integer)[/red]")
+                return
             i += 2
         else:
             i += 1

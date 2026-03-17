@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     github_rate_limit_warn_threshold: int = Field(default=100, ge=0)
     pr_stale_days: int = Field(default=7, ge=1)
     log_level: LogLevel = LogLevel.INFO
-    max_concurrent_agents: int = 4
+    max_concurrent_agents: int = Field(default=4, ge=1)
     interactive_history_file: str = "~/.cra_history"
     interactive_prompt: str = "cra> "
     interactive_vi_mode: bool = False
@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     max_deepening_rounds: int = Field(default=1, ge=1, le=5)
     is_validation_enabled: bool = False
     max_validation_rounds: int = Field(default=1, ge=1, le=3)
+
+    # Custom agents
+    custom_agents_dir: str = "~/.cra/agents"
 
     # History
     history_db_path: str = "~/.cra/reviews.db"

@@ -23,12 +23,12 @@ class TestCharBasedEstimator:
 
     def test_default_chars_per_token(self) -> None:
         est = CharBasedEstimator()
-        # 12 chars // 3 = 4 tokens
+        # 12 chars / 3 = 4 tokens (exact division)
         assert est.estimate("hello world!") == 4
 
     def test_custom_chars_per_token(self) -> None:
         est = CharBasedEstimator(chars_per_token=4)
-        # 12 chars // 4 = 3 tokens
+        # 12 chars / 4 = 3 tokens (exact division)
         assert est.estimate("hello world!") == 3
 
     def test_empty_string(self) -> None:
@@ -38,14 +38,21 @@ class TestCharBasedEstimator:
     def test_code_like_string(self) -> None:
         est = CharBasedEstimator()
         code = "def authenticate(username: str, password: str) -> bool:\n"
-        # Should return a reasonable estimate
+        # Ceiling division overestimates to avoid exceeding context limits
         assert est.estimate(code) > 0
-        assert est.estimate(code) == len(code) // 3
+        expected = -(-len(code) // 3)
+        assert est.estimate(code) == expected
 
     def test_long_diff(self) -> None:
         est = CharBasedEstimator()
         long_text = "+new line\n" * 1000  # 10000 chars
-        assert est.estimate(long_text) == 10000 // 3
+        # 10000 / 3 = 3333.33 -> ceiling = 3334
+        assert est.estimate(long_text) == -(-10000 // 3)
+
+    def test_ceiling_rounds_up(self) -> None:
+        est = CharBasedEstimator()
+        # 7 chars / 3 = 2.33 -> ceiling = 3 (not floor 2)
+        assert est.estimate("abcdefg") == 3
 
 
 # ---------------------------------------------------------------------------

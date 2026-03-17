@@ -7,6 +7,7 @@ class PerformanceAgent(BaseAgent):
     """Agent specialized in performance issue detection."""
 
     name = "performance"
+    priority = 1
 
     system_prompt = (
         "You are an expert performance code reviewer. Analyze the provided code diff "

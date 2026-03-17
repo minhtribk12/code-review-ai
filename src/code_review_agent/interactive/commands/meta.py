@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.table import Table
 
-from code_review_agent.agents import ALL_AGENT_NAMES
+from code_review_agent.agents import AGENT_REGISTRY, ALL_AGENT_NAMES, CUSTOM_AGENT_NAMES
 
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
@@ -147,9 +147,18 @@ def cmd_agents(args: list[str], session: SessionState) -> None:
     """List available review agents."""
     table = Table(title="Available Agents", show_lines=False)
     table.add_column("Name", style="bold")
+    table.add_column("Type", style="dim")
+    table.add_column("Pri", justify="right")
     table.add_column("Description")
     for name in ALL_AGENT_NAMES:
-        table.add_row(name, f"Specialized {name} reviewer")
+        is_custom = name in CUSTOM_AGENT_NAMES
+        agent_cls = AGENT_REGISTRY.get(name)
+        label = "[custom]" if is_custom else "[built-in]"
+        priority = str(getattr(agent_cls, "priority", "?"))
+        description = getattr(agent_cls, "_custom_description", "") if is_custom else ""
+        if not description:
+            description = f"Specialized {name} reviewer"
+        table.add_row(name, label, priority, description)
     console.print(table)
 
 

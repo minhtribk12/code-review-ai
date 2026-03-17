@@ -349,6 +349,7 @@ class TestReviewCommandWithDiff:
 
         with (
             patch("code_review_agent.main._load_settings") as mock_settings,
+            patch("code_review_agent.main.register_custom_agents"),
             patch("code_review_agent.main.LLMClient"),
             patch("code_review_agent.main.Orchestrator") as mock_orch_cls,
             patch("code_review_agent.main.render_report_rich") as mock_render,
@@ -379,6 +380,7 @@ class TestReviewCommandWithDiff:
 
         with (
             patch("code_review_agent.main._load_settings") as mock_settings,
+            patch("code_review_agent.main.register_custom_agents"),
             patch("code_review_agent.main.LLMClient"),
             patch("code_review_agent.main.Orchestrator") as mock_orch_cls,
             patch("code_review_agent.main.render_report_rich"),
@@ -414,6 +416,7 @@ class TestReviewCommandWithDiff:
 
         with (
             patch("code_review_agent.main._load_settings") as mock_settings,
+            patch("code_review_agent.main.register_custom_agents"),
             patch("code_review_agent.main.LLMClient"),
             patch("code_review_agent.main.Orchestrator") as mock_orch_cls,
             patch(

@@ -7,6 +7,7 @@ class StyleAgent(BaseAgent):
     """Agent specialized in code style and readability review."""
 
     name = "style"
+    priority = 2
 
     system_prompt = (
         "You are an expert code style and readability reviewer. Analyze the provided "

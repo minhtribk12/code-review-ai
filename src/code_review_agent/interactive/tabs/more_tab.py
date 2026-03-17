@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from textual.containers import Vertical
 from textual.widgets import DataTable, Static
 
-from code_review_agent.agents import ALL_AGENT_NAMES
+from code_review_agent.agents import AGENT_REGISTRY, CUSTOM_AGENT_NAMES
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
@@ -51,8 +51,9 @@ class MoreTab(Vertical):
 
         if cmd == "agents":
             lines = [" [bold]Available Review Agents[/bold]", ""]
-            for name in ALL_AGENT_NAMES:
-                lines.append(f"   {name}")
+            for name in AGENT_REGISTRY:
+                label = " [custom]" if name in CUSTOM_AGENT_NAMES else ""
+                lines.append(f"   {name}{label}")
             output_widget.update("\n".join(lines))
         elif cmd == "version":
             output_widget.update(f" code-review-agent {_VERSION}")

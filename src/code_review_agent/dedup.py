@@ -15,14 +15,17 @@ from code_review_agent.models import AgentResult, Finding, Severity
 
 logger = structlog.get_logger(__name__)
 
-# Agent priority for tiebreaking (lower index = higher priority).
-# Matches AGENT_REGISTRY order in agents/__init__.py.
-_AGENT_PRIORITY: dict[str, int] = {
-    "security": 0,
-    "performance": 1,
-    "style": 2,
-    "test_coverage": 3,
-}
+
+def _get_agent_priority(agent_name: str) -> int:
+    """Return the dedup priority for an agent (lower = higher priority).
+
+    Reads from BaseAgent._priority_registry, which is populated by
+    ``__init_subclass__``. Unknown agents default to 99.
+    """
+    from code_review_agent.agents.base import BaseAgent
+
+    return BaseAgent._priority_registry.get(agent_name, 99)
+
 
 _SEVERITY_RANK: dict[Severity, int] = {
     Severity.CRITICAL: 0,
@@ -167,6 +170,6 @@ def _pick_survivor(
         return 0 if rank_a < rank_b else 1
 
     # Tiebreaker: agent priority (lower = higher priority)
-    priority_a = _AGENT_PRIORITY.get(agent_a, 99)
-    priority_b = _AGENT_PRIORITY.get(agent_b, 99)
+    priority_a = _get_agent_priority(agent_a)
+    priority_b = _get_agent_priority(agent_b)
     return 0 if priority_a <= priority_b else 1

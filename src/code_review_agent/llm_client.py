@@ -118,7 +118,17 @@ class LLMClient:
         last_error: Exception | None = None
 
         for attempt in range(_MAX_PARSE_RETRIES + 1):
-            raw_content = self._call_api(system_with_schema, user_prompt)
+            try:
+                raw_content = self._call_api(system_with_schema, user_prompt)
+            except LLMEmptyResponseError as err:
+                last_error = err
+                if attempt < _MAX_PARSE_RETRIES:
+                    logger.warning(
+                        "llm returned empty response, retrying",
+                        attempt=attempt,
+                    )
+                    continue
+                raise
 
             # Layer 1: strip markdown fences and parse directly
             cleaned = _strip_markdown_fences(raw_content)
@@ -206,6 +216,8 @@ class LLMClient:
             if usage is not None:
                 self._total_prompt_tokens += usage.prompt_tokens
                 self._total_completion_tokens += usage.completion_tokens
+            else:
+                logger.warning("llm response missing usage data, token tracking may be inaccurate")
 
         if usage is not None:
             logger.info(

@@ -165,9 +165,8 @@ class ReviewStorage:
         agents = ",".join(r.agent_name for r in report.agent_results)
         agents_count = len(report.agent_results)
         total_exec = sum(r.execution_time_seconds for r in report.agent_results)
-        files_reviewed = sum(
-            len(r.findings) for r in report.agent_results
-        )  # Approximate from finding count
+        # No per-file count available on ReviewReport; store 0 as placeholder
+        files_reviewed = 0
 
         # Count files from the report JSON (diff_files not on ReviewReport,
         # but pr_url presence indicates PR review with files)
@@ -195,7 +194,7 @@ class ReviewStorage:
                     repo,
                     pr_number,
                     report.pr_url,
-                    report.pr_title if hasattr(report, "pr_title") else None,
+                    getattr(report, "pr_title", None),
                     str(report.risk_level),
                     report.overall_summary,
                     sum(findings.values()),
@@ -215,7 +214,7 @@ class ReviewStorage:
                     files_reviewed,
                     agents_count,
                     agents,
-                    getattr(report, "rounds_completed", 1),
+                    report.rounds_completed,
                     report_json,
                 ),
             )

@@ -16,7 +16,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
 from pydantic import SecretStr
 
-from code_review_agent.agents import ALL_AGENT_NAMES
+from code_review_agent.agents import AGENT_REGISTRY
 from code_review_agent.config import Settings
 from code_review_agent.theme import theme
 
@@ -29,10 +29,12 @@ if TYPE_CHECKING:
 # Fields to exclude from the editor (computed or internal).
 _EXCLUDED_FIELDS = frozenset({"resolved_llm_base_url"})
 
+
 # Fields that use multi-select (checkbox) instead of single-select (radio).
-_MULTI_SELECT_FIELDS: dict[str, list[str]] = {
-    "default_agents": [*ALL_AGENT_NAMES, "all"],
-}
+def _get_multi_select_fields() -> dict[str, list[str]]:
+    """Build multi-select options at runtime so custom agents are included."""
+    return {"default_agents": [*AGENT_REGISTRY.keys(), "all"]}
+
 
 # Config keys grouped by category.
 _CATEGORIES: list[tuple[str, list[str]]] = [
@@ -346,7 +348,7 @@ class ConfigEditor:
             return
 
         # Multi-select field
-        if key in _MULTI_SELECT_FIELDS:
+        if key in _get_multi_select_fields():
             self._open_multi_select(key)
             return
 
@@ -376,7 +378,7 @@ class ConfigEditor:
     def _open_multi_select(self, key: str) -> None:
         self.mode = _EditMode.MULTI_SELECT
         self.selector_key = key
-        self.selector_choices = _MULTI_SELECT_FIELDS[key]
+        self.selector_choices = _get_multi_select_fields()[key]
         current_csv = self.values.get(key, "")
         selected = {s.strip() for s in current_csv.split(",") if s.strip()}
 
@@ -559,7 +561,7 @@ class ConfigEditor:
                 display = _format_display_value(key, raw_val)
 
                 # For multi-select, show as readable list
-                if key in _MULTI_SELECT_FIELDS:
+                if key in _get_multi_select_fields():
                     if raw_val and raw_val not in ("None", ""):
                         display = raw_val.replace(",", ", ")
                     else:

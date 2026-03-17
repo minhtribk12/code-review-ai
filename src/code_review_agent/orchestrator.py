@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from code_review_agent.agents import AGENT_REGISTRY, ALL_AGENT_NAMES
+from code_review_agent.agent_loader import matches_diff_files
+from code_review_agent.agents import AGENT_REGISTRY
 from code_review_agent.dedup import deduplicate_agent_results
 from code_review_agent.models import (
     AgentResult,
@@ -113,12 +114,12 @@ class Orchestrator:
         injection_findings = self._scan_for_injection(review_input)
 
         selected_names = agent_names or default_agents_for_tier(self._settings.token_tier)
-        agents: list[BaseAgent] = self._build_agents(selected_names)
+        agents = self._build_agents(selected_names, review_input)
 
         logger.info(
             "running agents",
             selected=[a.name for a in agents],
-            total_registered=len(ALL_AGENT_NAMES),
+            total_registered=len(AGENT_REGISTRY),
         )
 
         max_rounds = self._settings.max_deepening_rounds
@@ -186,20 +187,18 @@ class Orchestrator:
                 )
                 break
 
-        agent_results = all_agent_results
-
         if injection_findings:
-            agent_results = self._inject_security_findings(
-                agent_results,
+            all_agent_results = self._inject_security_findings(
+                all_agent_results,
                 injection_findings,
             )
 
-        successful_results = [r for r in agent_results if r.status != AgentStatus.FAILED]
+        successful_results = [r for r in all_agent_results if r.status != AgentStatus.FAILED]
 
         if len(successful_results) <= 1:
             report = self._build_report_without_synthesis(
                 review_input=review_input,
-                agent_results=agent_results,
+                agent_results=all_agent_results,
                 successful_results=successful_results,
             )
             return report.model_copy(
@@ -207,7 +206,7 @@ class Orchestrator:
             )
 
         self._emit(ReviewEvent.SYNTHESIS_STARTED, "synthesis")
-        synthesis = self._synthesize(agent_results=agent_results)
+        synthesis = self._synthesize(agent_results=all_agent_results)
         self._emit(ReviewEvent.SYNTHESIS_COMPLETED, "synthesis")
 
         # Validation: filter false positives if enabled
@@ -216,11 +215,11 @@ class Orchestrator:
             try:
                 self._emit(ReviewEvent.VALIDATION_STARTED, "validation")
                 validation_result = self._validate_findings(
-                    agent_results=agent_results,
+                    agent_results=all_agent_results,
                     review_input=review_input,
                 )
-                agent_results = self._apply_validation(
-                    agent_results,
+                all_agent_results = self._apply_validation(
+                    all_agent_results,
                     validation_result,
                 )
                 self._emit(ReviewEvent.VALIDATION_COMPLETED, "validation")
@@ -233,13 +232,13 @@ class Orchestrator:
 
         validated_risk = self._validate_risk_level(
             synthesis.risk_level,
-            agent_results,
+            all_agent_results,
         )
 
         return ReviewReport(
             pr_url=review_input.pr_url,
             reviewed_at=datetime.now(tz=UTC),
-            agent_results=agent_results,
+            agent_results=all_agent_results,
             overall_summary=synthesis.overall_summary,
             risk_level=validated_risk,
             fetch_warnings=review_input.fetch_warnings,
@@ -337,8 +336,13 @@ class Orchestrator:
 
         return updated
 
-    def _build_agents(self, agent_names: list[str]) -> list[BaseAgent]:
-        """Instantiate agents by name from the registry."""
+    def _build_agents(
+        self,
+        agent_names: list[str],
+        review_input: ReviewInput,
+    ) -> list[BaseAgent]:
+        """Instantiate agents by name, filtering by file patterns."""
+        filenames = [f.filename for f in review_input.diff_files]
         agents: list[BaseAgent] = []
         for name in agent_names:
             agent_cls = AGENT_REGISTRY.get(name)
@@ -346,7 +350,15 @@ class Orchestrator:
                 logger.warning(
                     "unknown agent name, skipping",
                     agent=name,
-                    available=ALL_AGENT_NAMES,
+                    available=list(AGENT_REGISTRY.keys()),
+                )
+                continue
+            file_patterns: list[str] | None = getattr(agent_cls, "_file_patterns", None)
+            if not matches_diff_files(file_patterns, filenames):
+                logger.info(
+                    "skipping agent, no matching files",
+                    agent=name,
+                    patterns=file_patterns,
                 )
                 continue
             agents.append(agent_cls(llm_client=self._llm_client))

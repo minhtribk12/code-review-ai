@@ -5,7 +5,7 @@ from pathlib import Path  # noqa: TC003 - Typer needs Path at runtime
 import structlog
 import typer
 
-from code_review_agent.agents import ALL_AGENT_NAMES
+from code_review_agent.agents import AGENT_REGISTRY, register_custom_agents
 from code_review_agent.config import Settings
 from code_review_agent.github_client import fetch_pr_diff, parse_pr_reference
 from code_review_agent.llm_client import LLMClient
@@ -106,8 +106,8 @@ def review(
         "--agents",
         help=(
             "Comma-separated agent names to run. "
-            f"Available: {', '.join(ALL_AGENT_NAMES)}. "
-            "Default: all agents."
+            "Use 'cra agents' for the full list. "
+            "Default: tier-based selection."
         ),
     ),
     quiet: bool = typer.Option(
@@ -140,6 +140,7 @@ def review(
 
     try:
         settings = _load_settings()
+        register_custom_agents(settings)
         review_input = _build_review_input(pr=pr, diff=diff, settings=settings)
 
         agent_names = _parse_agent_names(agents)
@@ -194,6 +195,7 @@ def findings(
 
     try:
         settings = _load_settings()
+        register_custom_agents(settings)
     except SystemExit:
         raise
     except Exception as exc:
@@ -224,6 +226,7 @@ def interactive() -> None:
 
     try:
         settings = _load_settings()
+        register_custom_agents(settings)
     except SystemExit:
         raise
     except Exception as exc:
@@ -263,6 +266,7 @@ def _parse_agent_names(agents_arg: str | None) -> list[str] | None:
     """Parse the --agents CLI flag into a list of agent names.
 
     Returns ``None`` for the default (all agents).
+    Uses the live ``AGENT_REGISTRY`` which includes custom agents.
     """
     if agents_arg is None:
         return None
@@ -271,11 +275,11 @@ def _parse_agent_names(agents_arg: str | None) -> list[str] | None:
     if not names:
         return None
 
-    invalid = [n for n in names if n not in ALL_AGENT_NAMES]
+    available = list(AGENT_REGISTRY.keys())
+    invalid = [n for n in names if n not in AGENT_REGISTRY]
     if invalid:
         typer.echo(
-            f"Error: unknown agent(s): {', '.join(invalid)}. "
-            f"Available: {', '.join(ALL_AGENT_NAMES)}",
+            f"Error: unknown agent(s): {', '.join(invalid)}. Available: {', '.join(available)}",
             err=True,
         )
         raise typer.Exit(code=1)

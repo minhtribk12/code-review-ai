@@ -48,9 +48,11 @@ class BaseAgent(ABC):
 
     name: str
     system_prompt: str
+    priority: int = 100
 
     _VALID_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
     _registered_names: ClassVar[set[str]] = set()
+    _priority_registry: ClassVar[dict[str, int]] = {}
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -72,6 +74,13 @@ class BaseAgent(ABC):
                 f"Each agent must have a unique name."
             )
         cls._registered_names.add(agent_name)
+
+        agent_priority = cls.__dict__.get("priority", 100)
+        if not isinstance(agent_priority, int):
+            raise TypeError(
+                f"{cls.__name__}.priority must be an int, got {type(agent_priority).__name__}"
+            )
+        cls._priority_registry[agent_name] = agent_priority
 
     def __init__(self, llm_client: LLMClient) -> None:
         self._llm_client = llm_client

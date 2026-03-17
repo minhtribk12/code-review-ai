@@ -55,7 +55,11 @@ def cmd_log(args: list[str], session: SessionState) -> None:
     i = 0
     while i < len(args):
         if args[i] == "-n" and i + 1 < len(args):
-            count = int(args[i + 1])
+            try:
+                count = int(args[i + 1])
+            except ValueError:
+                console.print(f"[red]Invalid count: {args[i + 1]} (expected integer)[/red]")
+                return
             i += 2
         else:
             branch = args[i]
