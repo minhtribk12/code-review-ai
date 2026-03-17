@@ -220,31 +220,43 @@ class FindingsViewer:
     def _apply_filters(self) -> None:
         """Rebuild visible_rows from all_rows based on active filters.
 
-        Hides solved findings by default unless an explicit triage filter
-        includes 'solved'.
+        Triage filter semantics:
+        - No triage filter: show all except solved (default behavior)
+        - Triage filter present: the filter values define which triage
+          states are VISIBLE. E.g. adding "solved" to triage filter
+          means "also show solved findings" (it gets merged with the
+          default visible set: open, false_positive, ignored).
+
+        Other filters use AND logic: a row must match ALL active filters.
         """
-        has_triage_filter = any(f.field == "triage_action" for f in self.active_filters)
-
-        rows = list(self.all_rows)
-
-        # Default: hide solved unless triage filter is active
-        if not has_triage_filter:
-            rows = [
-                r
-                for r in rows
-                if self.triage.get(r.finding_db_id, TriageAction.OPEN) != TriageAction.SOLVED
-            ]
-
+        # Build the set of visible triage states
+        visible_triage: set[str] = {"open", "false_positive", "ignored"}
         for af in self.active_filters:
-            rows = [r for r in rows if self._row_matches_filter(r, af)]
+            if af.field == "triage_action":
+                visible_triage |= af.values
+
+        rows: list[FindingRow] = []
+        for r in self.all_rows:
+            # Check triage visibility
+            current_triage = str(self.triage.get(r.finding_db_id, TriageAction.OPEN))
+            if current_triage not in visible_triage:
+                continue
+
+            # Check non-triage filters (AND logic)
+            is_visible = True
+            for af in self.active_filters:
+                if af.field == "triage_action":
+                    continue  # already handled above
+                if not self._row_matches_filter(r, af):
+                    is_visible = False
+                    break
+            if is_visible:
+                rows.append(r)
 
         self.visible_rows = rows
         self._apply_sort()
 
     def _row_matches_filter(self, row: FindingRow, af: ActiveFilter) -> bool:
-        if af.field == "triage_action":
-            current = self.triage.get(row.finding_db_id, TriageAction.OPEN)
-            return str(current) in af.values
         val = getattr(row, af.field, None)
         return str(val or "").lower() in {v.lower() for v in af.values}
 
