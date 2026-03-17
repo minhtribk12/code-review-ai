@@ -177,6 +177,10 @@ class ReviewStorage:
         if "finding_triage" in tables and "findings" in tables:
             self._migrate_v3_to_v4(conn)
 
+        # Backfill: populate findings from report_json if table exists but is empty
+        if "findings" in tables:
+            self._backfill_findings(conn)
+
     def _migrate_v3_to_v4(self, conn: sqlite3.Connection) -> None:
         """Migrate from finding_triage to the findings table.
 
@@ -199,10 +203,11 @@ class ReviewStorage:
             try:
                 self._migrate_review_findings(conn, dict(review))
                 migrated_count += 1
-            except Exception:
+            except Exception as exc:
                 logger.warning(
                     "skipping review during v3->v4 migration",
                     review_id=review["id"],
+                    error=str(exc),
                 )
 
         conn.execute("DROP TABLE IF EXISTS finding_triage")
@@ -222,7 +227,7 @@ class ReviewStorage:
         from code_review_agent.github_client import parse_pr_reference
         from code_review_agent.models import ReviewReport
 
-        report = ReviewReport.model_validate(json.loads(review["report_json"]))
+        report = ReviewReport.model_validate_json(review["report_json"])
         review_id = review["id"]
         repo = review["repo"]
         pr_number: int | None = None
@@ -271,6 +276,73 @@ class ReviewStorage:
                     ),
                 )
                 idx += 1
+
+    def _backfill_findings(self, conn: sqlite3.Connection) -> None:
+        """Populate findings table from report_json for reviews that have none.
+
+        Handles the case where migration failed or old reviews exist without
+        corresponding findings rows.
+        """
+        from code_review_agent.models import ReviewReport
+
+        reviews = conn.execute(
+            """
+            SELECT r.id, r.repo, r.pr_url, r.report_json
+            FROM reviews r
+            WHERE r.total_findings > 0
+              AND NOT EXISTS (SELECT 1 FROM findings f WHERE f.review_id = r.id)
+            """
+        ).fetchall()
+
+        if not reviews:
+            return
+
+        backfilled = 0
+        for review in reviews:
+            try:
+                report = ReviewReport.model_validate_json(review["report_json"])
+                pr_number = _extract_pr_number(review["pr_url"])
+                repo = review["repo"]
+                review_id = review["id"]
+
+                idx = 0
+                for result in report.agent_results:
+                    for finding in result.findings:
+                        conn.execute(
+                            """
+                            INSERT OR IGNORE INTO findings (
+                                review_id, finding_index, severity, agent_name,
+                                category, title, description, file_path,
+                                line_number, suggestion, confidence, repo,
+                                pr_number
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                review_id,
+                                idx,
+                                str(finding.severity),
+                                result.agent_name,
+                                finding.category,
+                                finding.title,
+                                finding.description,
+                                finding.file_path,
+                                finding.line_number,
+                                finding.suggestion,
+                                str(finding.confidence),
+                                repo,
+                                pr_number,
+                            ),
+                        )
+                        idx += 1
+                backfilled += 1
+            except Exception:
+                logger.debug(
+                    "failed to backfill findings for review",
+                    review_id=review["id"],
+                )
+
+        if backfilled:
+            logger.info("backfilled findings from report_json", count=backfilled)
 
     # -- Save --
 
