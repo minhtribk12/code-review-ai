@@ -67,6 +67,7 @@ class GraphState:
     detail_text: str = ""
     status_message: str = ""
     count: int = 30
+    branches: list[str] | None = None
 
     @property
     def current_commit(self) -> GraphCommit | None:
@@ -109,12 +110,34 @@ class GraphState:
         try:
             git_ops.checkout_ref(commit.hash)
             self.status_message = f"Checked out {commit.hash}"
+            self._refresh_graph()
         except git_ops.GitError as exc:
             self.status_message = f"! Checkout failed: {exc}"
         self.mode = GraphMode.NAVIGATE
 
     def cancel_confirm(self) -> None:
         self.mode = GraphMode.NAVIGATE
+
+    def _refresh_graph(self) -> None:
+        """Re-run git log --graph and update the graph data.
+
+        Preserves cursor position on the same commit hash if possible.
+        """
+        current_hash = self.current_commit.hash if self.current_commit else None
+
+        raw = git_ops.log_graph(count=self.count, branches=self.branches)
+        if not raw.strip():
+            return
+
+        self.raw_lines, self.commits = _parse_graph(raw)
+
+        # Restore cursor to the same commit
+        if current_hash:
+            for i, c in enumerate(self.commits):
+                if c.hash == current_hash:
+                    self.cursor = i
+                    return
+        self.cursor = min(self.cursor, max(0, len(self.commits) - 1))
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +444,7 @@ def run_graph_app(*, count: int = 30, branches: list[str] | None = None) -> None
         raw_lines=raw_lines,
         commits=commits,
         count=count,
+        branches=branches,
     )
 
     # Controls
