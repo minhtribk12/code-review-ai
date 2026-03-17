@@ -25,11 +25,10 @@ from prompt_toolkit.layout.layout import Layout
 from rich.console import Console
 
 from code_review_agent.interactive import git_ops
+from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
     from prompt_toolkit.key_binding import KeyPressEvent
-
-_GRAPH_COLORS = ["green", "yellow", "blue", "magenta", "cyan", "red"]
 _RE_HASH = re.compile(r"([0-9a-f]{7,12})\b")
 _RE_REFS = re.compile(r"\(([^)]+)\)")
 
@@ -175,14 +174,14 @@ def _render_header(state: GraphState) -> _Lines:
     ]
 
     if state.mode == GraphMode.DETAIL:
-        lines.append(("dim", " [Space] close  [q] quit\n"))
+        lines.append((theme.muted, " [Space] close  [q] quit\n"))
     elif state.mode == GraphMode.CONFIRM:
-        lines.append(("dim", " [y] checkout  [n] cancel\n"))
+        lines.append((theme.muted, " [y] checkout  [n] cancel\n"))
     else:
-        lines.append(("dim", " [Space] detail  [Enter] checkout  [q] quit\n"))
+        lines.append((theme.muted, " [Space] detail  [Enter] checkout  [q] quit\n"))
 
     if state.status_message:
-        style = "bold red" if state.status_message.startswith("!") else "bold green"
+        style = theme.error if state.status_message.startswith("!") else theme.success
         lines.append((style, f" {state.status_message}\n"))
 
     return lines
@@ -193,7 +192,7 @@ def _render_graph(state: GraphState) -> _Lines:
     lines: _Lines = []
 
     if not state.raw_lines:
-        lines.append(("dim", "  No commits.\n"))
+        lines.append((theme.muted, "  No commits.\n"))
         return lines
 
     # Map commit line_index to commit position for cursor
@@ -214,38 +213,34 @@ def _render_graph(state: GraphState) -> _Lines:
 
         # Prefix
         if is_cursor_commit:
-            lines.append(("bold cyan", " >"))
+            lines.append((theme.graph_cursor, " >"))
         else:
             lines.append(("", "  "))
 
         # Colorize graph characters
         if "*" not in line:
-            # Connector line -- just colorize graph chars
             _append_graph_chars(lines, line)
         else:
-            # Commit line -- colorize graph then show hash
             star_pos = line.index("*")
             graph_part = line[:star_pos]
             _append_graph_chars(lines, graph_part)
 
-            # Star
+            # Star colored by branch column
             col = sum(1 for ch in graph_part if ch in ("|", "/", "\\", "_"))
-            star_color = _GRAPH_COLORS[col % len(_GRAPH_COLORS)]
+            branches = theme.graph_branches
+            star_color = branches[col % len(branches)]
             lines.append((f"bold {star_color}", "*"))
 
-            # Content after star: just show hash (+ refs if any)
+            # Content: hash + refs
             content = line[star_pos + 1 :].strip()
             hash_match = _RE_HASH.match(content)
             if hash_match:
                 commit_hash = hash_match.group(1)
                 rest = content[hash_match.end() :].strip()
 
-                if is_cursor_commit:
-                    lines.append(("bold yellow", f" {commit_hash}"))
-                else:
-                    lines.append(("yellow", f" {commit_hash}"))
+                hash_style = f"bold {theme.graph_hash}" if is_cursor_commit else theme.graph_hash
+                lines.append((hash_style, f" {commit_hash}"))
 
-                # Show refs inline
                 ref_match = _RE_REFS.match(rest)
                 if ref_match:
                     lines.append(("", " "))
@@ -260,18 +255,17 @@ def _render_graph(state: GraphState) -> _Lines:
 
 def _render_status_bar(state: GraphState) -> _Lines:
     """Render the bottom status bar with current commit info."""
-    lines: _Lines = [("dim", " " + "-" * 76 + "\n")]
+    lines: _Lines = [(theme.muted, " " + "-" * 76 + "\n")]
 
     commit = state.current_commit
     if commit is None:
         return lines
 
-    # One-line commit info
     try:
         info = git_ops.show_commit_oneline(commit.hash)
         lines.append(("", f" {info}\n"))
     except git_ops.GitError:
-        lines.append(("dim", f" {commit.hash}\n"))
+        lines.append((theme.muted, f" {commit.hash}\n"))
 
     return lines
 
@@ -282,23 +276,22 @@ def _render_detail(state: GraphState) -> _Lines:
         return []
 
     lines: _Lines = [
-        ("dim", " " + "=" * 76 + "\n"),
+        (theme.muted, " " + "=" * 76 + "\n"),
     ]
 
-    # Render commit details with diff-aware coloring
     for raw_line in state.detail_text.splitlines()[:60]:
         if raw_line.startswith("+") and not raw_line.startswith("+++"):
-            lines.append(("green", f" {raw_line}\n"))
+            lines.append((theme.graph_diff_add, f" {raw_line}\n"))
         elif raw_line.startswith("-") and not raw_line.startswith("---"):
-            lines.append(("red", f" {raw_line}\n"))
+            lines.append((theme.graph_diff_del, f" {raw_line}\n"))
         elif raw_line.startswith("@@"):
-            lines.append(("cyan", f" {raw_line}\n"))
+            lines.append((theme.graph_diff_hunk, f" {raw_line}\n"))
         elif raw_line.startswith("diff ") or raw_line.startswith("index "):
-            lines.append(("dim", f" {raw_line}\n"))
+            lines.append((theme.muted, f" {raw_line}\n"))
         elif raw_line.startswith("commit "):
-            lines.append(("bold yellow", f" {raw_line}\n"))
+            lines.append((f"bold {theme.graph_hash}", f" {raw_line}\n"))
         elif raw_line.startswith("Author:") or raw_line.startswith("Date:"):
-            lines.append(("dim", f" {raw_line}\n"))
+            lines.append((theme.muted, f" {raw_line}\n"))
         else:
             lines.append(("", f" {raw_line}\n"))
 
@@ -317,53 +310,53 @@ def _render_confirm(state: GraphState) -> _Lines:
         info = commit.hash
 
     lines: _Lines = [
-        ("dim", " " + "=" * 60 + "\n"),
+        (theme.muted, " " + "=" * 60 + "\n"),
         ("", "\n"),
-        ("bold yellow", "   CHECKOUT commit "),
+        (theme.warning, "   CHECKOUT commit "),
         ("bold", f"{commit.hash}\n"),
-        ("dim", "   This will detach HEAD from the current branch.\n"),
+        (theme.muted, "   This will detach HEAD from the current branch.\n"),
         ("", "\n"),
-        ("dim", f"   {info}\n"),
+        (theme.muted, f"   {info}\n"),
         ("", "\n"),
-        ("cyan", "   [y]"),
+        (theme.accent, "   [y]"),
         ("bold", " Checkout    "),
-        ("dim", "[n]"),
+        (theme.muted, "[n]"),
         ("", " Cancel\n"),
         ("", "\n"),
-        ("dim", " " + "=" * 60 + "\n"),
+        (theme.muted, " " + "=" * 60 + "\n"),
     ]
     return lines
 
 
 def _render_footer(state: GraphState) -> _Lines:
     """Mode-aware footer."""
-    lines: _Lines = [("dim", " " + "-" * 76 + "\n")]
+    lines: _Lines = [(theme.muted, " " + "-" * 76 + "\n")]
     if state.mode == GraphMode.CONFIRM:
         lines.extend(
             [
-                ("cyan", " [y]"),
+                (theme.accent, " [y]"),
                 ("", "es "),
-                ("dim", "[n]"),
+                (theme.muted, "[n]"),
                 ("", "o\n"),
             ]
         )
     elif state.mode == GraphMode.DETAIL:
         lines.extend(
             [
-                ("cyan", " [Space]"),
+                (theme.accent, " [Space]"),
                 ("", " close "),
-                ("dim", "[q]"),
+                (theme.muted, "[q]"),
                 ("", " quit\n"),
             ]
         )
     else:
         lines.extend(
             [
-                ("cyan", " [Space]"),
+                (theme.accent, " [Space]"),
                 ("", " detail "),
-                ("cyan", "[Enter]"),
+                (theme.accent, "[Enter]"),
                 ("", " checkout "),
-                ("dim", "[q]"),
+                (theme.muted, "[q]"),
                 ("", " quit\n"),
             ]
         )
@@ -377,10 +370,11 @@ def _render_footer(state: GraphState) -> _Lines:
 
 def _append_graph_chars(lines: _Lines, text: str) -> None:
     """Append graph characters with column-based coloring."""
+    branches = theme.graph_branches
     col = 0
     for ch in text:
         if ch in ("|", "/", "\\", "_"):
-            color = _GRAPH_COLORS[col % len(_GRAPH_COLORS)]
+            color = branches[col % len(branches)]
             lines.append((color, ch))
             col += 1
         else:
@@ -388,22 +382,22 @@ def _append_graph_chars(lines: _Lines, text: str) -> None:
 
 
 def _append_refs(lines: _Lines, refs_str: str) -> None:
-    """Append colorized refs: (HEAD -> main, origin/main)."""
+    """Append colorized refs using theme colors."""
     inner = refs_str[1:-1]
-    lines.append(("bold yellow", "("))
+    lines.append((theme.graph_ref_paren, "("))
     parts = [p.strip() for p in inner.split(",")]
     for i, part in enumerate(parts):
         if i > 0:
-            lines.append(("dim", ", "))
+            lines.append((theme.muted, ", "))
         if part.startswith("HEAD"):
-            lines.append(("bold cyan", part))
+            lines.append((theme.graph_ref_head, part))
         elif part.startswith("tag:"):
-            lines.append(("bold magenta", part))
+            lines.append((theme.graph_ref_tag, part))
         elif "/" in part:
-            lines.append(("bold red", part))
+            lines.append((theme.graph_ref_remote, part))
         else:
-            lines.append(("bold green", part))
-    lines.append(("bold yellow", ")"))
+            lines.append((theme.graph_ref_local, part))
+    lines.append((theme.graph_ref_paren, ")"))
 
 
 # ---------------------------------------------------------------------------

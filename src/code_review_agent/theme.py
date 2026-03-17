@@ -73,6 +73,21 @@ class ThemeColors:
     muted: str  # dim/secondary text
     highlight: str  # selected row, active element
 
+    # Git graph colors (high-contrast, theme-aware)
+    graph_hash: str  # commit hash
+    graph_ref_local: str  # local branch ref
+    graph_ref_remote: str  # remote branch ref
+    graph_ref_head: str  # HEAD pointer
+    graph_ref_tag: str  # tag ref
+    graph_ref_paren: str  # parentheses around refs
+    graph_cursor: str  # cursor indicator in graph
+    graph_diff_add: str  # diff + line
+    graph_diff_del: str  # diff - line
+    graph_diff_hunk: str  # diff @@ line
+
+    # Branch line colors (6-color palette for column-based coloring)
+    graph_branches: tuple[str, ...]
+
 
 _DARK_THEME = ThemeColors(
     severity_critical="bold red",
@@ -86,6 +101,17 @@ _DARK_THEME = ThemeColors(
     accent="cyan",
     muted="dim",
     highlight="reverse bold",
+    graph_hash="bold",
+    graph_ref_local="bold green",
+    graph_ref_remote="bold red",
+    graph_ref_head="bold cyan",
+    graph_ref_tag="bold magenta",
+    graph_ref_paren="bold",
+    graph_cursor="bold cyan",
+    graph_diff_add="green",
+    graph_diff_del="red",
+    graph_diff_hunk="cyan",
+    graph_branches=("green", "magenta", "cyan", "blue", "red", "white"),
 )
 
 _LIGHT_THEME = ThemeColors(
@@ -100,6 +126,17 @@ _LIGHT_THEME = ThemeColors(
     accent="blue",
     muted="dim",
     highlight="reverse bold",
+    graph_hash="bold",
+    graph_ref_local="bold dark_green",
+    graph_ref_remote="bold dark_red",
+    graph_ref_head="bold blue",
+    graph_ref_tag="bold dark_magenta",
+    graph_ref_paren="bold",
+    graph_cursor="bold blue",
+    graph_diff_add="dark_green",
+    graph_diff_del="dark_red",
+    graph_diff_hunk="blue",
+    graph_branches=("dark_green", "dark_magenta", "blue", "dark_red", "dark_cyan", "black"),
 )
 
 
