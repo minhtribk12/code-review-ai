@@ -678,6 +678,72 @@ class ReviewStorage:
 
         return [dict(row) for row in rows]
 
+    def get_usage_stats(self, *, hours: float | None = None) -> dict[str, Any]:
+        """Get aggregated usage statistics for a time window.
+
+        Returns: review_count, total_tokens, prompt_tokens, completion_tokens,
+        llm_calls, estimated_cost_usd.
+        """
+        if hours is not None:
+            where = "WHERE reviewed_at >= datetime('now', ?)"
+            params: list[Any] = [f"-{int(hours * 3600)} seconds"]
+        else:
+            where = ""
+            params = []
+
+        with self._get_connection() as conn:
+            row = conn.execute(
+                f"""
+                SELECT
+                    COUNT(*) as review_count,
+                    COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                    COALESCE(SUM(total_tokens), 0) as total_tokens,
+                    COALESCE(SUM(llm_calls), 0) as llm_calls,
+                    COALESCE(SUM(estimated_cost_usd), 0.0) as estimated_cost_usd
+                FROM reviews
+                {where}
+                """,  # noqa: S608
+                params,
+            ).fetchone()
+
+        if row is None:
+            return {
+                "review_count": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "llm_calls": 0,
+                "estimated_cost_usd": 0.0,
+            }
+        return dict(row)
+
+    def get_usage_by_agent(self, *, hours: float | None = None) -> list[dict[str, Any]]:
+        """Get per-agent token usage for a time window."""
+        if hours is not None:
+            where = "WHERE r.reviewed_at >= datetime('now', ?)"
+            params: list[Any] = [f"-{int(hours * 3600)} seconds"]
+        else:
+            where = ""
+            params = []
+
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    ar.agent_name,
+                    COALESCE(SUM(ar.finding_count), 0) as total_findings,
+                    COUNT(*) as runs
+                FROM agent_results ar
+                JOIN reviews r ON ar.review_id = r.id
+                {where}
+                GROUP BY ar.agent_name
+                ORDER BY total_findings DESC
+                """,  # noqa: S608
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def export_json(self, *, repo: str | None = None, limit: int = 1000) -> str:
         """Export reviews as a JSON array string."""
         reviews = self.list_reviews(repo=repo, limit=limit)
