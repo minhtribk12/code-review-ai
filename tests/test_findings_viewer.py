@@ -393,12 +393,13 @@ class TestRendering:
         assert "Filter Findings" in text
 
     def test_render_confirm(self, viewer: FindingsViewer) -> None:
-        viewer.request_confirm("delete", "Delete this finding?")
+        viewer.request_confirm("delete", "DELETE finding permanently")
         result = render_confirm(viewer)
         assert self._is_formatted_text(result)
         text = "".join(t for _, t in result)
-        assert "Delete this finding?" in text
-        assert "[y] Yes" in text
+        assert "DELETE" in text
+        assert "[y]" in text
+        assert "[n]" in text
 
     def test_render_confirm_empty_when_no_pending(self, viewer: FindingsViewer) -> None:
         result = render_confirm(viewer)

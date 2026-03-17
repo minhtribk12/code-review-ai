@@ -420,27 +420,83 @@ def render_help(viewer: FindingsViewer) -> _Lines:
 
 
 def render_confirm(viewer: FindingsViewer) -> _Lines:
-    """Confirmation dialog rendered in the detail panel area."""
+    """Confirmation dialog rendered in the detail panel area.
+
+    Layout inspired by lazygit/gh CLI confirmation prompts:
+    - Action verb in bold (POST/UNPOST/DELETE)
+    - Context: what will happen
+    - Finding summary with severity and location
+    - Clear y/n prompt with action labels
+    """
     if viewer.pending_confirm is None:
         return []
 
-    desc = viewer.pending_confirm.description
-    title = viewer.pending_confirm.finding_row.title
+    action = viewer.pending_confirm.action
+    row = viewer.pending_confirm.finding_row
 
-    lines: _Lines = [
-        ("", "\n"),
-        (theme.muted, "   " + "=" * 60 + "\n"),
-        ("", "\n"),
-        ("bold", f"   {desc}\n"),
-        ("", "\n"),
-        (theme.accent, f'   "{title}"\n'),
-        ("", "\n"),
-        (theme.muted, "   "),
-        (theme.accent, "[y]"),
-        ("", " Yes    "),
-        (theme.accent, "[n]"),
-        ("", " No\n"),
-        ("", "\n"),
-        (theme.muted, "   " + "=" * 60 + "\n"),
-    ]
+    # Color-code by action type
+    if action == "delete":
+        action_style = "bold " + theme.error
+    else:
+        action_style = "bold " + theme.warning if hasattr(theme, "warning") else "bold"
+
+    lines: _Lines = [("", "\n"), (theme.muted, "   " + "-" * 60 + "\n"), ("", "\n")]
+
+    # Description lines (may be multi-line)
+    for desc_line in viewer.pending_confirm.description.split("\n"):
+        if desc_line == desc_line.upper().split("\n")[0]:
+            lines.append((action_style, f"   {desc_line}\n"))
+        else:
+            lines.append((theme.muted, f"   {desc_line}\n"))
+
+    lines.append(("", "\n"))
+
+    # Finding context
+    sev_style = SEVERITY_STYLES.get(row.severity.value, "")
+    lines.extend(
+        [
+            (theme.muted, "   Finding: "),
+            (sev_style, f"[{row.severity.value.upper()}] "),
+            ("bold", f"{row.title}\n"),
+        ]
+    )
+    if row.file_path:
+        loc = row.file_path
+        if row.line_number:
+            loc += f":{row.line_number}"
+        lines.extend(
+            [
+                (theme.muted, "   File:    "),
+                (theme.accent, f"{loc}\n"),
+            ]
+        )
+    if row.agent_name:
+        lines.extend(
+            [
+                (theme.muted, "   Agent:   "),
+                ("", f"{row.agent_name}\n"),
+            ]
+        )
+
+    lines.append(("", "\n"))
+
+    # Action buttons with verb labels
+    action_labels = {
+        "post": ("Post comment", "Cancel"),
+        "unpost": ("Remove comment", "Cancel"),
+        "delete": ("Delete permanently", "Cancel"),
+    }
+    yes_label, no_label = action_labels.get(action, ("Yes", "No"))
+
+    lines.extend(
+        [
+            (theme.muted, "   "),
+            (theme.accent, "[y]"),
+            ("bold", f" {yes_label}    "),
+            (theme.muted, "[n]"),
+            ("", f" {no_label}\n"),
+        ]
+    )
+
+    lines.extend([("", "\n"), (theme.muted, "   " + "-" * 60 + "\n")])
     return lines

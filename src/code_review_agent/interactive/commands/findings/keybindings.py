@@ -111,10 +111,14 @@ def build_key_bindings(viewer: FindingsViewer) -> KeyBindings:
     def on_post(_event: KeyPressEvent) -> None:
         if viewer.mode == ViewerMode.DETAIL and viewer.visible_rows:
             row = viewer.visible_rows[viewer.cursor]
+            repo = row.repo or "unknown"
             pr_num = row.pr_number or "?"
             viewer.pending_confirm = ConfirmAction(
                 action="post",
-                description=f"Post finding to PR #{pr_num}?",
+                description=(
+                    f"POST comment to {repo}#{pr_num}\n"
+                    f"This will create an inline review comment on the PR."
+                ),
                 finding_row=row,
             )
             viewer.mode = ViewerMode.CONFIRM
@@ -127,9 +131,14 @@ def build_key_bindings(viewer: FindingsViewer) -> KeyBindings:
             if db_id not in viewer.posted_indices:
                 viewer.status_message = "! This finding has not been posted"
                 return
+            repo = row.repo or "unknown"
+            pr_num = row.pr_number or "?"
             viewer.pending_confirm = ConfirmAction(
                 action="unpost",
-                description="Delete posted comment from PR?",
+                description=(
+                    f"UNPOST comment from {repo}#{pr_num}\n"
+                    f"This will remove the review comment from the PR."
+                ),
                 finding_row=row,
             )
             viewer.mode = ViewerMode.CONFIRM
@@ -142,7 +151,7 @@ def build_key_bindings(viewer: FindingsViewer) -> KeyBindings:
             row = viewer.visible_rows[viewer.cursor]
             viewer.pending_confirm = ConfirmAction(
                 action="delete",
-                description="Delete this finding permanently?",
+                description=("DELETE finding permanently\nThis action cannot be undone."),
                 finding_row=row,
             )
             viewer.mode = ViewerMode.CONFIRM
