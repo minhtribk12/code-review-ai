@@ -64,8 +64,8 @@ def _triage_label(viewer: FindingsViewer, db_id: int | None) -> tuple[str, str]:
 
 
 def _pr_status_label(viewer: FindingsViewer, db_id: int | None) -> tuple[str, str]:
-    if db_id in viewer.posted_indices:
-        return (theme.success, "[POSTED]")
+    # Posted state is shown in the triage/status column as [POST] or [DONE|POST]
+    # PR column only shows staging state (pre-post)
     if db_id in viewer.staged_for_pr:
         return (theme.accent, "[STAGED]")
     return ("", "")
@@ -420,32 +420,27 @@ def render_help(viewer: FindingsViewer) -> _Lines:
 
 
 def render_confirm(viewer: FindingsViewer) -> _Lines:
-    """Confirmation dialog rendered within a fixed-width Float container."""
+    """Confirmation dialog rendered in the detail panel area."""
     if viewer.pending_confirm is None:
         return []
 
-    # Render to fill the 48-char container (50 - 2 border chars)
-    inner = 46
-    border = "+" + "-" * inner + "+\n"
-
-    desc = _truncate(viewer.pending_confirm.description, inner - 2)
-    title = _truncate(viewer.pending_confirm.finding_row.title, inner - 2)
-    buttons = "[y] Yes    [n] No"
+    desc = viewer.pending_confirm.description
+    title = viewer.pending_confirm.finding_row.title
 
     lines: _Lines = [
         ("", "\n"),
-        (theme.muted, border),
-        (theme.muted, "| "),
-        ("bold", f"{desc:<{inner - 2}}"),
-        (theme.muted, " |\n"),
-        (theme.muted, f"|{' ' * inner}|\n"),
-        (theme.muted, "| "),
-        (theme.accent, f"{title:<{inner - 2}}"),
-        (theme.muted, " |\n"),
-        (theme.muted, f"|{' ' * inner}|\n"),
-        (theme.muted, "| "),
-        (theme.accent, f"{buttons:^{inner - 2}}"),
-        (theme.muted, " |\n"),
-        (theme.muted, border),
+        (theme.muted, "   " + "=" * 60 + "\n"),
+        ("", "\n"),
+        ("bold", f"   {desc}\n"),
+        ("", "\n"),
+        (theme.accent, f'   "{title}"\n'),
+        ("", "\n"),
+        (theme.muted, "   "),
+        (theme.accent, "[y]"),
+        ("", " Yes    "),
+        (theme.accent, "[n]"),
+        ("", " No\n"),
+        ("", "\n"),
+        (theme.muted, "   " + "=" * 60 + "\n"),
     ]
     return lines

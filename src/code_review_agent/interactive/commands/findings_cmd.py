@@ -134,18 +134,23 @@ def run_findings_app(
     # Controls
     header_control = FormattedTextControl(lambda: render_header(viewer))
     table_control = FormattedTextControl(lambda: render_table(viewer, get_term_width()))
-    detail_control = FormattedTextControl(lambda: render_detail(viewer))
     footer_control = FormattedTextControl(lambda: render_footer(viewer))
     filter_control = FormattedTextControl(lambda: render_filter(viewer))
     help_control = FormattedTextControl(lambda: render_help(viewer))
-    confirm_control = FormattedTextControl(lambda: render_confirm(viewer))
+
+    # Detail/confirm share the same panel -- confirm replaces detail content
+    def _render_detail_or_confirm() -> list[tuple[str, str]]:
+        if viewer.mode == ViewerMode.CONFIRM:
+            return render_confirm(viewer)
+        return render_detail(viewer)
+
+    detail_control = FormattedTextControl(_render_detail_or_confirm)
 
     is_detail = Condition(
         lambda: viewer.mode in (ViewerMode.DETAIL, ViewerMode.CONFIRM),
     )
     is_filter = Condition(lambda: viewer.mode == ViewerMode.FILTER)
     is_help = Condition(lambda: viewer.mode == ViewerMode.HELP)
-    is_confirm = Condition(lambda: viewer.mode == ViewerMode.CONFIRM)
 
     body = FloatContainer(
         content=HSplit(
@@ -183,12 +188,6 @@ def run_findings_app(
                 left=1,
                 right=1,
                 bottom=1,
-            ),
-            Float(
-                ConditionalContainer(
-                    Window(confirm_control, height=9, width=50),
-                    filter=is_confirm,
-                ),
             ),
         ],
     )
