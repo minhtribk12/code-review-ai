@@ -967,6 +967,44 @@ class FindingsViewer:
         total_col_width = sum(w for _, _, w in col_meta)
         return max(0, total_col_width - (term_width - 3))
 
+    @staticmethod
+    def _slice_styled_line(
+        fragments: list[tuple[str, str]],
+        start: int,
+        length: int,
+    ) -> list[tuple[str, str]]:
+        """Slice styled text fragments to [start:start+length] char positions.
+
+        Walks through fragments, skipping characters before ``start``,
+        collecting characters until ``length`` is reached. Preserves
+        styles across fragment boundaries.
+        """
+        result: list[tuple[str, str]] = []
+        pos = 0
+        remaining = length
+
+        for style, text in fragments:
+            frag_len = len(text)
+
+            # Skip fragments entirely before the start
+            if pos + frag_len <= start:
+                pos += frag_len
+                continue
+
+            # Calculate the slice within this fragment
+            skip = max(0, start - pos)
+            take = min(frag_len - skip, remaining)
+
+            if take > 0:
+                result.append((style, text[skip : skip + take]))
+                remaining -= take
+
+            pos += frag_len
+            if remaining <= 0:
+                break
+
+        return result
+
     def _render_navigate(self) -> FormattedText:
         lines: list[tuple[str, str]] = []
 
@@ -1012,11 +1050,30 @@ class FindingsViewer:
         term_width = shutil.get_terminal_size((120, 40)).columns
         col_meta = self._compute_column_widths(term_width)
 
+        # Horizontal scroll state
+        total_col_width = sum(w for _, _, w in col_meta)
+        content_width = term_width - 3  # available for columns after prefix
+        is_scrollable = total_col_width > content_width
+        h = self.h_offset if is_scrollable else 0
+
         # Table header
-        header = "   " + "".join(f"{label:<{width}}" for _, label, width in col_meta)
-        lines.append(("bold " + theme.muted, header + "\n"))
-        total_width = sum(w for _, _, w in col_meta) + 3
-        lines.append((theme.muted, "   " + "-" * min(total_width, term_width - 1) + "\n"))
+        header_frags: list[tuple[str, str]] = [
+            ("bold " + theme.muted, f"{label:<{width}}") for _, label, width in col_meta
+        ]
+        if is_scrollable:
+            header_frags = self._slice_styled_line(header_frags, h, content_width)
+        scroll_hint = ""
+        if is_scrollable:
+            scroll_hint = " <" if h > 0 else "  "
+            scroll_hint += ">" if h < self._max_h_offset() else " "
+        lines.append(("", "  "))
+        lines.append((theme.muted, scroll_hint[:1] if scroll_hint else " "))
+        lines.extend(header_frags)
+        lines.append(("", "\n"))
+
+        sep_width = min(total_col_width, content_width)
+        lines.append(("", "   "))
+        lines.append((theme.muted, "-" * sep_width + "\n"))
 
         # Table rows
         for i in range(visible_start, visible_end):
@@ -1024,7 +1081,7 @@ class FindingsViewer:
             is_selected = i == self.cursor
             triage_action = self.triage.get(row.index, TriageAction.NONE)
 
-            # Row prefix
+            # Row prefix (fixed, never scrolls)
             if is_selected:
                 lines.append((theme.highlight, " > "))
             else:
@@ -1040,7 +1097,8 @@ class FindingsViewer:
             else:
                 base_style = ""
 
-            # Render each visible column
+            # Build column fragments for this row
+            row_frags: list[tuple[str, str]] = []
             for col_key, _label, width in col_meta:
                 cell_style, cell_text = self._render_cell(
                     row,
@@ -1049,8 +1107,12 @@ class FindingsViewer:
                     base_style,
                     triage_action,
                 )
-                lines.append((cell_style, cell_text))
+                row_frags.append((cell_style, cell_text))
 
+            # Apply horizontal scroll
+            if is_scrollable:
+                row_frags = self._slice_styled_line(row_frags, h, content_width)
+            lines.extend(row_frags)
             lines.append(("", "\n"))
 
         # Detail panel
@@ -1147,6 +1209,17 @@ class FindingsViewer:
             ]
         )
 
+        # Add scroll hint when table is horizontally scrollable
+        if self._max_h_offset() > 0:
+            hints.extend(
+                [
+                    ("", " "),
+                    (theme.muted, "["),
+                    (theme.accent, "<>"),
+                    (theme.muted, "]scroll"),
+                ]
+            )
+
         lines.extend(hints)
         lines.append(("", "\n"))
 
@@ -1164,6 +1237,7 @@ class FindingsViewer:
                 "Navigation",
                 [
                     ("Up / Down", "Move between findings"),
+                    ("Left / Right", "Scroll table horizontally"),
                     ("Enter / Space", "Toggle detail panel"),
                 ],
             ),
