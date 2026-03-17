@@ -44,6 +44,8 @@ class ProgressDisplay:
         self._start_times: dict[str, float] = {}
         self._frame = 0
 
+        self._cancelled = False
+
         for name in agent_names:
             self._states[name] = ("waiting", "dim", None)
 
@@ -53,6 +55,22 @@ class ProgressDisplay:
             refresh_per_second=4,
             transient=True,
         )
+
+    @property
+    def is_cancelled(self) -> bool:
+        """Return True if the review was cancelled by the user."""
+        return self._cancelled
+
+    def cancel(self) -> None:
+        """Mark the review as cancelled."""
+        self._cancelled = True
+        # Mark all running agents as cancelled
+        for name in list(self._states):
+            state, _color, elapsed = self._states[name]
+            if state == "running":
+                started = self._start_times.get(name)
+                cancel_elapsed = time.monotonic() - started if started else elapsed
+                self._states[name] = ("cancelled", "yellow", cancel_elapsed)
 
     def start(self) -> None:
         """Start the live display with auto-refresh."""
@@ -138,6 +156,11 @@ class ProgressDisplay:
             if extra in self._states:
                 self._add_row(table, extra)
 
+        # Show cancel hint if any agent is still running
+        has_running = any(s[0] == "running" for s in self._states.values())
+        if has_running and not self._cancelled:
+            table.add_row("", "[dim]Press Ctrl+C to cancel[/dim]", "")
+
         return table
 
     def _add_row(self, table: Table, name: str) -> None:
@@ -168,6 +191,8 @@ class ProgressDisplay:
             return f"[{color}]done[/{color}]"
         if state == "failed":
             return f"[{color}]failed[/{color}]"
+        if state == "cancelled":
+            return f"[{color}]cancelled[/{color}]"
         return f"[{color}]waiting[/{color}]"
 
 

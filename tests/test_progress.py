@@ -73,7 +73,8 @@ class TestProgressDisplay:
         display = ProgressDisplay(agent_names=["security"])
         display(ReviewEvent.SYNTHESIS_STARTED, "synthesis")
         table = display._build_table()
-        assert table.row_count == 2
+        # 1 agent + 1 synthesis + 1 cancel hint (synthesis is running)
+        assert table.row_count == 3
 
     def test_format_status_running(self) -> None:
         display = ProgressDisplay(["test"])

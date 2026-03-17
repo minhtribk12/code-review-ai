@@ -108,8 +108,14 @@ def _run_review_on_input(
             display.start()
         try:
             report = orchestrator.run(review_input=review_input, agent_names=selected_names)
-        finally:
+        except KeyboardInterrupt:
             if display is not None:
+                display.cancel()
+                display.stop()
+            console.print("[yellow]Review cancelled by user.[/yellow]")
+            return
+        finally:
+            if display is not None and not display.is_cancelled:
                 display.stop()
 
         session.reviews_completed += 1
@@ -126,6 +132,8 @@ def _run_review_on_input(
         else:
             render_report_rich(report)
 
+    except KeyboardInterrupt:
+        console.print("[yellow]Review cancelled.[/yellow]")
     except Exception as exc:
         console.print(f"[red]Review failed: {exc}[/red]")
 

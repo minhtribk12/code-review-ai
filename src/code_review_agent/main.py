@@ -158,8 +158,14 @@ def review(
             display.start()
         try:
             report = orchestrator.run(review_input=review_input, agent_names=agent_names)
-        finally:
+        except KeyboardInterrupt:
             if display is not None:
+                display.cancel()
+                display.stop()
+            typer.echo("Review cancelled by user.", err=True)
+            raise typer.Exit(code=130) from None
+        finally:
+            if display is not None and not display.is_cancelled:
                 display.stop()
 
         if output_format == OutputFormat.JSON:
