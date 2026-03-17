@@ -41,9 +41,9 @@ def _format_location(file_path: str | None, line_number: int | None, width: int 
     return "..." + loc[-(width - 3) :] if len(loc) > width else loc
 
 
-def _triage_label(viewer: FindingsViewer, index: int) -> tuple[str, str]:
-    action = viewer.triage.get(index, TriageAction.OPEN)
-    is_posted = index in viewer.posted_indices
+def _triage_label(viewer: FindingsViewer, db_id: int | None) -> tuple[str, str]:
+    action = viewer.triage.get(db_id, TriageAction.OPEN)
+    is_posted = db_id in viewer.posted_indices
     parts: list[str] = []
     if action == TriageAction.FALSE_POSITIVE:
         parts.append("FP")
@@ -63,10 +63,10 @@ def _triage_label(viewer: FindingsViewer, index: int) -> tuple[str, str]:
     return (theme.muted, label)
 
 
-def _pr_status_label(viewer: FindingsViewer, index: int) -> tuple[str, str]:
-    if index in viewer.posted_indices:
+def _pr_status_label(viewer: FindingsViewer, db_id: int | None) -> tuple[str, str]:
+    if db_id in viewer.posted_indices:
         return (theme.success, "[POSTED]")
-    if index in viewer.staged_for_pr:
+    if db_id in viewer.staged_for_pr:
         return (theme.accent, "[STAGED]")
     return ("", "")
 
@@ -94,10 +94,10 @@ def _render_cell(
     if col_key == "title":
         return (base_style, f"{_truncate(r.title, width):<{width}}")  # type: ignore[attr-defined]
     if col_key == "triage":
-        s, t = _triage_label(viewer, r.index)  # type: ignore[attr-defined]
+        s, t = _triage_label(viewer, r.finding_db_id)  # type: ignore[attr-defined]
         return (s, f"{_truncate(t, width):<{width}}")
     if col_key == "pr_status":
-        s, t = _pr_status_label(viewer, r.index)  # type: ignore[attr-defined]
+        s, t = _pr_status_label(viewer, r.finding_db_id)  # type: ignore[attr-defined]
         return (s, f"{_truncate(t, width):<{width}}")
     if col_key == "repo":
         return (base_style, f"{_truncate(r.repo or '', width):<{width}}")  # type: ignore[attr-defined]
@@ -171,7 +171,7 @@ def render_table(viewer: FindingsViewer, term_width: int) -> _Lines:
     for i in range(v_start, v_end):
         row = viewer.visible_rows[i]
         sel = i == viewer.cursor
-        ta = viewer.triage.get(row.index, TriageAction.OPEN)
+        ta = viewer.triage.get(row.finding_db_id, TriageAction.OPEN)
         lines.append((theme.highlight, " > ") if sel else ("", "   "))
         if ta == TriageAction.FALSE_POSITIVE:
             bs = "strike dim"
@@ -231,7 +231,7 @@ def render_detail(viewer: FindingsViewer) -> _Lines:
         lines.append(("", "\n"))
 
     # Status
-    ts, tl = _triage_label(viewer, row.index)
+    ts, tl = _triage_label(viewer, row.finding_db_id)
     if tl:
         lines.extend([(theme.muted, "   Status: "), (ts, f"{tl}\n")])
 
@@ -420,35 +420,32 @@ def render_help(viewer: FindingsViewer) -> _Lines:
 
 
 def render_confirm(viewer: FindingsViewer) -> _Lines:
-    """Centered confirmation dialog box."""
+    """Confirmation dialog rendered within a fixed-width Float container."""
     if viewer.pending_confirm is None:
         return []
-    tw = shutil.get_terminal_size((120, 40)).columns
-    bw = min(60, tw - 4)
-    mg = " " * max(0, (tw - bw) // 2)
-    inner = bw - 2
-    border = f"{mg}+" + "-" * inner + "+\n"
+
+    # Render to fill the 48-char container (50 - 2 border chars)
+    inner = 46
+    border = "+" + "-" * inner + "+\n"
 
     desc = _truncate(viewer.pending_confirm.description, inner - 2)
-    title = _truncate(f'"{viewer.pending_confirm.finding_row.title}"', inner - 2)
-    buttons = "  [y] Yes    [n] No  "
+    title = _truncate(viewer.pending_confirm.finding_row.title, inner - 2)
+    buttons = "[y] Yes    [n] No"
 
     lines: _Lines = [
-        ("", "\n\n"),
+        ("", "\n"),
         (theme.muted, border),
-        (theme.muted, f"{mg}| "),
+        (theme.muted, "| "),
         ("bold", f"{desc:<{inner - 2}}"),
         (theme.muted, " |\n"),
-        (theme.muted, f"{mg}|{' ' * inner}|\n"),
-        (theme.muted, f"{mg}| "),
+        (theme.muted, f"|{' ' * inner}|\n"),
+        (theme.muted, "| "),
         (theme.accent, f"{title:<{inner - 2}}"),
         (theme.muted, " |\n"),
-        (theme.muted, f"{mg}|{' ' * inner}|\n"),
-        (theme.muted, f"{mg}| "),
-        (theme.accent, buttons),
-        ("", " " * max(0, inner - 2 - len(buttons))),
+        (theme.muted, f"|{' ' * inner}|\n"),
+        (theme.muted, "| "),
+        (theme.accent, f"{buttons:^{inner - 2}}"),
         (theme.muted, " |\n"),
         (theme.muted, border),
-        ("", "\n"),
     ]
     return lines

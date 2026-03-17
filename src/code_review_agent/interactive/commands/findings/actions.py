@@ -28,14 +28,17 @@ def toggle_triage(viewer: FindingsViewer, action: TriageAction) -> None:
     if not viewer.visible_rows:
         return
     row = viewer.visible_rows[viewer.cursor]
-    current = viewer.triage.get(row.index, TriageAction.OPEN)
+    db_id = row.finding_db_id
+    if db_id is None:
+        return
+    current = viewer.triage.get(db_id, TriageAction.OPEN)
     if current == action:
-        viewer.triage.pop(row.index, None)
-        _persist_triage(viewer, row.finding_db_id, TriageAction.OPEN)
+        viewer.triage[db_id] = TriageAction.OPEN
+        _persist_triage(viewer, db_id, TriageAction.OPEN)
         viewer.status_message = f"Unmarked: {row.title}"
     else:
-        viewer.triage[row.index] = action
-        _persist_triage(viewer, row.finding_db_id, action)
+        viewer.triage[db_id] = action
+        _persist_triage(viewer, db_id, action)
         viewer.status_message = f"{action.value}: {row.title}"
 
 
@@ -95,7 +98,8 @@ def post_to_pr(viewer: FindingsViewer) -> None:
             comments=inline_comments,
         )
         viewer.comments_posted += 1
-        viewer.posted_indices.add(row.index)
+        if row.finding_db_id is not None:
+            viewer.posted_indices.add(row.finding_db_id)
         _persist_posted(viewer, row.finding_db_id, is_posted=True)
 
         review_id = result.get("id")
@@ -145,8 +149,8 @@ def unpost_from_pr(viewer: FindingsViewer) -> None:
         viewer.comments_deleted += deleted
         viewer.last_comment_ids.clear()
         viewer.last_review_id = None
-        if row is not None:
-            viewer.posted_indices.discard(row.index)
+        if row is not None and row.finding_db_id is not None:
+            viewer.posted_indices.discard(row.finding_db_id)
             _persist_posted(viewer, row.finding_db_id, is_posted=False)
         viewer.status_message = f"Deleted {deleted} comment(s)"
 
@@ -160,21 +164,28 @@ def unpost_from_pr(viewer: FindingsViewer) -> None:
 
 
 def delete_finding(viewer: FindingsViewer) -> None:
-    """Delete the current finding from the database."""
-    if not viewer.visible_rows:
+    """Delete the confirmed finding from the database."""
+    # Use pending_confirm's finding_row if available (from confirm dialog)
+    row = None
+    if viewer.pending_confirm is not None:
+        row = viewer.pending_confirm.finding_row
+    elif viewer.visible_rows:
+        row = viewer.visible_rows[viewer.cursor]
+
+    if row is None:
         viewer.status_message = "! No finding selected"
         return
 
-    row = viewer.visible_rows[viewer.cursor]
-    if viewer._storage is None or row.finding_db_id is None:
+    db_id = row.finding_db_id
+    if viewer._storage is None or db_id is None:
         viewer.status_message = "! Cannot delete (no DB connection)"
         return
 
     try:
-        viewer._storage.delete_finding(row.finding_db_id)
-        viewer.all_rows = [r for r in viewer.all_rows if r.finding_db_id != row.finding_db_id]
-        viewer.triage.pop(row.index, None)
-        viewer.posted_indices.discard(row.index)
+        viewer._storage.delete_finding(db_id)
+        viewer.all_rows = [r for r in viewer.all_rows if r.finding_db_id != db_id]
+        viewer.triage.pop(db_id, None)
+        viewer.posted_indices.discard(db_id)
         viewer._apply_filters()
         viewer.cursor = min(viewer.cursor, max(0, len(viewer.visible_rows) - 1))
         viewer.status_message = f"Deleted: {row.title}"

@@ -51,12 +51,16 @@ def build_key_bindings(viewer: FindingsViewer) -> KeyBindings:
     def on_left(_event: KeyPressEvent) -> None:
         if viewer.mode == ViewerMode.NAVIGATE:
             viewer.scroll_left()
+        elif viewer.mode == ViewerMode.FILTER:
+            viewer.cycle_filter_dimension(-1)
 
     @kb.add("right")
     @kb.add("l")
     def on_right(_event: KeyPressEvent) -> None:
         if viewer.mode == ViewerMode.NAVIGATE:
             viewer.scroll_right()
+        elif viewer.mode == ViewerMode.FILTER:
+            viewer.cycle_filter_dimension(1)
 
     # -- Enter: open detail or select filter suggestion --
 

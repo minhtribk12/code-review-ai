@@ -9,6 +9,7 @@ import pytest
 
 from code_review_agent.interactive.commands.findings.actions import toggle_triage
 from code_review_agent.interactive.commands.findings.models import (
+    FindingRow,
     TriageAction,
     ViewerMode,
 )
@@ -104,7 +105,28 @@ def report() -> ReviewReport:
 
 @pytest.fixture
 def viewer(report: ReviewReport) -> FindingsViewer:
-    return FindingsViewer(report=report, github_token="ghp_test_token")
+    # Build rows with finding_db_id set so triage/posted operations work
+    rows = _flatten_findings(report)
+    rows_with_ids = [
+        FindingRow(
+            finding_db_id=i + 1,
+            review_id=1,
+            index=row.index,
+            severity=row.severity,
+            agent_name=row.agent_name,
+            category=row.category,
+            title=row.title,
+            description=row.description,
+            file_path=row.file_path,
+            line_number=row.line_number,
+            suggestion=row.suggestion,
+            confidence=row.confidence,
+            repo=row.repo,
+            pr_number=row.pr_number,
+        )
+        for i, row in enumerate(rows)
+    ]
+    return FindingsViewer(rows=rows_with_ids, report=report, github_token="ghp_test_token")
 
 
 # ---------------------------------------------------------------------------
@@ -230,28 +252,26 @@ class TestTriage:
     def test_toggle_solved(self, viewer: FindingsViewer) -> None:
         toggle_triage(viewer, TriageAction.SOLVED)
         row = viewer.all_rows[0]
-        assert viewer.triage[row.index] == TriageAction.SOLVED
+        assert viewer.triage[row.finding_db_id] == TriageAction.SOLVED
 
     def test_toggle_solved_twice_resets(self, viewer: FindingsViewer) -> None:
         toggle_triage(viewer, TriageAction.SOLVED)
-        # Solved findings are hidden by default filter, so reset cursor
-        # to operate on the same row via all_rows
         row = viewer.all_rows[0]
         # Re-add to visible so toggle can find it
         viewer.visible_rows = list(viewer.all_rows)
         viewer.cursor = 0
         toggle_triage(viewer, TriageAction.SOLVED)
-        assert row.index not in viewer.triage
+        assert viewer.triage[row.finding_db_id] == TriageAction.OPEN
 
     def test_toggle_false_positive(self, viewer: FindingsViewer) -> None:
         toggle_triage(viewer, TriageAction.FALSE_POSITIVE)
         row = viewer.all_rows[0]
-        assert viewer.triage[row.index] == TriageAction.FALSE_POSITIVE
+        assert viewer.triage[row.finding_db_id] == TriageAction.FALSE_POSITIVE
 
     def test_toggle_ignored(self, viewer: FindingsViewer) -> None:
         toggle_triage(viewer, TriageAction.IGNORED)
         row = viewer.all_rows[0]
-        assert viewer.triage[row.index] == TriageAction.IGNORED
+        assert viewer.triage[row.finding_db_id] == TriageAction.IGNORED
 
     def test_triage_on_empty_rows(self) -> None:
         report = _make_report(agent_findings={"security": []})
@@ -293,10 +313,10 @@ class TestFilter:
 
     def test_apply_filters_hides_solved_by_default(self, viewer: FindingsViewer) -> None:
         row = viewer.visible_rows[0]
-        viewer.triage[row.index] = TriageAction.SOLVED
+        viewer.triage[row.finding_db_id] = TriageAction.SOLVED
         viewer._apply_filters()
-        visible_indices = {r.index for r in viewer.visible_rows}
-        assert row.index not in visible_indices
+        visible_ids = {r.finding_db_id for r in viewer.visible_rows}
+        assert row.finding_db_id not in visible_ids
 
     def test_open_filter_sets_mode(self, viewer: FindingsViewer) -> None:
         viewer.open_filter()

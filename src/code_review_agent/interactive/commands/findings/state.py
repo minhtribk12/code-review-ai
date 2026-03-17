@@ -69,9 +69,9 @@ class FindingsViewer:
         self.sort_index: int = 0
         self.is_sort_reversed: bool = False
 
-        self.triage: dict[int, TriageAction] = {}
-        self.posted_indices: set[int] = set()
-        self.staged_for_pr: set[int] = set()
+        self.triage: dict[int | None, TriageAction] = {}
+        self.posted_indices: set[int | None] = set()
+        self.staged_for_pr: set[int | None] = set()
         self.active_filters: list[ActiveFilter] = []
 
         self.pending_confirm: ConfirmAction | None = None
@@ -92,15 +92,17 @@ class FindingsViewer:
         self.last_review_id: int | None = None
         self.last_comment_ids: list[int] = []
 
-        # Load triage and posted state from row data
+        # Load triage and posted state from row data (keyed by finding_db_id)
         for row in self.all_rows:
+            if row.finding_db_id is None:
+                continue
             try:
                 action = TriageAction(row.triage_action)
             except ValueError:
                 action = TriageAction.OPEN
-            self.triage[row.index] = action
+            self.triage[row.finding_db_id] = action
             if row.is_posted:
-                self.posted_indices.add(row.index)
+                self.posted_indices.add(row.finding_db_id)
 
         # Load visible columns from storage
         self.visible_columns: list[str] = self._load_visible_columns()
@@ -235,7 +237,7 @@ class FindingsViewer:
             rows = [
                 r
                 for r in rows
-                if self.triage.get(r.index, TriageAction.OPEN) != TriageAction.SOLVED
+                if self.triage.get(r.finding_db_id, TriageAction.OPEN) != TriageAction.SOLVED
             ]
 
         for af in self.active_filters:
@@ -246,19 +248,31 @@ class FindingsViewer:
 
     def _row_matches_filter(self, row: FindingRow, af: ActiveFilter) -> bool:
         if af.field == "triage_action":
-            current = self.triage.get(row.index, TriageAction.OPEN)
+            current = self.triage.get(row.finding_db_id, TriageAction.OPEN)
             return str(current) in af.values
         val = getattr(row, af.field, None)
         return str(val or "").lower() in {v.lower() for v in af.values}
 
     def open_filter(self) -> None:
         """Enter filter mode."""
+        from .filters import FILTER_DIMENSIONS
+
         self.mode = ViewerMode.FILTER
         self.filter_cursor = 0
         self.filter_input = ""
         self.filter_suggestions = []
         self.filter_dimension_index = 0
-        self.filter_dimension = "severity"
+        self.filter_dimension = FILTER_DIMENSIONS[0][0]
+        self.update_filter_suggestions()
+
+    def cycle_filter_dimension(self, direction: int) -> None:
+        """Cycle the filter dimension left or right."""
+        from .filters import FILTER_DIMENSIONS
+
+        n = len(FILTER_DIMENSIONS)
+        self.filter_dimension_index = (self.filter_dimension_index + direction) % n
+        self.filter_dimension = FILTER_DIMENSIONS[self.filter_dimension_index][0]
+        self.filter_input = ""
         self.update_filter_suggestions()
 
     def cancel_filter(self) -> None:
@@ -314,12 +328,15 @@ class FindingsViewer:
         if not self.visible_rows:
             return
         row = self.visible_rows[self.cursor]
-        current = self.triage.get(row.index, TriageAction.OPEN)
+        db_id = row.finding_db_id
+        if db_id is None:
+            return
+        current = self.triage.get(db_id, TriageAction.OPEN)
         new_action = TriageAction.OPEN if current == action else action
-        self.triage[row.index] = new_action
+        self.triage[db_id] = new_action
         self._persist_triage(row, new_action)
         self._apply_filters()
-        self.status_message = f"Finding #{row.index} -> {new_action.value}"
+        self.status_message = f"{row.title} -> {new_action.value}"
         logger.debug(
             "triage toggled",
             finding_index=row.index,
