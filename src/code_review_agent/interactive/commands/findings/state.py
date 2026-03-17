@@ -221,19 +221,25 @@ class FindingsViewer:
         """Rebuild visible_rows from all_rows based on active filters.
 
         Triage filter semantics:
-        - No triage filter: show all except solved (default behavior)
-        - Triage filter present: the filter values define which triage
-          states are VISIBLE. E.g. adding "solved" to triage filter
-          means "also show solved findings" (it gets merged with the
-          default visible set: open, false_positive, ignored).
+        - No triage filter: show all except solved (default)
+        - Triage filter present: show ONLY the selected triage states
+          (exclusive -- replaces the default set)
 
         Other filters use AND logic: a row must match ALL active filters.
         """
         # Build the set of visible triage states
-        visible_triage: set[str] = {"open", "false_positive", "ignored"}
+        has_triage_filter = False
+        triage_values: set[str] = set()
         for af in self.active_filters:
             if af.field == "triage_action":
-                visible_triage |= af.values
+                has_triage_filter = True
+                triage_values |= af.values
+
+        if has_triage_filter:
+            visible_triage = triage_values
+        else:
+            # Default: show everything except solved
+            visible_triage = {"open", "false_positive", "ignored"}
 
         rows: list[FindingRow] = []
         for r in self.all_rows:
