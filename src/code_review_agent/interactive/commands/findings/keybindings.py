@@ -121,12 +121,11 @@ def build_key_bindings(viewer: FindingsViewer) -> KeyBindings:
 
     @kb.add("P")
     def on_unpost(_event: KeyPressEvent) -> None:
-        if viewer.mode == ViewerMode.DETAIL:
-            if not viewer.last_comment_ids:
-                viewer.status_message = "! No posted comments to delete"
-                return
-            row = viewer.visible_rows[viewer.cursor] if viewer.visible_rows else None
-            if row is None:
+        if viewer.mode == ViewerMode.DETAIL and viewer.visible_rows:
+            row = viewer.visible_rows[viewer.cursor]
+            db_id = row.finding_db_id
+            if db_id not in viewer.posted_indices:
+                viewer.status_message = "! This finding has not been posted"
                 return
             viewer.pending_confirm = ConfirmAction(
                 action="unpost",

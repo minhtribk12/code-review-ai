@@ -119,48 +119,44 @@ def post_to_pr(viewer: FindingsViewer) -> None:
 
 
 def unpost_from_pr(viewer: FindingsViewer) -> None:
-    """Delete posted PR review comments for the current finding."""
-    if not viewer.last_comment_ids:
-        viewer.status_message = "! No posted comments to delete"
+    """Mark a finding as unposted and attempt to delete its PR comment.
+
+    Uses last_comment_ids if available (same-session post), otherwise
+    just marks the finding as unposted in the DB.
+    """
+    # Use pending_confirm's finding_row if available
+    row = None
+    if viewer.pending_confirm is not None:
+        row = viewer.pending_confirm.finding_row
+    elif viewer.visible_rows:
+        row = viewer.visible_rows[viewer.cursor]
+
+    if row is None or row.finding_db_id is None:
+        viewer.status_message = "! No finding selected"
         return
 
-    row = viewer.visible_rows[viewer.cursor] if viewer.visible_rows else None
-    pr_url = _resolve_pr_url(viewer, row)
-    if not pr_url:
-        viewer.status_message = "! Not a PR review"
-        return
-    if not viewer.github_token:
-        viewer.status_message = "! GITHUB_TOKEN required"
-        return
+    # Try to delete from GitHub if we have comment IDs from this session
+    if viewer.last_comment_ids:
+        pr_url = _resolve_pr_url(viewer, row)
+        if pr_url and viewer.github_token:
+            try:
+                owner, repo, _pr_number = parse_pr_reference(pr_url)
+                deleted = delete_review_comments(
+                    owner=owner,
+                    repo=repo,
+                    token=viewer.github_token,
+                    comment_ids=viewer.last_comment_ids,
+                )
+                viewer.comments_deleted += deleted
+                viewer.last_comment_ids.clear()
+                viewer.last_review_id = None
+            except Exception:
+                logger.debug("could not delete PR comments", exc_info=True)
 
-    try:
-        owner, repo, _pr_number = parse_pr_reference(pr_url)
-    except ValueError as exc:
-        viewer.status_message = f"! Invalid PR URL: {exc}"
-        return
-
-    try:
-        deleted = delete_review_comments(
-            owner=owner,
-            repo=repo,
-            token=viewer.github_token,
-            comment_ids=viewer.last_comment_ids,
-        )
-        viewer.comments_deleted += deleted
-        viewer.last_comment_ids.clear()
-        viewer.last_review_id = None
-        if row is not None and row.finding_db_id is not None:
-            viewer.posted_indices.discard(row.finding_db_id)
-            _persist_posted(viewer, row.finding_db_id, is_posted=False)
-        viewer.status_message = f"Deleted {deleted} comment(s)"
-
-    except GitHubAuthError:
-        viewer.status_message = "! Permission denied"
-    except httpx.HTTPStatusError as exc:
-        viewer.status_message = f"! GitHub API error: {exc.response.status_code}"
-    except Exception as exc:
-        logger.exception("comment deletion failed")
-        viewer.status_message = f"! Error deleting comments: {exc}"
+    # Always mark as unposted in DB
+    viewer.posted_indices.discard(row.finding_db_id)
+    _persist_posted(viewer, row.finding_db_id, is_posted=False)
+    viewer.status_message = f"Unposted: {row.title}"
 
 
 def delete_finding(viewer: FindingsViewer) -> None:
