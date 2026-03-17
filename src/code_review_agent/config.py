@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_temperature: float = Field(default=0.1, ge=0.0, le=1.0)
     llm_top_p: float = Field(default=0.95, ge=0.0, le=1.0)
-    llm_max_tokens: int = Field(default=4096, ge=128)
+    llm_max_tokens: int = Field(default=8192, ge=128)
     request_timeout_seconds: int = Field(default=120, ge=1)
     token_tier: TokenTier = TokenTier.FREE
     max_prompt_tokens: int | None = None

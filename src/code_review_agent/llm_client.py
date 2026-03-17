@@ -209,8 +209,20 @@ class LLMClient:
             msg = "LLM returned response with no choices"
             raise LLMEmptyResponseError(msg)
 
-        raw_content = response.choices[0].message.content
+        message = response.choices[0].message
+        raw_content = message.content
+
+        # NVIDIA nemotron-3-super may use reasoning_content for thinking,
+        # leaving content as None when max_tokens is exhausted during reasoning.
+        # Fall back to reasoning_content if content is empty.
         if not raw_content or not raw_content.strip():
+            reasoning = getattr(message, "reasoning_content", None)
+            if reasoning and reasoning.strip():
+                logger.warning(
+                    "llm returned empty content but has reasoning_content, "
+                    "try increasing LLM_MAX_TOKENS",
+                    finish_reason=response.choices[0].finish_reason,
+                )
             msg = "LLM returned empty response"
             raise LLMEmptyResponseError(msg)
 
