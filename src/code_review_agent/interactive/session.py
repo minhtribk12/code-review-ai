@@ -175,6 +175,7 @@ class SessionState:
     active_repo: str | None = None  # "owner/repo" for PR commands
     active_repo_source: str = ""  # "local" or "remote"
     last_review_report: ReviewReport | None = None
+    last_review_id: int | None = None
     _effective_settings_cache: Settings | None = field(
         default=None,
         repr=False,

@@ -216,7 +216,7 @@ def findings(
         typer.echo("No findings to display.")
         raise typer.Exit()
 
-    _launch_findings_navigator(report=report, settings=settings)
+    _launch_findings_navigator(report=report, settings=settings, review_id=review_id)
 
 
 @app.command()
@@ -251,15 +251,23 @@ def _launch_findings_navigator(
     *,
     report: object,
     settings: Settings,
+    review_id: int | None = None,
 ) -> None:
     """Launch the full-screen findings navigator for a ReviewReport."""
     from code_review_agent.interactive.commands.findings_cmd import run_findings_app
+    from code_review_agent.storage import ReviewStorage
 
     token: str | None = None
     if settings.github_token is not None:
         token = settings.github_token.get_secret_value()
 
-    run_findings_app(report=report, github_token=token)  # type: ignore[arg-type]
+    storage = ReviewStorage(settings.history_db_path)
+    run_findings_app(
+        report=report,  # type: ignore[arg-type]
+        github_token=token,
+        review_id=review_id,
+        storage=storage,
+    )
 
 
 def _parse_agent_names(agents_arg: str | None) -> list[str] | None:

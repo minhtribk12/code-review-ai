@@ -22,7 +22,7 @@ logger = structlog.get_logger(__name__)
 
 _DEFAULT_DB_PATH = "~/.cra/reviews.db"
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS reviews (
@@ -75,6 +75,22 @@ CREATE TABLE IF NOT EXISTS agent_results (
 );
 """
 
+_CREATE_TRIAGE_TABLE = """
+CREATE TABLE IF NOT EXISTS finding_triage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+    finding_index INTEGER NOT NULL,
+    triage_action TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(review_id, finding_index)
+);
+
+CREATE TABLE IF NOT EXISTS finding_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"""
+
 _CREATE_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_reviews_repo ON reviews(repo);
 CREATE INDEX IF NOT EXISTS idx_reviews_reviewed_at ON reviews(reviewed_at);
@@ -84,6 +100,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_results_review
     ON agent_results(review_id);
 CREATE INDEX IF NOT EXISTS idx_agent_results_name
     ON agent_results(agent_name);
+CREATE INDEX IF NOT EXISTS idx_finding_triage_review
+    ON finding_triage(review_id);
 """
 
 _MIGRATE_V1_TO_V2 = """
@@ -119,7 +137,9 @@ class ReviewStorage:
     def _init_db(self) -> None:
         """Create tables, indexes, and run migrations if needed."""
         with self._get_connection() as conn:
-            conn.executescript(_CREATE_TABLES + _CREATE_INDEXES)
+            conn.executescript(
+                _CREATE_TABLES + _CREATE_TRIAGE_TABLE + _CREATE_INDEXES,
+            )
             self._migrate(conn)
             logger.debug("review storage initialized", path=str(self._db_path))
 
@@ -407,6 +427,68 @@ class ReviewStorage:
 
         reviews = self.list_reviews(repo=repo, limit=limit)
         return json.dumps(reviews, indent=2, default=str)
+
+    # -- Finding triage persistence --
+
+    def save_triage(
+        self,
+        review_id: int,
+        finding_index: int,
+        triage_action: str,
+    ) -> None:
+        """Persist a triage action for a specific finding.
+
+        Uses INSERT OR REPLACE so repeated calls update the action.
+        If ``triage_action`` is ``"none"``, the row is deleted instead.
+        """
+        with self._get_connection() as conn:
+            if triage_action == "none":
+                conn.execute(
+                    "DELETE FROM finding_triage WHERE review_id = ? AND finding_index = ?",
+                    (review_id, finding_index),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO finding_triage
+                        (review_id, finding_index, triage_action, created_at)
+                    VALUES (?, ?, ?, datetime('now'))
+                    """,
+                    (review_id, finding_index, triage_action),
+                )
+
+    def load_triage(self, review_id: int) -> dict[int, str]:
+        """Load all triage actions for a review.
+
+        Returns a dict mapping finding_index -> triage_action string.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT finding_index, triage_action FROM finding_triage WHERE review_id = ?",
+                (review_id,),
+            ).fetchall()
+        return {row["finding_index"]: row["triage_action"] for row in rows}
+
+    # -- Finding settings persistence --
+
+    def save_finding_setting(self, key: str, value: str) -> None:
+        """Persist a findings navigator setting (e.g. visible columns)."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO finding_settings (key, value) VALUES (?, ?)",
+                (key, value),
+            )
+
+    def load_finding_setting(self, key: str) -> str | None:
+        """Load a findings navigator setting by key."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM finding_settings WHERE key = ?",
+                (key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["value"])
 
     @property
     def db_path(self) -> Path:

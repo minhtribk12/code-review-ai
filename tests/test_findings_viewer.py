@@ -204,8 +204,8 @@ class TestFilter:
 
     def test_open_filter_builds_options(self, viewer: FindingsViewer) -> None:
         viewer.open_filter()
-        # 4 severity + 3 agents (security, performance, style)
-        assert len(viewer.filter_options) == 7
+        # 4 severity + 3 agents (security, performance, style) + 4 triage
+        assert len(viewer.filter_options) == 11
 
     def test_filter_toggle_and_confirm(self, viewer: FindingsViewer) -> None:
         viewer.open_filter()
@@ -598,10 +598,11 @@ class TestAdvancedFilters:
         assert "triage:none" in keys
         assert "triage:false_positive" in keys
 
-    def test_filter_excludes_triage_when_none_triaged(self, viewer: FindingsViewer) -> None:
+    def test_filter_always_shows_triage_options(self, viewer: FindingsViewer) -> None:
         viewer.open_filter()
         keys = [key for _, key, _ in viewer.filter_options]
-        assert "triage:none" not in keys
+        assert "triage:none" in keys
+        assert "triage:solved" in keys
 
     def test_filter_includes_pr_status_when_staged(self, viewer: FindingsViewer) -> None:
         viewer.toggle_stage_for_pr()  # stage index 0

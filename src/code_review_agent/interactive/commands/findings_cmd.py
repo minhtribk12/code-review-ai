@@ -38,6 +38,7 @@ from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
+    from code_review_agent.storage import ReviewStorage
 
 logger = structlog.get_logger(__name__)
 
@@ -75,11 +76,12 @@ class FindingRow(BaseModel):
 
 
 class TriageAction(StrEnum):
-    """In-memory triage annotation for a finding."""
+    """Triage annotation for a finding, persisted to SQLite."""
 
     NONE = "none"
     FALSE_POSITIVE = "false_positive"
     IGNORED = "ignored"
+    SOLVED = "solved"
 
 
 class _ViewerMode(StrEnum):
@@ -185,9 +187,13 @@ class FindingsViewer:
         report: ReviewReport,
         *,
         github_token: str | None = None,
+        review_id: int | None = None,
+        storage: ReviewStorage | None = None,
     ) -> None:
         self.report = report
         self.github_token = github_token
+        self.review_id = review_id
+        self._storage = storage
         self.all_rows: list[FindingRow] = _flatten_findings(report)
         self.visible_rows: list[FindingRow] = list(self.all_rows)
         self.cursor: int = 0
@@ -195,8 +201,8 @@ class FindingsViewer:
         self.mode: _ViewerMode = _ViewerMode.NAVIGATE
         self.status_message: str = ""
 
-        # Triage
-        self.triage: dict[int, TriageAction] = {}
+        # Triage -- load persisted state if available
+        self.triage: dict[int, TriageAction] = self._load_persisted_triage()
         self.staged_for_pr: set[int] = set()
 
         # Sort
@@ -209,7 +215,7 @@ class FindingsViewer:
         self.sort_index: int = 0
         self.is_sort_reversed: bool = False
 
-        # Filter (extended with triage/pr_status/repo/pr_number)
+        # Filter -- hide solved findings by default
         self.filter_severity: set[Severity] = set(Severity)
         self.filter_agents: set[str] = {r.agent_name for r in report.agent_results}
         self.filter_triage: set[str] = {"none", "false_positive", "ignored"}
@@ -221,8 +227,8 @@ class FindingsViewer:
         self.filter_cursor: int = 0
         self.filter_options: list[tuple[str, str, bool]] = []
 
-        # Column configuration
-        self.visible_columns: list[str] = list(_DEFAULT_VISIBLE)
+        # Column configuration -- load persisted config if available
+        self.visible_columns: list[str] = self._load_persisted_columns()
         self.column_cursor: int = 0
         self.column_options: list[tuple[str, str, bool]] = []
 
@@ -232,6 +238,55 @@ class FindingsViewer:
         self.last_review_id: int | None = None
         self.last_comment_ids: list[int] = []
         self.comments_deleted: int = 0
+
+        # Apply initial filter (hides solved by default)
+        self._apply_filters()
+
+    def _load_persisted_triage(self) -> dict[int, TriageAction]:
+        """Load triage state from SQLite if storage and review_id are set."""
+        if self._storage is None or self.review_id is None:
+            return {}
+        try:
+            raw = self._storage.load_triage(self.review_id)
+            return {idx: TriageAction(action) for idx, action in raw.items()}
+        except Exception:
+            logger.debug("failed to load persisted triage", exc_info=True)
+            return {}
+
+    def _load_persisted_columns(self) -> list[str]:
+        """Load column config from SQLite, falling back to defaults."""
+        if self._storage is None:
+            return list(_DEFAULT_VISIBLE)
+        try:
+            raw = self._storage.load_finding_setting("visible_columns")
+            if raw:
+                cols = raw.split(",")
+                valid = {key for key, _, _ in _ALL_COLUMNS}
+                return [c for c in cols if c in valid] or list(_DEFAULT_VISIBLE)
+        except Exception:
+            logger.debug("failed to load persisted columns", exc_info=True)
+        return list(_DEFAULT_VISIBLE)
+
+    def _persist_triage(self, finding_index: int, action: TriageAction) -> None:
+        """Persist a triage change to SQLite."""
+        if self._storage is None or self.review_id is None:
+            return
+        try:
+            self._storage.save_triage(self.review_id, finding_index, action.value)
+        except Exception:
+            logger.debug("failed to persist triage", exc_info=True)
+
+    def _persist_columns(self) -> None:
+        """Persist current column config to SQLite."""
+        if self._storage is None:
+            return
+        try:
+            self._storage.save_finding_setting(
+                "visible_columns",
+                ",".join(self.visible_columns),
+            )
+        except Exception:
+            logger.debug("failed to persist columns", exc_info=True)
 
     # -- Navigation --
 
@@ -313,16 +368,16 @@ class FindingsViewer:
                 )
             )
 
-        # Triage (only if any findings are triaged)
-        if self.triage:
-            for label, key in [
-                ("None (untriaged)", "triage:none"),
-                ("False Positive", "triage:false_positive"),
-                ("Ignored", "triage:ignored"),
-            ]:
-                self.filter_options.append(
-                    (f"[Triage] {label}", key, key[7:] in self.filter_triage)
-                )
+        # Triage (always shown so users can reveal solved findings)
+        for triage_label, triage_key in [
+            ("None (untriaged)", "triage:none"),
+            ("False Positive", "triage:false_positive"),
+            ("Ignored", "triage:ignored"),
+            ("Solved", "triage:solved"),
+        ]:
+            self.filter_options.append(
+                (f"[Triage] {triage_label}", triage_key, triage_key[7:] in self.filter_triage)
+            )
 
         # PR Status (only if any findings are staged or posted)
         if self.staged_for_pr or self.posted_indices:
@@ -395,7 +450,7 @@ class FindingsViewer:
         # If no triage/prstatus/repo/prnum options were in the filter,
         # keep the defaults (show all)
         if not any(k.startswith("triage:") for _, k, _ in self.filter_options):
-            self.filter_triage = {"none", "false_positive", "ignored"}
+            self.filter_triage = {"none", "false_positive", "ignored", "solved"}
         if not any(k.startswith("prstatus:") for _, k, _ in self.filter_options):
             self.filter_pr_status = {"none", "staged", "posted"}
         if not any(k.startswith("repo:") for _, k, _ in self.filter_options):
@@ -446,29 +501,29 @@ class FindingsViewer:
 
     # -- Triage --
 
-    def mark_false_positive(self) -> None:
+    def _toggle_triage(self, action: TriageAction, label: str) -> None:
+        """Toggle a triage action on the current finding and persist it."""
         if not self.visible_rows:
             return
         row = self.visible_rows[self.cursor]
         current = self.triage.get(row.index, TriageAction.NONE)
-        if current == TriageAction.FALSE_POSITIVE:
+        if current == action:
             self.triage.pop(row.index, None)
+            self._persist_triage(row.index, TriageAction.NONE)
             self.status_message = f"Unmarked: {row.title}"
         else:
-            self.triage[row.index] = TriageAction.FALSE_POSITIVE
-            self.status_message = f"Marked as false positive: {row.title}"
+            self.triage[row.index] = action
+            self._persist_triage(row.index, action)
+            self.status_message = f"{label}: {row.title}"
+
+    def mark_false_positive(self) -> None:
+        self._toggle_triage(TriageAction.FALSE_POSITIVE, "Marked as false positive")
 
     def mark_ignored(self) -> None:
-        if not self.visible_rows:
-            return
-        row = self.visible_rows[self.cursor]
-        current = self.triage.get(row.index, TriageAction.NONE)
-        if current == TriageAction.IGNORED:
-            self.triage.pop(row.index, None)
-            self.status_message = f"Unignored: {row.title}"
-        else:
-            self.triage[row.index] = TriageAction.IGNORED
-            self.status_message = f"Ignored: {row.title}"
+        self._toggle_triage(TriageAction.IGNORED, "Ignored")
+
+    def mark_solved(self) -> None:
+        self._toggle_triage(TriageAction.SOLVED, "Marked as solved")
 
     # -- PR staging --
 
@@ -671,6 +726,7 @@ class FindingsViewer:
 
     def column_confirm(self) -> None:
         self.visible_columns = [key for _label, key, checked in self.column_options if checked]
+        self._persist_columns()
         self.mode = _ViewerMode.NAVIGATE
 
     def cancel_columns(self) -> None:
@@ -702,6 +758,8 @@ class FindingsViewer:
             return (theme.muted, "[FP]")
         if action == TriageAction.IGNORED:
             return (theme.muted, "[IGN]")
+        if action == TriageAction.SOLVED:
+            return (theme.success, "[DONE]")
         return ("", "")
 
     def _render_cell(
@@ -825,7 +883,7 @@ class FindingsViewer:
             # Determine base style for triaged rows
             if triage_action == TriageAction.FALSE_POSITIVE:
                 base_style = "strike dim"
-            elif triage_action == TriageAction.IGNORED:
+            elif triage_action in (TriageAction.IGNORED, TriageAction.SOLVED):
                 base_style = "dim"
             elif is_selected:
                 base_style = "bold"
@@ -962,6 +1020,7 @@ class FindingsViewer:
                 [
                     ("m", "Mark / unmark as false positive"),
                     ("i", "Ignore / unignore finding"),
+                    ("x", "Mark / unmark as solved (hidden by default)"),
                 ],
             ),
             (
@@ -1061,13 +1120,20 @@ def run_findings_app(
     *,
     report: ReviewReport,
     github_token: str | None = None,
+    review_id: int | None = None,
+    storage: ReviewStorage | None = None,
 ) -> None:
     """Launch the full-screen findings navigator.
 
     Shared entry point used by both the TUI ``findings`` command and the
     CLI ``--findings`` flag / ``findings`` subcommand.
     """
-    viewer = FindingsViewer(report, github_token=github_token)
+    viewer = FindingsViewer(
+        report,
+        github_token=github_token,
+        review_id=review_id,
+        storage=storage,
+    )
 
     kb = KeyBindings()
 
@@ -1126,6 +1192,11 @@ def run_findings_app(
     def on_ignore(_event: KeyPressEvent) -> None:
         if viewer.mode == _ViewerMode.NAVIGATE:
             viewer.mark_ignored()
+
+    @kb.add("x")
+    def on_solved(_event: KeyPressEvent) -> None:
+        if viewer.mode == _ViewerMode.NAVIGATE:
+            viewer.mark_solved()
 
     @kb.add("p")
     def on_stage_pr(_event: KeyPressEvent) -> None:
@@ -1198,14 +1269,19 @@ def run_findings_app(
     console = Console()
     fp_count = sum(1 for v in viewer.triage.values() if v == TriageAction.FALSE_POSITIVE)
     ign_count = sum(1 for v in viewer.triage.values() if v == TriageAction.IGNORED)
+    solved_count = sum(1 for v in viewer.triage.values() if v == TriageAction.SOLVED)
 
-    has_activity = fp_count or ign_count or viewer.comments_posted or viewer.comments_deleted
+    has_activity = (
+        fp_count or ign_count or solved_count or viewer.comments_posted or viewer.comments_deleted
+    )
     if has_activity:
         console.print()
         if fp_count:
             console.print(f"  {fp_count} finding(s) marked as false positive")
         if ign_count:
             console.print(f"  {ign_count} finding(s) ignored")
+        if solved_count:
+            console.print(f"  {solved_count} finding(s) marked as solved")
         if viewer.comments_posted:
             console.print(f"  {viewer.comments_posted} comment(s) posted to PR")
         if viewer.comments_deleted:
@@ -1215,16 +1291,18 @@ def run_findings_app(
 
 def cmd_findings(args: list[str], session: SessionState) -> None:
     """Launch the interactive findings navigator."""
+    from code_review_agent.storage import ReviewStorage
+
     console = Console()
     report: ReviewReport | None = None
+    review_id: int | None = None
+    settings = session.effective_settings
+    storage = ReviewStorage(settings.history_db_path)
 
     # Load report: from arg (review ID) or last review
     if args and args[0].isdigit():
         review_id = int(args[0])
         try:
-            from code_review_agent.storage import ReviewStorage
-
-            storage = ReviewStorage(session.effective_settings.history_db_path)
             review_dict = storage.get_review(review_id)
             if review_dict is None:
                 console.print(f"[{theme.error}]Review #{review_id} not found.[/{theme.error}]")
@@ -1239,10 +1317,11 @@ def cmd_findings(args: list[str], session: SessionState) -> None:
             return
     else:
         report = session.last_review_report
+        review_id = session.last_review_id
 
     if report is None:
         console.print(
-            f"[{theme.warning}]No review available."
+            f"[{theme.warning}]No review available. "
             f"Run 'review' first or specify a review ID: "
             f"findings <review_id>[/{theme.warning}]"
         )
@@ -1254,9 +1333,13 @@ def cmd_findings(args: list[str], session: SessionState) -> None:
         return
 
     # Resolve GitHub token for PR posting
-    settings = session.effective_settings
     token: str | None = None
     if settings.github_token is not None:
         token = settings.github_token.get_secret_value()
 
-    run_findings_app(report=report, github_token=token)
+    run_findings_app(
+        report=report,
+        github_token=token,
+        review_id=review_id,
+        storage=storage,
+    )

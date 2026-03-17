@@ -118,8 +118,8 @@ def _run_review_on_input(
         if report.token_usage is not None:
             session.total_tokens_used += report.token_usage.total_tokens
 
-        # Auto-save to history
-        _auto_save_report(report, session)
+        # Auto-save to history and capture review ID for findings triage
+        session.last_review_id = _auto_save_report(report, session)
 
         if output_format == OutputFormat.JSON:
             console.print(render_report_json(report))
@@ -178,8 +178,8 @@ def _resolve_diff(positional: list[str]) -> str | None:
         return None
 
 
-def _auto_save_report(report: object, session: SessionState) -> None:
-    """Save the review report to history storage.
+def _auto_save_report(report: object, session: SessionState) -> int | None:
+    """Save the review report to history storage. Returns the review ID.
 
     Fails silently -- storage errors should never block the review output.
     """
@@ -188,10 +188,10 @@ def _auto_save_report(report: object, session: SessionState) -> None:
 
         settings = session.effective_settings
         if not settings.auto_save_history:
-            return
+            return None
 
         storage = ReviewStorage(settings.history_db_path)
-        storage.save(
+        return storage.save(
             report,  # type: ignore[arg-type]
             repo=session.active_repo,
             llm_model=settings.llm_model,
@@ -202,3 +202,4 @@ def _auto_save_report(report: object, session: SessionState) -> None:
         import structlog
 
         structlog.get_logger(__name__).debug("auto-save failed", exc_info=True)
+        return None
