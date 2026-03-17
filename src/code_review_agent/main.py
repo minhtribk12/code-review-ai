@@ -189,7 +189,8 @@ def findings(
 ) -> None:
     """Open interactive findings navigator for a saved review."""
     from code_review_agent.interactive.commands.findings_cmd import (
-        _flatten_findings,
+        _rows_from_db,
+        run_findings_app,
     )
     from code_review_agent.storage import ReviewStorage
 
@@ -203,20 +204,18 @@ def findings(
         raise typer.Exit(code=1) from None
 
     storage = ReviewStorage(settings.history_db_path)
-    review_dict = storage.get_review(review_id)
-    if review_dict is None:
-        typer.echo(f"Error: review #{review_id} not found", err=True)
+    db_rows = storage.load_findings_for_review(review_id)
+    if not db_rows:
+        typer.echo(f"Error: review #{review_id} not found or has no findings", err=True)
         raise typer.Exit(code=1)
 
-    from code_review_agent.models import ReviewReport
+    rows = _rows_from_db(db_rows)
 
-    report = ReviewReport.model_validate_json(review_dict["report_json"])
+    token: str | None = None
+    if settings.github_token is not None:
+        token = settings.github_token.get_secret_value()
 
-    if not _flatten_findings(report):
-        typer.echo("No findings to display.")
-        raise typer.Exit()
-
-    _launch_findings_navigator(report=report, settings=settings, review_id=review_id)
+    run_findings_app(rows=rows, github_token=token, storage=storage)
 
 
 @app.command()
@@ -251,7 +250,6 @@ def _launch_findings_navigator(
     *,
     report: object,
     settings: Settings,
-    review_id: int | None = None,
 ) -> None:
     """Launch the full-screen findings navigator for a ReviewReport."""
     from code_review_agent.interactive.commands.findings_cmd import run_findings_app
@@ -265,7 +263,6 @@ def _launch_findings_navigator(
     run_findings_app(
         report=report,  # type: ignore[arg-type]
         github_token=token,
-        review_id=review_id,
         storage=storage,
     )
 

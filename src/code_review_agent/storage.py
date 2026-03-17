@@ -1,13 +1,15 @@
 """Review history storage backed by SQLite.
 
 Stores ReviewReport metadata in indexed columns for fast queries, with the
-full report JSON preserved for complete retrieval. Uses WAL mode for safe
-concurrent access between TUI and CLI.
+full report JSON preserved for complete retrieval. Individual findings are
+stored as first-class rows with triage and posting state. Uses WAL mode
+for safe concurrent access between TUI and CLI.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -22,12 +24,12 @@ logger = structlog.get_logger(__name__)
 
 _DEFAULT_DB_PATH = "~/.cra/reviews.db"
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    schema_version INTEGER NOT NULL DEFAULT 2,
+    schema_version INTEGER NOT NULL DEFAULT 4,
     reviewed_at TEXT NOT NULL,
     repo TEXT,
     pr_number INTEGER,
@@ -73,13 +75,22 @@ CREATE TABLE IF NOT EXISTS agent_results (
     execution_time_seconds REAL NOT NULL DEFAULT 0.0,
     error_message TEXT
 );
-"""
 
-_CREATE_TRIAGE_TABLE = """
-CREATE TABLE IF NOT EXISTS finding_triage (
+CREATE TABLE IF NOT EXISTS findings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     review_id INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
     finding_index INTEGER NOT NULL,
+    severity TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    file_path TEXT,
+    line_number INTEGER,
+    suggestion TEXT,
+    confidence TEXT NOT NULL DEFAULT 'medium',
+    repo TEXT,
+    pr_number INTEGER,
     triage_action TEXT NOT NULL DEFAULT 'none',
     is_posted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -101,8 +112,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_results_review
     ON agent_results(review_id);
 CREATE INDEX IF NOT EXISTS idx_agent_results_name
     ON agent_results(agent_name);
-CREATE INDEX IF NOT EXISTS idx_finding_triage_review
-    ON finding_triage(review_id);
+CREATE INDEX IF NOT EXISTS idx_findings_review ON findings(review_id);
+CREATE INDEX IF NOT EXISTS idx_findings_triage ON findings(triage_action);
+CREATE INDEX IF NOT EXISTS idx_findings_repo ON findings(repo);
+CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(severity);
 """
 
 _MIGRATE_V1_TO_V2 = """
@@ -138,30 +151,128 @@ class ReviewStorage:
     def _init_db(self) -> None:
         """Create tables, indexes, and run migrations if needed."""
         with self._get_connection() as conn:
-            conn.executescript(
-                _CREATE_TABLES + _CREATE_TRIAGE_TABLE + _CREATE_INDEXES,
-            )
+            conn.executescript(_CREATE_TABLES + _CREATE_INDEXES)
             self._migrate(conn)
             logger.debug("review storage initialized", path=str(self._db_path))
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         """Run schema migrations for existing databases."""
-        # Check if agent_results table exists (v2 indicator)
-        table_check = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_results'"
-        ).fetchone()
-        if table_check is not None:
-            return  # Already v2
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
 
-        # Check if reviews table has v1 schema (missing new columns)
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(reviews)").fetchall()}
-        if "prompt_tokens" not in columns:
-            logger.info("migrating review storage from v1 to v2")
-            for statement in _MIGRATE_V1_TO_V2.strip().split(";"):
-                statement = statement.strip()
-                if statement:
-                    with contextlib.suppress(sqlite3.OperationalError):
-                        conn.execute(statement)
+        # v1 -> v2: add missing columns to reviews, create agent_results
+        if "agent_results" not in tables:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(reviews)").fetchall()}
+            if "prompt_tokens" not in columns:
+                logger.info("migrating review storage from v1 to v2")
+                for statement in _MIGRATE_V1_TO_V2.strip().split(";"):
+                    statement = statement.strip()
+                    if statement:
+                        with contextlib.suppress(sqlite3.OperationalError):
+                            conn.execute(statement)
+
+        # v3 -> v4: migrate finding_triage into findings table
+        if "finding_triage" in tables and "findings" in tables:
+            self._migrate_v3_to_v4(conn)
+
+    def _migrate_v3_to_v4(self, conn: sqlite3.Connection) -> None:
+        """Migrate from finding_triage to the findings table.
+
+        Parses report_json for each review, flattens findings into the
+        findings table, and merges triage/posted state from finding_triage.
+        """
+        # Check if findings table already has data (already migrated)
+        count = conn.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
+        if count > 0:
+            # Already migrated, just clean up old table
+            conn.execute("DROP TABLE IF EXISTS finding_triage")
+            return
+
+        reviews = conn.execute(
+            "SELECT id, repo, pr_url, report_json FROM reviews WHERE total_findings > 0"
+        ).fetchall()
+
+        migrated_count = 0
+        for review in reviews:
+            try:
+                self._migrate_review_findings(conn, dict(review))
+                migrated_count += 1
+            except Exception:
+                logger.warning(
+                    "skipping review during v3->v4 migration",
+                    review_id=review["id"],
+                )
+
+        conn.execute("DROP TABLE IF EXISTS finding_triage")
+
+        if migrated_count:
+            logger.info(
+                "migrated findings from v3 to v4",
+                reviews_migrated=migrated_count,
+            )
+
+    def _migrate_review_findings(
+        self,
+        conn: sqlite3.Connection,
+        review: dict[str, Any],
+    ) -> None:
+        """Migrate a single review's findings from report_json to findings table."""
+        from code_review_agent.github_client import parse_pr_reference
+        from code_review_agent.models import ReviewReport
+
+        report = ReviewReport.model_validate(json.loads(review["report_json"]))
+        review_id = review["id"]
+        repo = review["repo"]
+        pr_number: int | None = None
+
+        if report.pr_url:
+            with contextlib.suppress(ValueError):
+                _, _, pr_number = parse_pr_reference(report.pr_url)
+
+        # Load existing triage data
+        triage_rows = conn.execute(
+            "SELECT finding_index, triage_action, is_posted "
+            "FROM finding_triage WHERE review_id = ?",
+            (review_id,),
+        ).fetchall()
+        triage_map = {row["finding_index"]: dict(row) for row in triage_rows}
+
+        idx = 0
+        for result in report.agent_results:
+            for finding in result.findings:
+                triage = triage_map.get(idx, {})
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO findings (
+                        review_id, finding_index, severity, agent_name,
+                        category, title, description, file_path, line_number,
+                        suggestion, confidence, repo, pr_number,
+                        triage_action, is_posted
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        review_id,
+                        idx,
+                        str(finding.severity),
+                        result.agent_name,
+                        finding.category,
+                        finding.title,
+                        finding.description,
+                        finding.file_path,
+                        finding.line_number,
+                        finding.suggestion,
+                        str(finding.confidence),
+                        repo,
+                        pr_number,
+                        triage.get("triage_action", "none"),
+                        triage.get("is_posted", 0),
+                    ),
+                )
+                idx += 1
+
+    # -- Save --
 
     def save(
         self,
@@ -172,7 +283,10 @@ class ReviewStorage:
         token_tier: str | None = None,
         dedup_strategy: str | None = None,
     ) -> int:
-        """Save a review report and per-agent results. Returns the review ID."""
+        """Save a review report, per-agent results, and individual findings.
+
+        Returns the review ID.
+        """
         findings = report.total_findings
         pr_number = _extract_pr_number(report.pr_url)
 
@@ -186,11 +300,7 @@ class ReviewStorage:
         agents = ",".join(r.agent_name for r in report.agent_results)
         agents_count = len(report.agent_results)
         total_exec = sum(r.execution_time_seconds for r in report.agent_results)
-        # No per-file count available on ReviewReport; store 0 as placeholder
         files_reviewed = 0
-
-        # Count files from the report JSON (diff_files not on ReviewReport,
-        # but pr_url presence indicates PR review with files)
         report_json = report.model_dump_json(indent=2)
 
         with self._get_connection() as conn:
@@ -271,6 +381,9 @@ class ReviewStorage:
                     ),
                 )
 
+            # Save individual findings
+            self._save_findings(conn, review_id, report, repo, pr_number)
+
         logger.info(
             "review saved",
             id=review_id,
@@ -279,6 +392,46 @@ class ReviewStorage:
             findings=sum(findings.values()),
         )
         return review_id
+
+    def _save_findings(
+        self,
+        conn: sqlite3.Connection,
+        review_id: int,
+        report: ReviewReport,
+        repo: str | None,
+        pr_number: int | None,
+    ) -> None:
+        """Bulk-insert individual findings from a report."""
+        idx = 0
+        for result in report.agent_results:
+            for finding in result.findings:
+                conn.execute(
+                    """
+                    INSERT INTO findings (
+                        review_id, finding_index, severity, agent_name,
+                        category, title, description, file_path, line_number,
+                        suggestion, confidence, repo, pr_number
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        review_id,
+                        idx,
+                        str(finding.severity),
+                        result.agent_name,
+                        finding.category,
+                        finding.title,
+                        finding.description,
+                        finding.file_path,
+                        finding.line_number,
+                        finding.suggestion,
+                        str(finding.confidence),
+                        repo,
+                        pr_number,
+                    ),
+                )
+                idx += 1
+
+    # -- Query --
 
     def list_reviews(
         self,
@@ -371,7 +524,6 @@ class ReviewStorage:
 
             result = dict(row)
 
-            # Risk level distribution
             risk_rows = conn.execute(
                 f"""
                 SELECT risk_level, COUNT(*) as count
@@ -387,11 +539,7 @@ class ReviewStorage:
         return result
 
     def get_agent_stats(self, *, days: int = 30) -> list[dict[str, Any]]:
-        """Get per-agent performance stats over a time window.
-
-        Returns aggregated stats per agent: avg execution time, total findings,
-        finding breakdown by severity, success/failure rate.
-        """
+        """Get per-agent performance stats over a time window."""
         with self._get_connection() as conn:
             rows = conn.execute(
                 """
@@ -424,137 +572,71 @@ class ReviewStorage:
 
     def export_json(self, *, repo: str | None = None, limit: int = 1000) -> str:
         """Export reviews as a JSON array string."""
-        import json
-
         reviews = self.list_reviews(repo=repo, limit=limit)
         return json.dumps(reviews, indent=2, default=str)
 
-    def get_reviews_with_unsolved_findings(self, *, limit: int = 20) -> list[dict[str, Any]]:
-        """Get recent reviews that have at least one unsolved finding.
+    # -- Findings --
 
-        A finding is considered unsolved if it has no triage action or its
-        triage action is not 'solved'. Returns review metadata with
-        report_json for full reconstruction.
+    def load_unsolved_findings(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        """Load all unsolved findings across all reviews.
+
+        Returns findings where triage_action is NOT 'solved', ordered by
+        severity (critical first) then by creation time (newest first).
         """
         with self._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT r.id, r.repo, r.pr_number, r.pr_url, r.risk_level,
-                       r.total_findings, r.reviewed_at, r.report_json
-                FROM reviews r
-                WHERE r.total_findings > 0
-                  AND EXISTS (
-                    -- At least one finding index that is not 'solved'
-                    SELECT 1 FROM (
-                      -- Generate finding indices 0..total_findings-1
-                      WITH RECURSIVE cnt(x) AS (
-                        VALUES(0)
-                        UNION ALL
-                        SELECT x+1 FROM cnt WHERE x < r.total_findings - 1
-                      )
-                      SELECT x FROM cnt
-                      WHERE x NOT IN (
-                        SELECT finding_index FROM finding_triage
-                        WHERE review_id = r.id AND triage_action = 'solved'
-                      )
-                    )
-                  )
-                ORDER BY r.reviewed_at DESC
+                SELECT f.*, r.reviewed_at, r.pr_url
+                FROM findings f
+                JOIN reviews r ON f.review_id = r.id
+                WHERE f.triage_action != 'solved'
+                ORDER BY
+                    CASE f.severity
+                        WHEN 'critical' THEN 0
+                        WHEN 'high' THEN 1
+                        WHEN 'medium' THEN 2
+                        WHEN 'low' THEN 3
+                        ELSE 4
+                    END,
+                    r.reviewed_at DESC
                 LIMIT ?
                 """,
                 (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
 
-    # -- Finding triage persistence --
-
-    def save_triage(
-        self,
-        review_id: int,
-        finding_index: int,
-        triage_action: str,
-    ) -> None:
-        """Persist a triage action for a specific finding.
-
-        Uses INSERT OR REPLACE so repeated calls update the action.
-        If ``triage_action`` is ``"none"``, resets triage but preserves
-        ``is_posted`` state.
-        """
+    def load_findings_for_review(self, review_id: int) -> list[dict[str, Any]]:
+        """Load all findings for a specific review."""
         with self._get_connection() as conn:
-            if triage_action == "none":
-                # Reset triage but keep is_posted if row exists
-                conn.execute(
-                    """
-                    UPDATE finding_triage SET triage_action = 'none'
-                    WHERE review_id = ? AND finding_index = ?
-                    """,
-                    (review_id, finding_index),
-                )
-            else:
-                conn.execute(
-                    """
-                    INSERT INTO finding_triage
-                        (review_id, finding_index, triage_action, created_at)
-                    VALUES (?, ?, ?, datetime('now'))
-                    ON CONFLICT(review_id, finding_index)
-                    DO UPDATE SET triage_action = excluded.triage_action,
-                                  created_at = excluded.created_at
-                    """,
-                    (review_id, finding_index, triage_action),
-                )
+            rows = conn.execute(
+                """
+                SELECT f.*, r.reviewed_at, r.pr_url
+                FROM findings f
+                JOIN reviews r ON f.review_id = r.id
+                WHERE f.review_id = ?
+                ORDER BY f.finding_index
+                """,
+                (review_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
-    def save_posted(
-        self,
-        review_id: int,
-        finding_index: int,
-        *,
-        is_posted: bool,
-    ) -> None:
-        """Persist posted status for a specific finding.
-
-        Independent of triage action -- a finding can be both solved
-        and posted.
-        """
+    def update_finding_triage(self, finding_id: int, triage_action: str) -> None:
+        """Update triage action on a finding by its primary key."""
         with self._get_connection() as conn:
             conn.execute(
-                """
-                INSERT INTO finding_triage
-                    (review_id, finding_index, is_posted, created_at)
-                VALUES (?, ?, ?, datetime('now'))
-                ON CONFLICT(review_id, finding_index)
-                DO UPDATE SET is_posted = excluded.is_posted
-                """,
-                (review_id, finding_index, int(is_posted)),
+                "UPDATE findings SET triage_action = ? WHERE id = ?",
+                (triage_action, finding_id),
             )
 
-    def load_triage(self, review_id: int) -> dict[int, str]:
-        """Load all triage actions for a review.
-
-        Returns a dict mapping finding_index -> triage_action string.
-        Only includes entries with non-'none' triage action.
-        """
+    def update_finding_posted(self, finding_id: int, *, is_posted: bool) -> None:
+        """Update posted status on a finding by its primary key."""
         with self._get_connection() as conn:
-            rows = conn.execute(
-                """SELECT finding_index, triage_action FROM finding_triage
-                   WHERE review_id = ? AND triage_action != 'none'""",
-                (review_id,),
-            ).fetchall()
-        return {row["finding_index"]: row["triage_action"] for row in rows}
+            conn.execute(
+                "UPDATE findings SET is_posted = ? WHERE id = ?",
+                (int(is_posted), finding_id),
+            )
 
-    def load_posted(self, review_id: int) -> set[int]:
-        """Load posted finding indices for a review.
-
-        Returns a set of finding indices that have been posted to PR.
-        """
-        with self._get_connection() as conn:
-            rows = conn.execute(
-                """SELECT finding_index FROM finding_triage
-                   WHERE review_id = ? AND is_posted = 1""",
-                (review_id,),
-            ).fetchall()
-        return {row["finding_index"] for row in rows}
-
-    # -- Finding settings persistence --
+    # -- Settings --
 
     def save_finding_setting(self, key: str, value: str) -> None:
         """Persist a findings navigator setting (e.g. visible columns)."""

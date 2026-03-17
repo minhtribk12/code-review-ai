@@ -92,7 +92,7 @@ def report() -> ReviewReport:
 
 @pytest.fixture
 def viewer(report: ReviewReport) -> FindingsViewer:
-    return FindingsViewer(report, github_token="ghp_test_token")
+    return FindingsViewer(report=report, github_token="ghp_test_token")
 
 
 # ---------------------------------------------------------------------------
@@ -204,8 +204,8 @@ class TestFilter:
 
     def test_open_filter_builds_options(self, viewer: FindingsViewer) -> None:
         viewer.open_filter()
-        # 4 severity + 3 agents (security, performance, style) + 4 triage
-        assert len(viewer.filter_options) == 11
+        # 4 severity + 2 agents with findings (security, performance) + 4 triage
+        assert len(viewer.filter_options) == 10
 
     def test_filter_toggle_and_confirm(self, viewer: FindingsViewer) -> None:
         viewer.open_filter()
@@ -238,7 +238,7 @@ class TestTriage:
 
     def test_triage_on_empty_rows(self) -> None:
         report = _make_report(agent_findings={"security": []})
-        viewer = FindingsViewer(report)
+        viewer = FindingsViewer(report=report)
         viewer.mark_false_positive()  # should not raise
         assert viewer.triage == {}
 
@@ -257,7 +257,7 @@ class TestPrStaging:
 
     def test_stage_empty_rows(self) -> None:
         report = _make_report(agent_findings={"security": []})
-        viewer = FindingsViewer(report)
+        viewer = FindingsViewer(report=report)
         viewer.toggle_stage_for_pr()  # should not raise
         assert viewer.staged_for_pr == set()
 
@@ -270,13 +270,13 @@ class TestPrStaging:
 class TestPrPosting:
     def test_no_pr_url(self) -> None:
         report = _make_report(pr_url=None)
-        viewer = FindingsViewer(report, github_token="tok")
+        viewer = FindingsViewer(report=report, github_token="tok")
         viewer.staged_for_pr = {0}
         viewer.submit_to_pr()
         assert "Not a PR review" in viewer.status_message
 
     def test_no_github_token(self, report: ReviewReport) -> None:
-        viewer = FindingsViewer(report, github_token=None)
+        viewer = FindingsViewer(report=report, github_token=None)
         viewer.staged_for_pr = {0}
         viewer.submit_to_pr()
         assert "GITHUB_TOKEN required" in viewer.status_message
@@ -331,7 +331,7 @@ class TestPrPosting:
                 ],
             },
         )
-        viewer = FindingsViewer(report, github_token="tok")
+        viewer = FindingsViewer(report=report, github_token="tok")
         viewer.staged_for_pr = {0, 1}
 
         with patch(
@@ -477,7 +477,7 @@ class TestRendering:
 
     def test_render_empty_findings(self) -> None:
         report = _make_report(agent_findings={"security": []})
-        viewer = FindingsViewer(report)
+        viewer = FindingsViewer(report=report)
         result = viewer.render()
         text = "".join(t for _, t in result)
         assert "No findings" in text
@@ -525,10 +525,10 @@ class TestRendering:
         text = "".join(t for _, t in result)
         assert "[POSTED]" in text
 
-    def test_table_header_has_triage_and_pr_columns(self, viewer: FindingsViewer) -> None:
+    def test_table_header_has_status_and_pr_columns(self, viewer: FindingsViewer) -> None:
         result = viewer.render()
         text = "".join(t for _, t in result)
-        assert "Triage" in text
+        assert "Status" in text
         assert "PR" in text
 
 
@@ -635,29 +635,50 @@ class TestAdvancedFilters:
 
 
 class TestCmdFindings:
-    def test_no_report_shows_error(self) -> None:
+    def test_no_findings_shows_message(self) -> None:
         session = MagicMock()
-        session.last_review_report = None
-        with patch(
-            "code_review_agent.interactive.commands.findings_cmd.Console"
-        ) as mock_console_cls:
+        session.effective_settings.history_db_path = ":memory:"
+
+        with (
+            patch(
+                "code_review_agent.interactive.commands.findings_cmd.Console"
+            ) as mock_console_cls,
+            patch("code_review_agent.storage.ReviewStorage") as mock_storage_cls,
+        ):
             mock_console = MagicMock()
             mock_console_cls.return_value = mock_console
+            mock_storage_cls.return_value.load_unsolved_findings.return_value = []
             cmd_findings([], session)
 
         mock_console.print.assert_called_once()
         call_args = mock_console.print.call_args[0][0]
-        assert "No review available" in call_args
+        assert "No unsolved findings" in call_args
 
     def test_loads_from_storage(self, report: ReviewReport) -> None:
         session = MagicMock()
-        session.last_review_report = None
         session.effective_settings.history_db_path = "~/.cra/reviews.db"
 
         mock_storage = MagicMock()
-        mock_storage.get_review.return_value = {
-            "report_json": report.model_dump_json(),
-        }
+        mock_storage.load_findings_for_review.return_value = [
+            {
+                "id": 1,
+                "review_id": 1,
+                "finding_index": 0,
+                "severity": "high",
+                "agent_name": "security",
+                "category": "security",
+                "title": "SQL injection",
+                "description": "Test finding",
+                "file_path": "src/db.py",
+                "line_number": 10,
+                "suggestion": "Fix it",
+                "confidence": "medium",
+                "repo": "acme/app",
+                "pr_number": 42,
+                "triage_action": "none",
+                "is_posted": 0,
+            }
+        ]
 
         with (
             patch(
@@ -673,5 +694,5 @@ class TestCmdFindings:
             mock_app_cls.return_value = mock_app
             cmd_findings(["1"], session)
 
-        mock_storage.get_review.assert_called_once_with(1)
+        mock_storage.load_findings_for_review.assert_called_once_with(1)
         mock_app.run.assert_called_once()

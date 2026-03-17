@@ -58,10 +58,12 @@ _SEVERITY_ORDER: list[Severity] = [
 
 
 class FindingRow(BaseModel):
-    """Flattened finding for display in the navigator."""
+    """Finding loaded from the database for display in the navigator."""
 
     model_config = {"frozen": True}
 
+    finding_db_id: int | None = None
+    review_id: int | None = None
     index: int
     severity: Severity
     agent_name: str
@@ -74,6 +76,8 @@ class FindingRow(BaseModel):
     confidence: Confidence = Confidence.MEDIUM
     repo: str | None = None
     pr_number: int | None = None
+    triage_action: str = "none"
+    is_posted: bool = False
 
 
 class TriageAction(StrEnum):
@@ -92,29 +96,25 @@ class _ViewerMode(StrEnum):
     HELP = "help"
 
 
-# All available columns with display config
-_ALL_COLUMNS: list[tuple[str, str, int]] = [
-    # (key, header_label, preferred_width)
-    ("severity", "Sev", 5),
-    ("agent_name", "Agent", 13),
-    ("file_line", "File:Line", 27),
-    ("title", "Title", 21),
-    ("triage", "Triage", 8),
-    ("pr_status", "PR", 9),
-    ("repo", "Repo", 16),
-    ("pr_number", "PR#", 5),
-    ("confidence", "Conf", 7),
-    ("category", "Category", 14),
+# Column definitions with proportional weights
+_COLUMN_DEFS: list[tuple[str, str, float, int]] = [
+    # (key, label, weight, min_width)
+    ("severity", "Sev", 0.05, 5),
+    ("agent_name", "Agent", 0.10, 6),
+    ("file_line", "File:Line", 0.22, 10),
+    ("title", "Title", 0.20, 8),
+    ("triage", "Status", 0.07, 6),
+    ("pr_status", "PR", 0.06, 4),
+    ("repo", "Repo", 0.12, 6),
+    ("pr_number", "PR#", 0.04, 4),
+    ("confidence", "Conf", 0.06, 4),
+    ("category", "Category", 0.08, 6),
 ]
 
-# Columns that can shrink to fit the terminal (min width each)
-_FLEXIBLE_COLUMNS: dict[str, int] = {
-    "file_line": 12,
-    "title": 10,
-    "repo": 8,
-    "category": 8,
-    "agent_name": 8,
-}
+# Legacy compat: used by column config modal
+_ALL_COLUMNS: list[tuple[str, str, int]] = [
+    (key, label, min_w) for key, label, _w, min_w in _COLUMN_DEFS
+]
 
 _DEFAULT_VISIBLE: list[str] = [
     "severity",
@@ -133,7 +133,6 @@ _DEFAULT_VISIBLE: list[str] = [
 
 def _flatten_findings(report: ReviewReport) -> list[FindingRow]:
     """Extract all findings from a report into a flat list of FindingRow."""
-    # Extract repo/PR from pr_url if available
     repo_name: str | None = None
     pr_num: int | None = None
     if report.pr_url:
@@ -167,20 +166,54 @@ def _flatten_findings(report: ReviewReport) -> list[FindingRow]:
     return rows
 
 
+def _rows_from_db(db_rows: list[dict[str, Any]]) -> list[FindingRow]:
+    """Convert database finding dicts into FindingRow objects."""
+    return [
+        FindingRow(
+            finding_db_id=row["id"],
+            review_id=row["review_id"],
+            index=row["finding_index"],
+            severity=Severity(row["severity"]),
+            agent_name=row["agent_name"],
+            category=row["category"],
+            title=row["title"],
+            description=row["description"],
+            file_path=row.get("file_path"),
+            line_number=row.get("line_number"),
+            suggestion=row.get("suggestion"),
+            confidence=Confidence(row.get("confidence", "medium")),
+            repo=row.get("repo"),
+            pr_number=row.get("pr_number"),
+            triage_action=row.get("triage_action", "none"),
+            is_posted=bool(row.get("is_posted", 0)),
+        )
+        for row in db_rows
+    ]
+
+
 def _format_severity(sev: str) -> str:
     """Format severity as a fixed-width uppercase label."""
     return sev.upper()[:4].ljust(4)
 
 
-def _format_location(file_path: str | None, line_number: int | None) -> str:
-    """Format file:line as a truncated string."""
+def _truncate(text: str, width: int) -> str:
+    """Truncate text to width, adding ... if needed."""
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return text[: width - 3] + "..."
+
+
+def _format_location(file_path: str | None, line_number: int | None, width: int = 30) -> str:
+    """Format file:line, truncating from the left if too long."""
     if file_path is None:
         return ""
     loc = file_path
     if line_number is not None:
         loc = f"{file_path}:{line_number}"
-    if len(loc) > 30:
-        loc = "..." + loc[-27:]
+    if len(loc) > width:
+        loc = "..." + loc[-(width - 3) :]
     return loc
 
 
@@ -190,29 +223,49 @@ def _format_location(file_path: str | None, line_number: int | None) -> str:
 
 
 class FindingsViewer:
-    """State machine driving the findings navigator TUI."""
+    """State machine driving the findings navigator TUI.
+
+    Accepts either pre-built rows (from DB) or a ReviewReport (legacy).
+    All triage/posted state lives on FindingRow and is persisted to the
+    findings table in SQLite via the storage parameter.
+    """
 
     def __init__(
         self,
-        report: ReviewReport,
         *,
+        rows: list[FindingRow] | None = None,
+        report: ReviewReport | None = None,
         github_token: str | None = None,
-        review_id: int | None = None,
         storage: ReviewStorage | None = None,
     ) -> None:
-        self.report = report
         self.github_token = github_token
-        self.review_id = review_id
         self._storage = storage
-        self.all_rows: list[FindingRow] = _flatten_findings(report)
+
+        # Build rows from DB data or from report (legacy/CLI path)
+        if rows is not None:
+            self.all_rows = list(rows)
+            self.report = report
+        elif report is not None:
+            self.all_rows = _flatten_findings(report)
+            self.report = report
+        else:
+            self.all_rows = []
+            self.report = None
+
+        # Initialize triage/posted from row data (already loaded from DB)
+        self.triage: dict[int, TriageAction] = {}
+        self.posted_indices: set[int] = set()
+        for row in self.all_rows:
+            if row.triage_action != "none":
+                self.triage[row.index] = TriageAction(row.triage_action)
+            if row.is_posted:
+                self.posted_indices.add(row.index)
+
         self.visible_rows: list[FindingRow] = list(self.all_rows)
         self.cursor: int = 0
         self.is_detail_open: bool = False
         self.mode: _ViewerMode = _ViewerMode.NAVIGATE
         self.status_message: str = ""
-
-        # Triage -- load persisted state if available
-        self.triage: dict[int, TriageAction] = self._load_persisted_triage()
         self.staged_for_pr: set[int] = set()
 
         # Sort
@@ -227,7 +280,7 @@ class FindingsViewer:
 
         # Filter -- hide solved findings by default
         self.filter_severity: set[Severity] = set(Severity)
-        self.filter_agents: set[str] = {r.agent_name for r in report.agent_results}
+        self.filter_agents: set[str] = {r.agent_name for r in self.all_rows}
         self.filter_triage: set[str] = {"none", "false_positive", "ignored"}
         self.filter_pr_status: set[str] = {"none", "staged", "posted"}
         self.filter_repos: set[str] = {r.repo for r in self.all_rows if r.repo}
@@ -242,26 +295,17 @@ class FindingsViewer:
         self.column_cursor: int = 0
         self.column_options: list[tuple[str, str, bool]] = []
 
-        # PR posting tracking -- load posted state from storage
+        # Horizontal scroll
+        self.h_offset: int = 0
+
+        # PR posting tracking
         self.comments_posted: int = 0
-        self.posted_indices: set[int] = self._load_persisted_posted()
         self.last_review_id: int | None = None
         self.last_comment_ids: list[int] = []
         self.comments_deleted: int = 0
 
         # Apply initial filter (hides solved by default)
         self._apply_filters()
-
-    def _load_persisted_triage(self) -> dict[int, TriageAction]:
-        """Load triage state from SQLite if storage and review_id are set."""
-        if self._storage is None or self.review_id is None:
-            return {}
-        try:
-            raw = self._storage.load_triage(self.review_id)
-            return {idx: TriageAction(action) for idx, action in raw.items()}
-        except Exception:
-            logger.debug("failed to load persisted triage", exc_info=True)
-            return {}
 
     def _load_persisted_columns(self) -> list[str]:
         """Load column config from SQLite, falling back to defaults."""
@@ -277,37 +321,23 @@ class FindingsViewer:
             logger.debug("failed to load persisted columns", exc_info=True)
         return list(_DEFAULT_VISIBLE)
 
-    def _load_persisted_posted(self) -> set[int]:
-        """Load posted indices from SQLite."""
-        if self._storage is None or self.review_id is None:
-            return set()
-        try:
-            return self._storage.load_posted(self.review_id)
-        except Exception:
-            logger.debug("failed to load persisted posted state", exc_info=True)
-            return set()
-
-    def _persist_posted(self, finding_index: int, *, is_posted: bool) -> None:
-        """Persist posted status to SQLite."""
-        if self._storage is None or self.review_id is None:
+    def _persist_triage(self, row: FindingRow, action: TriageAction) -> None:
+        """Persist triage change to the findings table by PK."""
+        if self._storage is None or row.finding_db_id is None:
             return
         try:
-            self._storage.save_posted(
-                self.review_id,
-                finding_index,
-                is_posted=is_posted,
-            )
-        except Exception:
-            logger.debug("failed to persist posted state", exc_info=True)
-
-    def _persist_triage(self, finding_index: int, action: TriageAction) -> None:
-        """Persist a triage change to SQLite."""
-        if self._storage is None or self.review_id is None:
-            return
-        try:
-            self._storage.save_triage(self.review_id, finding_index, action.value)
+            self._storage.update_finding_triage(row.finding_db_id, action.value)
         except Exception:
             logger.debug("failed to persist triage", exc_info=True)
+
+    def _persist_posted(self, row: FindingRow, *, is_posted: bool) -> None:
+        """Persist posted status to the findings table by PK."""
+        if self._storage is None or row.finding_db_id is None:
+            return
+        try:
+            self._storage.update_finding_posted(row.finding_db_id, is_posted=is_posted)
+        except Exception:
+            logger.debug("failed to persist posted state", exc_info=True)
 
     def _persist_columns(self) -> None:
         """Persist current column config to SQLite."""
@@ -391,7 +421,7 @@ class FindingsViewer:
             )
 
         # Agent (always shown)
-        all_agents = sorted({r.agent_name for r in self.report.agent_results})
+        all_agents = sorted({r.agent_name for r in self.all_rows})
         for agent in all_agents:
             self.filter_options.append(
                 (
@@ -542,11 +572,11 @@ class FindingsViewer:
         current = self.triage.get(row.index, TriageAction.NONE)
         if current == action:
             self.triage.pop(row.index, None)
-            self._persist_triage(row.index, TriageAction.NONE)
+            self._persist_triage(row, TriageAction.NONE)
             self.status_message = f"Unmarked: {row.title}"
         else:
             self.triage[row.index] = action
-            self._persist_triage(row.index, action)
+            self._persist_triage(row, action)
             self.status_message = f"{label}: {row.title}"
 
     def mark_false_positive(self) -> None:
@@ -571,9 +601,20 @@ class FindingsViewer:
             self.staged_for_pr.add(row.index)
             self.status_message = f"Staged for PR: {row.title}"
 
+    def _resolve_pr_url(self) -> str | None:
+        """Get the PR URL for posting, from report or from staged findings."""
+        if self.report is not None and self.report.pr_url:
+            return self.report.pr_url
+        # In multi-repo mode, get PR info from the first staged finding
+        for row in self.all_rows:
+            if row.index in self.staged_for_pr and row.repo and row.pr_number:
+                return f"https://github.com/{row.repo}/pull/{row.pr_number}"
+        return None
+
     def submit_to_pr(self) -> None:
         """Post staged findings as inline PR review comments."""
-        if not self.report.pr_url:
+        pr_url = self._resolve_pr_url()
+        if not pr_url:
             self.status_message = "! Not a PR review (local diff)"
             return
         if not self.github_token:
@@ -589,7 +630,7 @@ class FindingsViewer:
             return
 
         try:
-            owner, repo, pr_number = parse_pr_reference(self.report.pr_url)
+            owner, repo, pr_number = parse_pr_reference(pr_url)
         except ValueError as exc:
             self.status_message = f"! Invalid PR URL: {exc}"
             return
@@ -643,7 +684,9 @@ class FindingsViewer:
             self.comments_posted += total_posted
             for idx in self.staged_for_pr:
                 self.posted_indices.add(idx)
-                self._persist_posted(idx, is_posted=True)
+                posted_row = next((r for r in self.all_rows if r.index == idx), None)
+                if posted_row is not None:
+                    self._persist_posted(posted_row, is_posted=True)
             self.staged_for_pr.clear()
 
             # Track posted review for deletion
@@ -691,7 +734,8 @@ class FindingsViewer:
         if not self.last_comment_ids:
             self.status_message = "! No posted comments to delete"
             return
-        if not self.report.pr_url:
+        pr_url = self._resolve_pr_url()
+        if not pr_url:
             self.status_message = "! Not a PR review (local diff)"
             return
         if not self.github_token:
@@ -699,7 +743,7 @@ class FindingsViewer:
             return
 
         try:
-            owner, repo, _pr_number = parse_pr_reference(self.report.pr_url)
+            owner, repo, _pr_number = parse_pr_reference(pr_url)
         except ValueError as exc:
             self.status_message = f"! Invalid PR URL: {exc}"
             return
@@ -715,7 +759,9 @@ class FindingsViewer:
             self.last_comment_ids.clear()
             self.last_review_id = None
             for idx in list(self.posted_indices):
-                self._persist_posted(idx, is_posted=False)
+                unpost_row = next((r for r in self.all_rows if r.index == idx), None)
+                if unpost_row is not None:
+                    self._persist_posted(unpost_row, is_posted=False)
             self.posted_indices.clear()
             self.status_message = (
                 f"Deleted {deleted} comment(s). Stage findings and press 'P' to re-post."
@@ -830,27 +876,26 @@ class FindingsViewer:
             return (style, f"{label:<{width}}")
 
         if col_key == "agent_name":
-            return (base_style, f"{row.agent_name:<{width}}")
+            return (base_style, f"{_truncate(row.agent_name, width):<{width}}")
 
         if col_key == "file_line":
-            loc = _format_location(row.file_path, row.line_number)
+            loc = _format_location(row.file_path, row.line_number, width)
             return (base_style, f"{loc:<{width}}")
 
         if col_key == "title":
-            title = row.title[: width - 1]
-            return (base_style, f"{title:<{width}}")
+            return (base_style, f"{_truncate(row.title, width):<{width}}")
 
         if col_key == "triage":
             tri_style, tri_label = self._triage_label(row.index)
-            return (tri_style, f"{tri_label:<{width}}")
+            return (tri_style, f"{_truncate(tri_label, width):<{width}}")
 
         if col_key == "pr_status":
             pr_style, pr_label = self._pr_status_label(row.index)
-            return (pr_style, f"{pr_label:<{width}}")
+            return (pr_style, f"{_truncate(pr_label, width):<{width}}")
 
         if col_key == "repo":
             repo = row.repo or ""
-            return (base_style, f"{repo:<{width}}")
+            return (base_style, f"{_truncate(repo, width):<{width}}")
 
         if col_key == "pr_number":
             pr_str = f"#{row.pr_number}" if row.pr_number is not None else ""
@@ -860,49 +905,67 @@ class FindingsViewer:
             return (base_style, f"{row.confidence.value:<{width}}")
 
         if col_key == "category":
-            cat = row.category[: width - 1]
-            return (base_style, f"{cat:<{width}}")
+            return (base_style, f"{_truncate(row.category, width):<{width}}")
 
         return (base_style, f"{'':<{width}}")
 
     def _compute_column_widths(self, term_width: int) -> list[tuple[str, str, int]]:
-        """Compute column widths to fit within the terminal.
+        """Compute proportional column widths based on terminal width.
 
-        Fixed columns keep their preferred width. Flexible columns shrink
-        proportionally when the total exceeds terminal width.
+        Each column gets a share of the available width based on its weight,
+        clamped to its minimum. Remaining space is distributed to the widest
+        columns so the table fills the terminal exactly.
         """
-        col_meta = [
-            (key, label, width)
-            for key, label, width in _ALL_COLUMNS
+        visible_defs = [
+            (key, label, weight, min_w)
+            for key, label, weight, min_w in _COLUMN_DEFS
             if key in self.visible_columns
         ]
 
+        if not visible_defs:
+            return []
+
         prefix_width = 3  # " > " or "   "
-        total_preferred = sum(w for _, _, w in col_meta) + prefix_width
+        available = term_width - prefix_width
 
-        if total_preferred <= term_width:
-            return col_meta
+        # Calculate raw proportional widths
+        total_weight = sum(w for _, _, w, _ in visible_defs)
+        raw_widths: list[int] = []
+        for _, _, weight, min_w in visible_defs:
+            raw = max(min_w, int(available * weight / total_weight))
+            raw_widths.append(raw)
 
-        # Calculate how much we need to shrink
-        overflow = total_preferred - term_width
-        flex_cols = [(key, width) for key, _, width in col_meta if key in _FLEXIBLE_COLUMNS]
-        flex_shrinkable = sum(w - _FLEXIBLE_COLUMNS[k] for k, w in flex_cols)
+        # Distribute remaining space to largest columns
+        used = sum(raw_widths)
+        remaining = available - used
+        if remaining > 0:
+            # Give extra space to columns with highest weight
+            sorted_indices = sorted(
+                range(len(visible_defs)),
+                key=lambda i: visible_defs[i][2],
+                reverse=True,
+            )
+            for i in sorted_indices:
+                if remaining <= 0:
+                    break
+                raw_widths[i] += 1
+                remaining -= 1
 
-        if flex_shrinkable <= 0:
-            return col_meta
+        return [(key, label, raw_widths[i]) for i, (key, label, _, _) in enumerate(visible_defs)]
 
-        shrink_ratio = min(1.0, overflow / flex_shrinkable)
+    # -- Horizontal scrolling --
 
-        result: list[tuple[str, str, int]] = []
-        for key, label, width in col_meta:
-            if key in _FLEXIBLE_COLUMNS and shrink_ratio > 0:
-                min_w = _FLEXIBLE_COLUMNS[key]
-                new_width = max(min_w, width - int((width - min_w) * shrink_ratio))
-                result.append((key, label, new_width))
-            else:
-                result.append((key, label, width))
+    def scroll_left(self) -> None:
+        self.h_offset = max(0, self.h_offset - 4)
 
-        return result
+    def scroll_right(self) -> None:
+        self.h_offset = min(self._max_h_offset(), self.h_offset + 4)
+
+    def _max_h_offset(self) -> int:
+        term_width = shutil.get_terminal_size((120, 40)).columns
+        col_meta = self._compute_column_widths(term_width)
+        total_col_width = sum(w for _, _, w in col_meta)
+        return max(0, total_col_width - (term_width - 3))
 
     def _render_navigate(self) -> FormattedText:
         lines: list[tuple[str, str]] = []
@@ -1207,20 +1270,19 @@ class FindingsViewer:
 
 def run_findings_app(
     *,
-    report: ReviewReport,
+    rows: list[FindingRow] | None = None,
+    report: ReviewReport | None = None,
     github_token: str | None = None,
-    review_id: int | None = None,
     storage: ReviewStorage | None = None,
 ) -> None:
     """Launch the full-screen findings navigator.
 
-    Shared entry point used by both the TUI ``findings`` command and the
-    CLI ``--findings`` flag / ``findings`` subcommand.
+    Accepts either pre-built rows (from DB) or a ReviewReport (legacy).
     """
     viewer = FindingsViewer(
-        report,
+        rows=rows,
+        report=report,
         github_token=github_token,
-        review_id=review_id,
         storage=storage,
     )
 
@@ -1307,6 +1369,16 @@ def run_findings_app(
         if viewer.mode == _ViewerMode.NAVIGATE:
             viewer.open_columns()
 
+    @kb.add("left")
+    def on_scroll_left(_event: KeyPressEvent) -> None:
+        if viewer.mode == _ViewerMode.NAVIGATE:
+            viewer.scroll_left()
+
+    @kb.add("right")
+    def on_scroll_right(_event: KeyPressEvent) -> None:
+        if viewer.mode == _ViewerMode.NAVIGATE:
+            viewer.scroll_right()
+
     @kb.add("?")
     def on_help(_event: KeyPressEvent) -> None:
         if viewer.mode == _ViewerMode.NAVIGATE:
@@ -1379,56 +1451,49 @@ def run_findings_app(
 
 
 def cmd_findings(args: list[str], session: SessionState) -> None:
-    """Launch the interactive findings navigator."""
+    """Launch the interactive findings navigator.
+
+    Without args: loads ALL unsolved findings from the database across
+    all repos. With a numeric arg: loads findings for that review ID.
+    """
     from code_review_agent.storage import ReviewStorage
 
     console = Console()
-    report: ReviewReport | None = None
-    review_id: int | None = None
     settings = session.effective_settings
     storage = ReviewStorage(settings.history_db_path)
 
-    # Load report: from arg (review ID) or last review
     if args and args[0].isdigit():
+        # Load findings for a specific review
         review_id = int(args[0])
         try:
-            review_dict = storage.get_review(review_id)
-            if review_dict is None:
-                console.print(f"[{theme.error}]Review #{review_id} not found.[/{theme.error}]")
-                return
-            report = ReviewReport.model_validate_json(
-                review_dict["report_json"],
-            )
+            db_rows = storage.load_findings_for_review(review_id)
         except Exception as exc:
             console.print(
                 f"[{theme.error}]Failed to load review #{review_id}: {exc}[/{theme.error}]"
             )
             return
+        if not db_rows:
+            console.print(f"[{theme.error}]Review #{review_id} has no findings.[/{theme.error}]")
+            return
+        rows = _rows_from_db(db_rows)
     else:
-        report = session.last_review_report
-        review_id = session.last_review_id
+        # Load ALL unsolved findings across all repos
+        try:
+            db_rows = storage.load_unsolved_findings()
+        except Exception as exc:
+            console.print(f"[{theme.error}]Failed to load findings: {exc}[/{theme.error}]")
+            return
+        if not db_rows:
+            console.print(f"[{theme.muted}]No unsolved findings.[/{theme.muted}]")
+            return
+        rows = _rows_from_db(db_rows)
 
-    if report is None:
-        console.print(
-            f"[{theme.warning}]No review available. "
-            f"Run 'review' first or specify a review ID: "
-            f"findings <review_id>[/{theme.warning}]"
-        )
-        return
-
-    findings = _flatten_findings(report)
-    if not findings:
-        console.print(f"[{theme.muted}]No findings to display.[/{theme.muted}]")
-        return
-
-    # Resolve GitHub token for PR posting
     token: str | None = None
     if settings.github_token is not None:
         token = settings.github_token.get_secret_value()
 
     run_findings_app(
-        report=report,
+        rows=rows,
         github_token=token,
-        review_id=review_id,
         storage=storage,
     )
