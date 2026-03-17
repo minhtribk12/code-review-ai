@@ -179,12 +179,19 @@ def sample_review_report(sample_agent_result: AgentResult) -> ReviewReport:
 
 @pytest.fixture
 def mock_settings() -> Settings:
-    """Settings with fake API key and test values."""
+    """Settings with fake API key and test values.
+
+    Explicitly sets all optional fields to prevent .env file values
+    from leaking into tests.
+    """
     return Settings(
-        llm_api_key="sk-test-fake-key-00000000",
+        llm_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
         llm_provider="openrouter",
         llm_model="nvidia/nemotron-3-super-120b-a12b",
-        github_token="ghp_test_fake_token_00000000",
+        github_token="ghp_test_fake_token_00000000",  # pragma: allowlist secret
+        max_tokens_per_review=None,
+        max_prompt_tokens=None,
+        rate_limit_rpm=None,
     )
 
 

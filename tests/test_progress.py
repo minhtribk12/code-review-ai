@@ -76,20 +76,24 @@ class TestProgressDisplay:
         assert table.row_count == 2
 
     def test_format_status_running(self) -> None:
-        result = ProgressDisplay._format_status("running", "blue")
+        display = ProgressDisplay(["test"])
+        result = display._format_status("running", "blue")
         assert "running" in result
         assert "blue" in result
 
     def test_format_status_done(self) -> None:
-        result = ProgressDisplay._format_status("done", "green")
+        display = ProgressDisplay(["test"])
+        result = display._format_status("done", "green")
         assert "done" in result
 
     def test_format_status_failed(self) -> None:
-        result = ProgressDisplay._format_status("failed", "red")
+        display = ProgressDisplay(["test"])
+        result = display._format_status("failed", "red")
         assert "failed" in result
 
     def test_format_status_waiting(self) -> None:
-        result = ProgressDisplay._format_status("waiting", "dim")
+        display = ProgressDisplay(["test"])
+        result = display._format_status("waiting", "dim")
         assert "waiting" in result
 
 
