@@ -216,19 +216,37 @@ def copy_finding(viewer: FindingsViewer) -> None:
     content = "\n".join(lines)
 
     try:
+        import platform
         import shutil
         import subprocess
 
-        clip_cmd = shutil.which("xclip") or shutil.which("xsel")
-        if clip_cmd is None:
-            viewer.status_message = "! xclip/xsel not installed"
+        system = platform.system()
+        clip_cmd: str | None = None
+        clip_args: list[str] = []
+
+        if system == "Darwin":
+            clip_cmd = shutil.which("pbcopy")
+            if clip_cmd:
+                clip_args = [clip_cmd]
+        elif system == "Linux":
+            clip_cmd = shutil.which("xclip")
+            if clip_cmd:
+                clip_args = [clip_cmd, "-selection", "clipboard"]
+            else:
+                clip_cmd = shutil.which("xsel")
+                if clip_cmd:
+                    clip_args = [clip_cmd, "--clipboard", "--input"]
+
+        if not clip_cmd:
+            # Fallback: try wl-copy (Wayland)
+            clip_cmd = shutil.which("wl-copy")
+            if clip_cmd:
+                clip_args = [clip_cmd]
+
+        if not clip_cmd:
+            viewer.status_message = "! No clipboard tool found (install xclip, xsel, or wl-copy)"
             return
 
-        clip_args = (
-            [clip_cmd, "-selection", "clipboard"]
-            if "xclip" in clip_cmd
-            else [clip_cmd, "--clipboard", "--input"]
-        )
         subprocess.run(  # noqa: S603
             clip_args,
             input=content.encode(),
@@ -237,7 +255,9 @@ def copy_finding(viewer: FindingsViewer) -> None:
         )
         viewer.status_message = "Copied to clipboard"
     except FileNotFoundError:
-        viewer.status_message = "! clipboard tool not found"
+        viewer.status_message = "! Clipboard tool not found"
+    except subprocess.TimeoutExpired:
+        viewer.status_message = "! Clipboard operation timed out"
     except Exception:
         viewer.status_message = "! Failed to copy to clipboard"
 

@@ -177,9 +177,17 @@ class ReviewStorage:
         if "finding_triage" in tables and "findings" in tables:
             self._migrate_v3_to_v4(conn)
 
-        # Backfill: populate findings from report_json if table exists but is empty
+        # Backfill: populate findings from report_json (one-time only)
         if "findings" in tables:
-            self._backfill_findings(conn)
+            already_backfilled = conn.execute(
+                "SELECT value FROM finding_settings WHERE key = 'backfill_done'"
+            ).fetchone()
+            if already_backfilled is None:
+                self._backfill_findings(conn)
+                conn.execute(
+                    "INSERT OR REPLACE INTO finding_settings (key, value) "
+                    "VALUES ('backfill_done', '1')"
+                )
 
         # v4 -> v5: rename triage_action 'none' to 'open'
         if "findings" in tables:
@@ -483,7 +491,7 @@ class ReviewStorage:
             for finding in result.findings:
                 conn.execute(
                     """
-                    INSERT INTO findings (
+                    INSERT OR IGNORE INTO findings (
                         review_id, finding_index, severity, agent_name,
                         category, title, description, file_path, line_number,
                         suggestion, confidence, repo, pr_number

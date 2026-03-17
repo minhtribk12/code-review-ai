@@ -146,23 +146,18 @@ class FindingsViewer:
             self.cursor += 1
 
     def scroll_left(self) -> None:
-        if self.h_offset > 0:
-            self.h_offset -= 1
+        self.h_offset = max(0, self.h_offset - 4)
 
     def scroll_right(self) -> None:
-        if self.h_offset < self._max_h_offset():
-            self.h_offset += 1
+        self.h_offset = min(self._max_h_offset(), self.h_offset + 4)
 
     def _max_h_offset(self) -> int:
-        # Allow scrolling through the widest possible content
-        if not self.visible_rows:
-            return 0
-        max_title = max((len(r.title) for r in self.visible_rows), default=0)
-        max_path = max(
-            (len(r.file_path or "") for r in self.visible_rows),
-            default=0,
-        )
-        return max(0, max_title + max_path - 40)
+        import shutil
+
+        term_width = shutil.get_terminal_size((120, 40)).columns
+        col_meta = self._compute_column_widths(self.visible_columns, term_width)
+        total_col_width = sum(w for _, _, w in col_meta)
+        return max(0, total_col_width - (term_width - 3))
 
     def open_detail(self) -> None:
         self.mode = ViewerMode.DETAIL

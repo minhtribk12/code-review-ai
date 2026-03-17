@@ -186,7 +186,7 @@ def run_findings_app(
             ),
             Float(
                 ConditionalContainer(
-                    Window(confirm_control, height=7, width=50),
+                    Window(confirm_control, height=9, width=50),
                     filter=is_confirm,
                 ),
             ),
