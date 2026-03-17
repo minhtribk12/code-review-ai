@@ -201,5 +201,5 @@ def _auto_save_report(report: object, session: SessionState) -> int | None:
     except Exception:
         import structlog
 
-        structlog.get_logger(__name__).debug("auto-save failed", exc_info=True)
+        structlog.get_logger(__name__).warning("auto-save failed", exc_info=True)
         return None

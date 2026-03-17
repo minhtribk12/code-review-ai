@@ -173,6 +173,17 @@ class ReviewStorage:
                         with contextlib.suppress(sqlite3.OperationalError):
                             conn.execute(statement)
 
+        # Ensure reviews table has all expected columns (handles DBs from older versions)
+        review_columns = {row[1] for row in conn.execute("PRAGMA table_info(reviews)").fetchall()}
+        for col, col_def in [
+            ("rounds_completed", "INTEGER NOT NULL DEFAULT 1"),
+            ("agents_used", "TEXT"),
+            ("agents_count", "INTEGER NOT NULL DEFAULT 0"),
+        ]:
+            if col not in review_columns:
+                with contextlib.suppress(sqlite3.OperationalError):
+                    conn.execute(f"ALTER TABLE reviews ADD COLUMN {col} {col_def}")
+
         # v3 -> v4: migrate finding_triage into findings table
         if "finding_triage" in tables and "findings" in tables:
             self._migrate_v3_to_v4(conn)
@@ -374,6 +385,10 @@ class ReviewStorage:
         findings = report.total_findings
         pr_number = _extract_pr_number(report.pr_url)
 
+        # Derive repo from pr_url when not explicitly provided
+        if repo is None and report.pr_url is not None:
+            repo = _extract_repo(report.pr_url)
+
         usage = report.token_usage
         prompt_tokens = usage.prompt_tokens if usage else 0
         completion_tokens = usage.completion_tokens if usage else 0
@@ -487,6 +502,7 @@ class ReviewStorage:
     ) -> None:
         """Bulk-insert individual findings from a report."""
         idx = 0
+        total_inserted = 0
         for result in report.agent_results:
             for finding in result.findings:
                 conn.execute(
@@ -514,6 +530,14 @@ class ReviewStorage:
                     ),
                 )
                 idx += 1
+                total_inserted += 1
+
+        if total_inserted > 0:
+            logger.debug(
+                "findings saved",
+                review_id=review_id,
+                count=total_inserted,
+            )
 
     # -- Query --
 
@@ -784,4 +808,20 @@ def _extract_pr_number(pr_url: str | None) -> int | None:
             return int(parts[-1])
         except ValueError:
             pass
+    return None
+
+
+def _extract_repo(pr_url: str) -> str | None:
+    """Extract owner/repo from a GitHub PR URL.
+
+    Example: https://github.com/acme/app/pull/42 -> 'acme/app'
+    """
+    parts = pr_url.rstrip("/").split("/")
+    # URL format: ...github.com/owner/repo/pull/N
+    try:
+        pull_idx = parts.index("pull")
+        if pull_idx >= 2:
+            return f"{parts[pull_idx - 2]}/{parts[pull_idx - 1]}"
+    except ValueError:
+        pass
     return None
