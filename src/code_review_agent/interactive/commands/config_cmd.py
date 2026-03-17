@@ -23,6 +23,8 @@ _CONFIG_CATEGORIES: dict[str, list[str]] = {
         "llm_model",
         "llm_base_url",
         "llm_temperature",
+        "llm_top_p",
+        "llm_max_tokens",
         "llm_api_key",
         "request_timeout_seconds",
     ],
@@ -51,9 +53,13 @@ _CONFIG_CATEGORIES: dict[str, list[str]] = {
         "github_rate_limit_warn_threshold",
         "pr_stale_days",
     ],
-    "History": [
+    "Custom Agents": [
+        "custom_agents_dir",
+    ],
+    "History & Usage": [
         "history_db_path",
         "auto_save_history",
+        "usage_window",
     ],
 }
 

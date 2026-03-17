@@ -560,7 +560,13 @@ class Orchestrator:
                 for agent in agents
             }
 
-            done, not_done = wait(future_to_agent, timeout=timeout)
+            # Poll with short intervals so Ctrl+C is responsive
+            elapsed = 0.0
+            while elapsed < timeout:
+                done, not_done = wait(future_to_agent, timeout=0.5)
+                if not not_done:
+                    break
+                elapsed += 0.5
 
             # Collect completed results
             for future in done:
