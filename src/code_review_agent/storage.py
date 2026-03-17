@@ -685,11 +685,12 @@ class ReviewStorage:
 
     # -- Findings --
 
-    def load_unsolved_findings(self, *, limit: int = 500) -> list[dict[str, Any]]:
-        """Load all unsolved findings across all reviews.
+    def load_all_findings(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        """Load all findings across all reviews.
 
-        Returns findings where triage_action is NOT 'solved', ordered by
-        severity (critical first) then by creation time (newest first).
+        Returns ALL findings (including solved) ordered by severity then
+        creation time. In-memory filtering handles visibility (solved
+        findings hidden by default, shown when triage filter is active).
         """
         with self._get_connection() as conn:
             rows = conn.execute(
@@ -697,7 +698,6 @@ class ReviewStorage:
                 SELECT f.*, r.reviewed_at, r.pr_url
                 FROM findings f
                 JOIN reviews r ON f.review_id = r.id
-                WHERE f.triage_action != 'solved'
                 ORDER BY
                     CASE f.severity
                         WHEN 'critical' THEN 0

@@ -425,13 +425,13 @@ class TestCmdFindings:
             mock_console = MagicMock()
             mock_console_cls.return_value = mock_console
             mock_storage = MagicMock()
-            mock_storage.load_unsolved_findings.return_value = []
+            mock_storage.load_all_findings.return_value = []
             mock_storage_cls.return_value = mock_storage
             cmd_findings([], session)
 
         mock_console.print.assert_called_once()
         call_args = mock_console.print.call_args[0][0]
-        assert "No unsolved findings" in call_args
+        assert "No findings" in call_args
 
     def test_loads_review_by_id(self) -> None:
         session = MagicMock()

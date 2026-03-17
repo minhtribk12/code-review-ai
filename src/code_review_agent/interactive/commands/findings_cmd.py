@@ -252,12 +252,12 @@ def cmd_findings(args: list[str], session: SessionState) -> None:
         rows = _rows_from_db(db_rows)
     else:
         try:
-            db_rows = storage.load_unsolved_findings()
+            db_rows = storage.load_all_findings()
         except Exception as exc:
             console.print(f"[{theme.error}]Failed to load findings: {exc}[/{theme.error}]")
             return
         if not db_rows:
-            console.print(f"[{theme.muted}]No unsolved findings.[/{theme.muted}]")
+            console.print(f"[{theme.muted}]No findings in database.[/{theme.muted}]")
             return
         rows = _rows_from_db(db_rows)
 
