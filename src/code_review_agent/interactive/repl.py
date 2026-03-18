@@ -86,7 +86,7 @@ _COMMANDS: dict[str, CommandHandler] = {
     "clear": cmd_clear,
 }
 
-_VERSION = "0.1.1"
+_VERSION = "0.1.2"
 
 
 def _get_toolbar(session: SessionState) -> HTML:

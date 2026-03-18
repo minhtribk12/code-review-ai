@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from code_review_agent.interactive.session import SessionState
 
-_VERSION = "0.1.1"
+_VERSION = "0.1.2"
 
 _MORE_COMMANDS: list[tuple[str, str]] = [
     ("agents", "List available review agents"),
