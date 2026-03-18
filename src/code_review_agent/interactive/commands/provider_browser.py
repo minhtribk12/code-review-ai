@@ -450,14 +450,22 @@ class ProviderBrowser:
     def render(self) -> FormattedText:
         lines: _Lines = []
 
-        lines.append(("bold", " Provider Browser\n"))
-        lines.append(
-            (
-                "dim",
-                "  Up/Down navigate | Enter expand | "
-                "a add provider | m add model | d delete | i edit | q quit\n",
-            )
-        )
+        lines.append(("bold", " Provider Browser"))
+        lines.append(("", "  ("))
+        lines.append(("cyan", "Up/Down"))
+        lines.append(("", " navigate, "))
+        lines.append(("cyan", "Enter"))
+        lines.append(("", " expand, "))
+        lines.append(("cyan", "a"))
+        lines.append(("", " add provider, "))
+        lines.append(("cyan", "m"))
+        lines.append(("", " add model, "))
+        lines.append(("cyan", "d"))
+        lines.append(("", " delete, "))
+        lines.append(("cyan", "i"))
+        lines.append(("", " edit, "))
+        lines.append(("cyan", "q"))
+        lines.append(("", " quit)\n"))
 
         if self.status_message:
             style = theme.error if "Cannot" in self.status_message else theme.success
