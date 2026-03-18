@@ -86,7 +86,7 @@ _COMMANDS: dict[str, CommandHandler] = {
     "clear": cmd_clear,
 }
 
-_VERSION = "0.1.2"
+_VERSION = "0.1.3"
 
 
 def _get_toolbar(session: SessionState) -> HTML:
@@ -767,6 +767,15 @@ def _run_repl_loop(settings: Settings) -> None:
     from code_review_agent.interactive.startup_keys import run_startup_key_setup
 
     run_startup_key_setup(session)
+
+    # Rebuild settings from env after key setup (picks up newly added keys)
+    try:
+        from code_review_agent.config import Settings
+
+        session.settings = Settings()
+        session.invalidate_settings_cache()
+    except Exception:
+        logger.debug("failed to rebuild settings after key setup", exc_info=True)
 
     _print_welcome()
     _run_startup_connection_test(session)
