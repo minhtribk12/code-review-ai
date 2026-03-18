@@ -763,14 +763,10 @@ def _run_repl_loop(settings: Settings) -> None:
     # Store prompt_session on session so background reviews can interrupt it
     session._prompt_session = prompt_session  # type: ignore[attr-defined]
 
-    # Check if any provider has an API key or is local
-    from code_review_agent.interactive.startup_keys import (
-        check_providers_ready,
-        run_startup_key_setup,
-    )
+    # Always show the provider setup panel first
+    from code_review_agent.interactive.startup_keys import run_startup_key_setup
 
-    if not check_providers_ready(session):
-        run_startup_key_setup(session)
+    run_startup_key_setup(session)
 
     _print_welcome()
     _run_startup_connection_test(session)

@@ -164,16 +164,27 @@ class _KeySetup:
         """Cancel key input and return to navigation."""
         self.mode = _Mode.NAVIGATE
 
+    def _is_ready(self) -> bool:
+        """Return True if at least one provider is usable."""
+        return check_providers_ready(self.session)
+
     def render(self) -> FormattedText:
         """Render the key setup panel."""
         lines: list[tuple[str, str]] = []
+        is_ready = self._is_ready()
 
         lines.append(("bold", " LLM Provider Setup\n"))
         lines.append(("", "\n"))
-        lines.append(("", "  No LLM provider is configured with an API key.\n"))
-        lines.append(("", "  Select a provider and press "))
-        lines.append(("cyan", "Enter"))
-        lines.append(("", " to input your API key.\n"))
+        if is_ready:
+            lines.append(("green", "  At least one provider is ready.\n"))
+            lines.append(("", "  Press "))
+            lines.append(("cyan", "c"))
+            lines.append(("", " to continue, or configure more providers.\n"))
+        else:
+            lines.append(("red", "  No LLM provider is configured.\n"))
+            lines.append(("", "  Select a provider and press "))
+            lines.append(("cyan", "Enter"))
+            lines.append(("", " to input your API key.\n"))
 
         if self.status_message:
             msg_lower = self.status_message.lower()
@@ -277,7 +288,10 @@ def _build_keybindings(setup: _KeySetup) -> KeyBindings:
     @kb.add("c")
     def on_continue(event: KeyPressEvent) -> None:
         if setup.mode == _Mode.NAVIGATE:
-            event.app.exit()
+            if setup._is_ready():
+                event.app.exit()
+            else:
+                setup.status_message = "Configure at least one provider before continuing"
         elif setup.mode == _Mode.INPUT_KEY:
             _insert_char(setup, "c")
 
