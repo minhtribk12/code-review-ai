@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from prompt_toolkit import Application
 from prompt_toolkit.formatted_text import FormattedText
@@ -175,12 +175,10 @@ class ProviderBrowser:
     # -- Edit ------------------------------------------------------------------
 
     def start_edit(self) -> None:
+        """Start inline edit. Works for both built-in and custom providers."""
         if not self.rows:
             return
         row = self.rows[self.cursor]
-        if not row.is_custom:
-            self.status_message = "Cannot edit built-in entries"
-            return
 
         if row.kind == _RowKind.PROVIDER:
             info = get_provider(row.provider_key)
@@ -199,7 +197,28 @@ class ProviderBrowser:
         self.edit_cursor_pos = len(self.edit_buffer)
         self.mode = _Mode.EDIT_FIELD
 
+    def _ensure_user_override(self, provider_key: str) -> dict[str, Any]:
+        """Ensure a provider exists in the user registry as an override.
+
+        If the provider is built-in and not yet in the user registry,
+        creates a minimal override entry so edits can be saved.
+        """
+        from code_review_agent.interactive.commands.provider_cmd import (
+            _load_user_registry,
+        )
+
+        user_providers = _load_user_registry()
+        if provider_key not in user_providers:
+            # Create override entry for built-in provider
+            info = get_provider(provider_key)
+            user_providers[provider_key] = {
+                "base_url": info.base_url,
+                "rate_limit_rpm": info.rate_limit_rpm,
+            }
+        return user_providers
+
     def confirm_edit(self) -> None:
+        """Save the inline edit to user registry."""
         if not self.rows:
             self.mode = _Mode.NAVIGATE
             return
@@ -210,27 +229,47 @@ class ProviderBrowser:
             return
 
         from code_review_agent.interactive.commands.provider_cmd import (
-            _load_user_registry,
             _save_user_registry,
         )
 
-        user_providers = _load_user_registry()
-        prov = user_providers.get(row.provider_key)
+        user_providers = self._ensure_user_override(row.provider_key)
+        prov = user_providers[row.provider_key]
 
-        if row.kind == _RowKind.PROVIDER and isinstance(prov, dict):
-            if self.edit_field_name == "base_url":
-                prov["base_url"] = new_value
-                _save_user_registry(user_providers)
-                reload_registry()
-                self.status_message = f"Updated base_url -> {new_value}"
-        elif row.kind == _RowKind.MODEL and isinstance(prov, dict):
-            for m in prov.get("models", []):
+        if row.kind == _RowKind.PROVIDER:
+            prov[self.edit_field_name] = new_value
+        elif row.kind == _RowKind.MODEL:
+            # Ensure models list exists in user override
+            if "models" not in prov:
+                prov["models"] = []
+            # Find and update, or add override entry
+            found = False
+            for m in prov["models"]:
                 if m.get("id") == row.model_id:
                     m[self.edit_field_name] = new_value
+                    found = True
                     break
-            _save_user_registry(user_providers)
-            reload_registry()
-            self.status_message = f"Updated {self.edit_field_name} -> {new_value}"
+            if not found:
+                # Model only exists in bundled registry — add override
+                info = get_provider(row.provider_key)
+                for m in info.models:
+                    if m.id == row.model_id:
+                        prov["models"].append(
+                            {
+                                "id": m.id,
+                                "name": new_value if self.edit_field_name == "name" else m.name,
+                                "is_free": m.is_free,
+                                "context_window": m.context_window,
+                            }
+                        )
+                        break
+
+        _save_user_registry(user_providers)
+        reload_registry()
+        self.status_message = f"Updated {self.edit_field_name} -> {new_value}"
+
+        self.mode = _Mode.NAVIGATE
+        self.edit_field_name = ""
+        self._rebuild_rows()
 
         self.mode = _Mode.NAVIGATE
         self.edit_field_name = ""
