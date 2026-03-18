@@ -22,7 +22,7 @@ app = typer.Typer(
     help="Multi-agent code review powered by Nemotron 3 Super",
 )
 
-_VERSION = "0.1.3"
+_VERSION = "0.1.4"
 
 
 def _version_callback(value: bool) -> None:

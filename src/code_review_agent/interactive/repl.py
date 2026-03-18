@@ -86,7 +86,7 @@ _COMMANDS: dict[str, CommandHandler] = {
     "clear": cmd_clear,
 }
 
-_VERSION = "0.1.3"
+_VERSION = "0.1.4"
 
 
 def _get_toolbar(session: SessionState) -> HTML:
@@ -774,8 +774,10 @@ def _run_repl_loop(settings: Settings) -> None:
 
         session.settings = Settings()
         session.invalidate_settings_cache()
-    except Exception:
+    except Exception as exc:
         logger.debug("failed to rebuild settings after key setup", exc_info=True)
+        console.print(f"  [red]Failed to load configuration: {exc}[/red]")
+        console.print("  [dim]Check your .env file for errors.[/dim]")
 
     _print_welcome()
     _run_startup_connection_test(session)
