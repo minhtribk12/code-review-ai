@@ -261,7 +261,7 @@ def interactive() -> None:
     from code_review_agent.interactive.repl import run_repl
 
     try:
-        settings = _load_settings()
+        settings = _load_settings_lenient()
         register_custom_agents(settings)
     except SystemExit:
         raise
@@ -327,6 +327,35 @@ def _parse_agent_names(agents_arg: str | None) -> list[str] | None:
         raise typer.Exit(code=1)
 
     return names
+
+
+def _load_settings_lenient() -> Settings:
+    """Load settings without requiring an API key.
+
+    Used by the interactive command so the REPL can start and show
+    the key setup panel when no key is configured.
+    """
+    import os
+
+    # Temporarily set a placeholder key for the default provider
+    # so Settings validation passes. The REPL startup will check
+    # for real keys and prompt the user if needed.
+    provider = os.environ.get("LLM_PROVIDER", "nvidia")
+    env_key = f"{provider.upper()}_API_KEY"
+    had_key = os.environ.get(env_key)
+    if not had_key:
+        os.environ[env_key] = "__placeholder__"  # pragma: allowlist secret
+    try:
+        return Settings()
+    except Exception as exc:
+        error_str = str(exc)
+        if "api_key" not in error_str.lower():
+            raise
+        # Even with placeholder, some other validation failed
+        raise SystemExit(f"Configuration error: {exc}") from None
+    finally:
+        if not had_key and os.environ.get(env_key) == "__placeholder__":
+            del os.environ[env_key]
 
 
 def _load_settings() -> Settings:

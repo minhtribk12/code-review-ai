@@ -89,7 +89,7 @@ The agent uses the OpenAI Python SDK as its HTTP transport. This means it works 
 ```env
 LLM_PROVIDER=openrouter
 OPENROUTER_API_KEY=your-openrouter-api-key-here
-LLM_MODEL=openrouter/auto
+LLM_MODEL=nvidia/nemotron-3-super-120b-a12b:free
 ```
 
 **Available models** (examples -- check OpenRouter for current list):
@@ -452,7 +452,7 @@ The connection test also runs automatically when you change provider, model, bas
 ```env
 LLM_PROVIDER=openrouter
 OPENROUTER_API_KEY=sk-or-v1-xxx
-LLM_MODEL=openrouter/auto
+LLM_MODEL=nvidia/nemotron-3-super-120b-a12b:free
 ```
 
 **NVIDIA:**

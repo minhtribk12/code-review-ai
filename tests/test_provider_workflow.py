@@ -355,7 +355,7 @@ class TestConnectionTestRevert:
         }
 
         real_session.config_overrides["llm_provider"] = "openrouter"
-        real_session.config_overrides["llm_model"] = "openrouter/auto"
+        real_session.config_overrides["llm_model"] = "nvidia/nemotron-3-super-120b-a12b:free"
         real_session.config_overrides["llm_base_url"] = "https://openrouter.ai/api/v1"
         real_session.invalidate_settings_cache()
 
@@ -564,7 +564,7 @@ class TestProviderCascade:
         editor = ConfigEditor(real_session)
         editor._apply_provider_cascade("openrouter")
 
-        assert editor.values["llm_model"] == "openrouter/auto"
+        assert editor.values["llm_model"] == "nvidia/nemotron-3-super-120b-a12b:free"
         assert editor.values["llm_base_url"] == "https://openrouter.ai/api/v1"
         assert "llm_model" in editor.changed_keys
         assert "llm_base_url" in editor.changed_keys
@@ -846,8 +846,118 @@ class TestApiKeyResolution:
     """Test API key resolution logic."""
 
     def test_resolve_delegates(self, real_settings: Settings) -> None:
-        # _resolve_api_key should return same as resolve_api_key_for
         direct = real_settings.resolve_api_key_for("nvidia")
         resolved = real_settings.resolved_api_key
         assert direct is not None
         assert resolved.get_secret_value() == direct.get_secret_value()
+
+
+# ---------------------------------------------------------------------------
+# Startup key setup
+# ---------------------------------------------------------------------------
+
+
+class TestStartupKeySetup:
+    """Test the startup key checking and local provider detection."""
+
+    def test_is_local_provider_localhost(self, user_registry: Path) -> None:
+        from code_review_agent.interactive.startup_keys import _is_local_provider
+
+        _write_user_providers(
+            user_registry,
+            {
+                "local": {
+                    "base_url": "http://localhost:11434/v1",
+                    "default_model": "llama3.1",
+                    "rate_limit_rpm": 0,
+                    "models": [_model("llama3.1", "Llama 3.1")],
+                },
+            },
+        )
+        assert _is_local_provider("local") is True
+
+    def test_is_local_provider_private_ip(self, user_registry: Path) -> None:
+        from code_review_agent.interactive.startup_keys import _is_local_provider
+
+        _write_user_providers(
+            user_registry,
+            {
+                "gpu": {
+                    "base_url": "http://192.168.1.100:8000/v1",
+                    "default_model": "model",
+                    "rate_limit_rpm": 0,
+                    "models": [_model("model", "Model")],
+                },
+            },
+        )
+        assert _is_local_provider("gpu") is True
+
+    def test_is_local_provider_public_url(self) -> None:
+        from code_review_agent.interactive.startup_keys import _is_local_provider
+
+        assert _is_local_provider("nvidia") is False
+        assert _is_local_provider("openrouter") is False
+
+    def test_is_local_provider_unknown(self) -> None:
+        from code_review_agent.interactive.startup_keys import _is_local_provider
+
+        assert _is_local_provider("nonexistent") is False
+
+    def test_check_providers_ready_with_key(
+        self,
+        real_session: SessionState,
+    ) -> None:
+        from code_review_agent.interactive.startup_keys import check_providers_ready
+
+        # real_session has nvidia key set
+        assert check_providers_ready(real_session) is True
+
+    def test_check_providers_ready_with_local(
+        self,
+        real_session: SessionState,
+        user_registry: Path,
+    ) -> None:
+        from code_review_agent.interactive.startup_keys import check_providers_ready
+
+        _write_user_providers(
+            user_registry,
+            {
+                "local": {
+                    "base_url": "http://localhost:11434/v1",
+                    "default_model": "llama3.1",
+                    "rate_limit_rpm": 0,
+                    "models": [_model("llama3.1", "Llama 3.1")],
+                },
+            },
+        )
+        assert check_providers_ready(real_session) is True
+
+    def test_provider_has_key_from_env(
+        self,
+        real_session: SessionState,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from code_review_agent.interactive.startup_keys import _provider_has_key
+
+        monkeypatch.setenv("CUSTOM_API_KEY", "test-key")  # pragma: allowlist secret
+        assert _provider_has_key("nvidia", real_session) is True
+
+    def test_provider_has_key_local_no_key_needed(
+        self,
+        real_session: SessionState,
+        user_registry: Path,
+    ) -> None:
+        from code_review_agent.interactive.startup_keys import _provider_has_key
+
+        _write_user_providers(
+            user_registry,
+            {
+                "ollama": {
+                    "base_url": "http://127.0.0.1:11434/v1",
+                    "default_model": "llama3.1",
+                    "rate_limit_rpm": 0,
+                    "models": [_model("llama3.1", "Llama 3.1")],
+                },
+            },
+        )
+        assert _provider_has_key("ollama", real_session) is True

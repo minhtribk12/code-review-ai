@@ -49,7 +49,6 @@ _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "nvidia/nemotron-mini-4b-instruct": 4_096,
     "nvidia/llama-3.1-nemotron-70b-instruct": 131_072,
     # OpenRouter free models
-    "openrouter/auto": 200_000,
     "nvidia/nemotron-3-super-120b-a12b:free": 262_000,
     "qwen/qwen3-coder:free": 262_000,
     "meta-llama/llama-3.3-70b-instruct:free": 131_072,
@@ -75,7 +74,6 @@ _MODEL_PRICING: dict[str, tuple[float, float]] = {
     "nvidia/nemotron-mini-4b-instruct": (0.0, 0.0),
     "nvidia/llama-3.1-nemotron-70b-instruct": (0.0, 0.0),
     # OpenRouter free models
-    "openrouter/auto": (0.0, 0.0),
     "nvidia/nemotron-3-super-120b-a12b:free": (0.0, 0.0),
     "qwen/qwen3-coder:free": (0.0, 0.0),
     "meta-llama/llama-3.3-70b-instruct:free": (0.0, 0.0),

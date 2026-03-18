@@ -39,7 +39,7 @@
     },
     "openrouter": {
       "base_url": "https://openrouter.ai/api/v1",
-      "default_model": "openrouter/auto",
+      "default_model": "nvidia/nemotron-3-super-120b-a12b:free",
       "rate_limit_rpm": 20,
       "models": [
         {
