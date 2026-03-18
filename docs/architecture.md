@@ -165,9 +165,23 @@ The loop exits on convergence (zero new findings) or when `max_tokens_per_review
 ### Config (`config.py`)
 
 - `pydantic-settings` based, loads from environment variables and `.env` file
-- Supports three LLM providers: OpenRouter, NVIDIA, OpenAI (with custom `llm_base_url` escape hatch)
+- Supports two built-in LLM providers (NVIDIA, OpenRouter) with per-provider API keys. Custom providers can be added via `~/.cra/providers.json` or `provider add` command. Any OpenAI-compatible server is supported via `llm_base_url` escape hatch.
 - Model validator ensures custom pricing is either both set or both unset
 - All timeouts, limits, and feature flags are configurable with sensible defaults
+
+### Provider Registry (`providers.py`)
+
+- Loads provider metadata from bundled JSON (`provider_registry.json`) and user overrides (`~/.cra/providers.json`)
+- Each provider has: base URL, default model, rate limit RPM, and a list of models with context windows
+- User overrides merge on top of bundled defaults: new providers are added, existing ones are extended with new models
+- `reload_registry()` allows runtime refresh after `provider add`
+
+### Connection Test (`connection_test.py`)
+
+- Sends a minimal 1-token request (`max_tokens=1`, message: `"hi"`) to verify LLM connectivity
+- Runs on startup (when `test_connection_on_start=true`), provider change, model change, base URL change, and API key change
+- Rate limit 429 response is treated as "connected" (server is reachable and auth works)
+- Returns `(success, message)` tuple for display
 
 ## Design Decisions
 

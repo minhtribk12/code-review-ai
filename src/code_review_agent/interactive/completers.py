@@ -121,6 +121,18 @@ def build_static_completer() -> _ReplCompleter:
                 "review": None,
                 "github": None,
             },
+            "provider": {
+                "add": None,
+                "list": None,
+                "models": None,
+                "remove": None,
+            },
+            "pv": {
+                "add": None,
+                "list": None,
+                "models": None,
+                "remove": None,
+            },
             "watch": {"--interval": None, "--agents": None},
             "history": {
                 "list": {"--repo": None, "--days": None, "--limit": None},

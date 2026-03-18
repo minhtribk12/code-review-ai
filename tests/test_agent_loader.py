@@ -431,7 +431,7 @@ class TestRegisterCustomAgents:
     def test_registers_custom_agents(self, tmp_path: Path) -> None:
         (tmp_path / "custom.yaml").write_text(MINIMAL_YAML)
         settings = Settings(
-            llm_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
+            nvidia_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
             custom_agents_dir=str(tmp_path),
         )
         register_custom_agents(settings)
@@ -443,7 +443,7 @@ class TestRegisterCustomAgents:
     def test_idempotent(self, tmp_path: Path) -> None:
         (tmp_path / "custom.yaml").write_text(MINIMAL_YAML)
         settings = Settings(
-            llm_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
+            nvidia_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
             custom_agents_dir=str(tmp_path),
         )
         register_custom_agents(settings)
@@ -454,7 +454,7 @@ class TestRegisterCustomAgents:
 
     def test_no_agents_dir_is_noop(self) -> None:
         settings = Settings(
-            llm_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
+            nvidia_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
             custom_agents_dir="/nonexistent/path",
         )
         original_count = len(AGENT_REGISTRY)
@@ -465,7 +465,7 @@ class TestRegisterCustomAgents:
         yaml_content = 'name: custom_pri\nsystem_prompt: "Test."\npriority: 42'
         (tmp_path / "pri.yaml").write_text(yaml_content)
         settings = Settings(
-            llm_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
+            nvidia_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
             custom_agents_dir=str(tmp_path),
         )
         register_custom_agents(settings)
@@ -474,7 +474,7 @@ class TestRegisterCustomAgents:
 
     def test_builtin_agents_preserved(self, tmp_path: Path) -> None:
         settings = Settings(
-            llm_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
+            nvidia_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
             custom_agents_dir=str(tmp_path),
         )
         register_custom_agents(settings)

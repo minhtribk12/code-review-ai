@@ -41,6 +41,7 @@ from code_review_agent.interactive.commands.meta import (
     cmd_version,
 )
 from code_review_agent.interactive.commands.pr_read import cmd_pr
+from code_review_agent.interactive.commands.provider_cmd import cmd_provider
 from code_review_agent.interactive.commands.repo_cmd import cmd_repo
 from code_review_agent.interactive.commands.review_cmd import cmd_review
 from code_review_agent.interactive.commands.usage_cmd import cmd_usage
@@ -76,6 +77,8 @@ _COMMANDS: dict[str, CommandHandler] = {
     "watch": cmd_watch,
     "history": cmd_history,
     "config": cmd_config,
+    "provider": cmd_provider,
+    "pv": cmd_provider,
     "usage": cmd_usage,
     "help": cmd_help,
     "agents": cmd_agents,
@@ -83,7 +86,7 @@ _COMMANDS: dict[str, CommandHandler] = {
     "clear": cmd_clear,
 }
 
-_VERSION = "0.1.0"
+_VERSION = "0.1.1"
 
 
 def _get_toolbar(session: SessionState) -> HTML:
@@ -231,6 +234,246 @@ def _print_welcome() -> None:
         " | Ctrl+O repo | Ctrl+L graph | Ctrl+D exit[/dim]"
     )
     console.print()
+
+
+def _run_startup_connection_test(session: SessionState) -> None:
+    """Run an LLM connection test on startup if enabled."""
+    settings = session.effective_settings
+    if not settings.test_connection_on_start:
+        return
+    run_connection_test(session)
+
+
+_LLM_CONFIG_KEYS = ("llm_provider", "llm_model", "llm_base_url")
+
+
+def run_connection_test(
+    session: SessionState,
+    *,
+    previous_llm_config: dict[str, str] | None = None,
+) -> bool:
+    """Test the LLM connection, handle failures, and persist changes.
+
+    On failure:
+    - Marks model/provider as "(not working)" in the DB
+    - Reverts LLM config to ``previous_llm_config`` (if provided)
+    - Re-tests with reverted config
+    All config changes are auto-saved to DB immediately.
+    """
+    from code_review_agent.connection_test import FailureKind, test_llm_connection
+
+    settings = session.effective_settings
+    provider = settings.llm_provider
+    model = settings.llm_model
+
+    console.print("  [dim]Testing LLM connection...[/dim]", end="")
+    is_ok, message, failure_kind = test_llm_connection(settings)
+
+    if is_ok:
+        console.print(f"\r  [green]LLM connection OK:[/green] {message}        ")
+        _set_health_mark(session, "model", model, is_healthy=True)
+        _set_health_mark(session, "provider", provider, is_healthy=True)
+        return True
+
+    console.print(f"\r  [red]LLM connection FAILED:[/red] {message}        ")
+
+    if failure_kind == FailureKind.MODEL:
+        _set_health_mark(session, "model", model, is_healthy=False)
+        console.print(f"  [red]Model '{model}' marked as (not working).[/red]")
+    elif failure_kind == FailureKind.PROVIDER:
+        _set_health_mark(session, "provider", provider, is_healthy=False)
+        console.print(f"  [red]Provider '{provider}' marked as (not working).[/red]")
+    else:
+        console.print(
+            "  [dim]Check your provider, model, API key, and base URL with "
+            "'config edit' or 'provider list'[/dim]"
+        )
+
+    # Revert to previous LLM config if available
+    if previous_llm_config:
+        _revert_llm_config(session, previous_llm_config)
+    else:
+        # Offer removal
+        if failure_kind == FailureKind.MODEL:
+            _offer_model_removal(session, provider, model)
+        elif failure_kind == FailureKind.PROVIDER:
+            _offer_provider_removal(session, provider)
+
+    return False
+
+
+def _revert_llm_config(
+    session: SessionState,
+    previous: dict[str, str],
+) -> None:
+    """Revert LLM config keys to previous values and re-test."""
+    prev_provider = previous.get("llm_provider", "")
+    prev_model = previous.get("llm_model", "")
+    console.print(
+        f"  [yellow]Reverting to previous config: "
+        f"provider={prev_provider}, model={prev_model}[/yellow]"
+    )
+    for key in _LLM_CONFIG_KEYS:
+        if key in previous:
+            session.config_overrides[key] = previous[key]
+        else:
+            session.config_overrides.pop(key, None)
+    session.invalidate_settings_cache()
+    _auto_save_config(session)
+
+    # Re-test with reverted config
+    from code_review_agent.connection_test import test_llm_connection
+
+    settings = session.effective_settings
+    console.print("  [dim]Re-testing previous config...[/dim]", end="")
+    is_ok, message, _ = test_llm_connection(settings)
+    if is_ok:
+        console.print(f"\r  [green]Previous config OK:[/green] {message}        ")
+    else:
+        console.print(f"\r  [red]Previous config also failed:[/red] {message}        ")
+
+
+def _set_health_mark(session: SessionState, kind: str, name: str, *, is_healthy: bool) -> None:
+    """Set or clear a health mark in the DB."""
+    try:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(session.effective_settings.history_db_path)
+        if is_healthy:
+            storage.delete_config(f"health:{kind}:{name}")
+        else:
+            storage.save_config(f"health:{kind}:{name}", "not_working")
+    except Exception:
+        logger.debug("failed to update health mark", kind=kind, name=name, exc_info=True)
+
+
+def get_health_status(session: SessionState) -> dict[str, set[str]]:
+    """Load all health marks from DB. Returns {kind: {name, ...}}."""
+    result: dict[str, set[str]] = {"model": set(), "provider": set()}
+    try:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(session.effective_settings.history_db_path)
+        overrides = storage.load_all_config_overrides()
+        for key, value in overrides.items():
+            if key.startswith("health:") and value == "not_working":
+                parts = key.split(":", 2)
+                if len(parts) == 3:
+                    kind, name = parts[1], parts[2]
+                    if kind in result:
+                        result[kind].add(name)
+    except Exception:
+        logger.debug("failed to load health status", exc_info=True)
+    return result
+
+
+def _auto_save_config(session: SessionState) -> None:
+    """Persist all config overrides to DB immediately."""
+    from code_review_agent.interactive.commands.config_cmd import save_config_to_db
+
+    save_config_to_db(session)
+
+
+def _offer_model_removal(session: SessionState, provider: str, model: str) -> None:
+    """Ask user whether to remove the broken model from the provider."""
+    from prompt_toolkit import prompt as pt_prompt
+
+    try:
+        answer = (
+            pt_prompt(f"  Remove '{model}' from provider '{provider}'? (y/N): ").strip().lower()
+        )
+    except (KeyboardInterrupt, EOFError):
+        return
+
+    if answer not in ("y", "yes"):
+        return
+
+    from code_review_agent.interactive.commands.provider_cmd import (
+        _load_user_registry,
+        _save_user_registry,
+    )
+    from code_review_agent.providers import (
+        get_provider,
+        reload_registry,
+    )
+
+    # Remove from user registry if present
+    user_providers = _load_user_registry()
+    if provider in user_providers and isinstance(user_providers[provider], dict):
+        models = user_providers[provider].get("models", [])
+        updated = [m for m in models if m.get("id") != model]
+        if len(updated) < len(models):
+            user_providers[provider]["models"] = updated
+            _save_user_registry(user_providers)
+            reload_registry()
+            console.print(f"  [green]Model '{model}' removed.[/green]")
+
+    # Switch to provider's default model
+    try:
+        provider_info = get_provider(provider)
+        new_model = provider_info.default_model
+        if new_model != model:
+            session.config_overrides["llm_model"] = new_model
+            session.invalidate_settings_cache()
+            _auto_save_config(session)
+            console.print(f"  [green]Switched to model: {new_model} (saved)[/green]")
+    except KeyError:
+        pass
+
+    _set_health_mark(session, "model", model, is_healthy=True)
+
+
+def _offer_provider_removal(session: SessionState, provider: str) -> None:
+    """Ask user whether to remove the broken provider."""
+    from prompt_toolkit import prompt as pt_prompt
+
+    from code_review_agent.config import BUILTIN_PROVIDERS
+
+    is_builtin = provider in BUILTIN_PROVIDERS
+    action = "Switch away from" if is_builtin else "Remove"
+    try:
+        answer = pt_prompt(f"  {action} provider '{provider}'? (y/N): ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        return
+
+    if answer not in ("y", "yes"):
+        return
+
+    if not is_builtin:
+        from code_review_agent.interactive.commands.provider_cmd import (
+            _load_user_registry,
+            _save_user_registry,
+        )
+        from code_review_agent.providers import reload_registry
+
+        user_providers = _load_user_registry()
+        if provider in user_providers:
+            del user_providers[provider]
+            _save_user_registry(user_providers)
+            reload_registry()
+            console.print(f"  [green]Provider '{provider}' removed.[/green]")
+
+    # Switch to first available healthy provider
+    from code_review_agent.providers import PROVIDER_REGISTRY
+
+    health = get_health_status(session)
+    for p in sorted(PROVIDER_REGISTRY.keys()):
+        if p != provider and p not in health.get("provider", set()):
+            from code_review_agent.providers import get_provider
+
+            provider_info = get_provider(p)
+            session.config_overrides["llm_provider"] = p
+            session.config_overrides["llm_base_url"] = provider_info.base_url
+            session.config_overrides["llm_model"] = provider_info.default_model
+            session.invalidate_settings_cache()
+            _auto_save_config(session)
+            console.print(
+                f"  [green]Switched to provider: {p}, "
+                f"model: {provider_info.default_model} (saved)[/green]"
+            )
+            break
+
+    _set_health_mark(session, "provider", provider, is_healthy=True)
 
 
 _AGENT_SELECT_SENTINEL = "\x00__agent_select__"
@@ -472,13 +715,17 @@ def _run_repl_loop(settings: Settings) -> None:
     session = SessionState(settings=settings)
 
     # Load persisted config overrides from database (DB is the source of truth)
+    # Skip health marks and API keys — those are accessed separately
     try:
         from code_review_agent.storage import ReviewStorage
 
         storage = ReviewStorage(settings.history_db_path)
         persisted = storage.load_all_config_overrides()
         if persisted:
-            session.config_overrides.update(persisted)
+            for k, v in persisted.items():
+                if k.startswith("health:") or k.endswith("_api_key"):
+                    continue
+                session.config_overrides[k] = v
             session.invalidate_settings_cache()
             logger.debug("loaded persisted config overrides", count=len(persisted))
     except Exception:
@@ -510,6 +757,7 @@ def _run_repl_loop(settings: Settings) -> None:
     session._prompt_session = prompt_session  # type: ignore[attr-defined]
 
     _print_welcome()
+    _run_startup_connection_test(session)
 
     while True:
         try:
@@ -592,6 +840,8 @@ _IMMEDIATE_COMMANDS: set[str] = {
     "branch",
     "cd",
     "config",
+    "provider",
+    "pv",
     "agents",
     "version",
     "clear",

@@ -9,7 +9,6 @@ This guide covers connecting the code-review-ai to remote LLM servers, GitHub, a
 - [Configuration File (.env)](#configuration-file-env)
 - [LLM Provider Setup](#llm-provider-setup)
   - [OpenRouter](#openrouter)
-  - [OpenAI](#openai)
   - [NVIDIA](#nvidia)
   - [Azure OpenAI](#azure-openai)
   - [Self-hosted / Local Models](#self-hosted--local-models)
@@ -18,6 +17,7 @@ This guide covers connecting the code-review-ai to remote LLM servers, GitHub, a
 - [Rate Limiting](#rate-limiting)
 - [Verification](#verification)
 - [Troubleshooting](#troubleshooting)
+- [Connection Test](#connection-test)
 
 ---
 
@@ -45,7 +45,7 @@ cp .env.example .env
 
 **Loading priority** (highest wins):
 1. CLI flags (`--verbose`, `--output`, etc.)
-2. Shell environment variables (`export LLM_API_KEY=...`)
+2. Shell environment variables (`export NVIDIA_API_KEY=...`)
 3. `.env` file in the project root
 4. Hardcoded defaults
 
@@ -53,10 +53,10 @@ The `.env` file is automatically loaded by pydantic-settings at startup. You can
 
 ```bash
 # Inline
-LLM_API_KEY=sk-... uv run cra review --diff file.patch
+NVIDIA_API_KEY=nvapi-... uv run cra review --diff file.patch
 
 # Or export
-export LLM_API_KEY=sk-...
+export NVIDIA_API_KEY=nvapi-...
 uv run cra review --diff file.patch
 ```
 
@@ -64,15 +64,15 @@ uv run cra review --diff file.patch
 
 ## LLM Provider Setup
 
-The agent uses the OpenAI Python SDK as its HTTP transport. This means it works with **any API server that implements the OpenAI chat completions endpoint** (`/v1/chat/completions`). Three providers have built-in URL mappings; all others are supported via the `LLM_BASE_URL` escape hatch.
+The agent uses the OpenAI Python SDK as its HTTP transport. This means it works with **any API server that implements the OpenAI chat completions endpoint** (`/v1/chat/completions`). Two providers (NVIDIA and OpenRouter) have built-in URL mappings with free models. Additional providers can be added via the `provider add` command or by creating `~/.cra/providers.json`. Any OpenAI-compatible server is supported via `LLM_BASE_URL`.
 
 ### How Provider URL Resolution Works
 
 1. If `LLM_BASE_URL` is set, it is used directly (ignores `LLM_PROVIDER`)
-2. Otherwise, `LLM_PROVIDER` maps to a known URL:
-   - `openrouter` -> `https://openrouter.ai/api/v1`
+2. Otherwise, `LLM_PROVIDER` maps to a URL from the provider registry:
    - `nvidia` -> `https://integrate.api.nvidia.com/v1`
-   - `openai` -> `https://api.openai.com/v1`
+   - `openrouter` -> `https://openrouter.ai/api/v1`
+   - Custom providers -> URL from `~/.cra/providers.json`
 
 ---
 
@@ -88,8 +88,8 @@ The agent uses the OpenAI Python SDK as its HTTP transport. This means it works 
 **Step 2: Configure `.env`**
 ```env
 LLM_PROVIDER=openrouter
-LLM_API_KEY=your-openrouter-api-key-here
-LLM_MODEL=nvidia/nemotron-3-super-120b-a12b
+OPENROUTER_API_KEY=your-openrouter-api-key-here
+LLM_MODEL=openrouter/auto
 ```
 
 **Available models** (examples -- check OpenRouter for current list):
@@ -113,30 +113,6 @@ LLM_MODEL=google/gemma-2-9b-it
 
 ---
 
-### OpenAI
-
-**Step 1: Get an API key**
-1. Sign up at https://platform.openai.com/
-2. Go to API Keys: https://platform.openai.com/api-keys
-3. Create a new secret key
-
-**Step 2: Configure `.env`**
-```env
-LLM_PROVIDER=openai
-LLM_API_KEY=your-openai-api-key-here
-LLM_MODEL=gpt-4o
-```
-
-**Available models:**
-```env
-LLM_MODEL=gpt-4o           # Best quality, 128k context
-LLM_MODEL=gpt-4o-mini      # Faster, cheaper, 128k context
-LLM_MODEL=gpt-4-turbo      # Previous generation
-LLM_MODEL=gpt-3.5-turbo    # Budget option, 16k context
-```
-
----
-
 ### NVIDIA
 
 NVIDIA provides free-tier API access to select models.
@@ -149,42 +125,23 @@ NVIDIA provides free-tier API access to select models.
 **Step 2: Configure `.env`**
 ```env
 LLM_PROVIDER=nvidia
-LLM_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NVIDIA_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 LLM_MODEL=nvidia/nemotron-3-super-120b-a12b
 ```
 
 **Available models:**
 ```env
-LLM_MODEL=nvidia/nemotron-3-super-120b-a12b
-LLM_MODEL=nvidia/llama-3.1-nemotron-70b-instruct
+LLM_MODEL=nvidia/nemotron-3-super-120b-a12b        # 1M context, free
+LLM_MODEL=nvidia/nemotron-3-nano-30b-a3b            # 1M context, free
+LLM_MODEL=nvidia/llama-3.3-nemotron-super-49b-v1.5  # 131k context, free
+LLM_MODEL=nvidia/llama-3.1-nemotron-70b-instruct    # 131k context, free
 ```
-
----
-
-### Azure OpenAI
-
-Azure OpenAI uses a different URL scheme than standard OpenAI. Use `LLM_BASE_URL` to point to your Azure deployment.
-
-**Step 1: Set up Azure OpenAI resource**
-1. Create an Azure OpenAI resource in the Azure portal
-2. Deploy a model (e.g., `gpt-4o`) in Azure AI Studio
-3. Note your endpoint URL and API key from the resource's "Keys and Endpoint" page
-
-**Step 2: Configure `.env`**
-```env
-LLM_PROVIDER=openai
-LLM_BASE_URL=https://YOUR-RESOURCE.openai.azure.com/openai/deployments/YOUR-DEPLOYMENT/v1
-LLM_API_KEY=your-azure-api-key
-LLM_MODEL=gpt-4o
-```
-
-**Important:** The `LLM_BASE_URL` must include the full path up to `/v1`. Replace `YOUR-RESOURCE` with your Azure resource name and `YOUR-DEPLOYMENT` with your deployment name.
 
 ---
 
 ### Self-hosted / Local Models
 
-Any server implementing the OpenAI-compatible `/v1/chat/completions` endpoint works. Use `LLM_BASE_URL` to point to it.
+Any server implementing the OpenAI-compatible `/v1/chat/completions` endpoint works. The recommended approach is to register it as a custom provider using `provider add` in interactive mode. Alternatively, use `LLM_BASE_URL` to point to it directly.
 
 #### Ollama
 
@@ -195,13 +152,12 @@ ollama pull llama3.1
 ```
 
 ```env
-LLM_PROVIDER=openai
 LLM_BASE_URL=http://localhost:11434/v1
-LLM_API_KEY=ollama
+NVIDIA_API_KEY=ollama
 LLM_MODEL=llama3.1
 ```
 
-**Note:** Ollama requires a non-empty `LLM_API_KEY` even though it doesn't authenticate. Use any placeholder value like `ollama`.
+**Note:** Ollama does not authenticate, but the API key field must be non-empty. Use any placeholder value.
 
 #### vLLM
 
@@ -213,9 +169,8 @@ python -m vllm.entrypoints.openai.api_server \
 ```
 
 ```env
-LLM_PROVIDER=openai
 LLM_BASE_URL=http://localhost:8000/v1
-LLM_API_KEY=vllm
+NVIDIA_API_KEY=vllm
 LLM_MODEL=meta-llama/Llama-3.1-8B-Instruct
 ```
 
@@ -226,9 +181,8 @@ LLM_MODEL=meta-llama/Llama-3.1-8B-Instruct
 ```
 
 ```env
-LLM_PROVIDER=openai
 LLM_BASE_URL=http://localhost:8080/v1
-LLM_API_KEY=llamacpp
+NVIDIA_API_KEY=llamacpp
 LLM_MODEL=local-model
 ```
 
@@ -238,9 +192,8 @@ LLM_MODEL=local-model
 2. Enable the local server (default port: 1234)
 
 ```env
-LLM_PROVIDER=openai
 LLM_BASE_URL=http://localhost:1234/v1
-LLM_API_KEY=lmstudio
+NVIDIA_API_KEY=lmstudio
 LLM_MODEL=local-model
 ```
 
@@ -249,18 +202,19 @@ LLM_MODEL=local-model
 For a model running on a remote machine (e.g., a GPU server):
 
 ```env
-LLM_PROVIDER=openai
 LLM_BASE_URL=https://your-server.example.com/v1
-LLM_API_KEY=your-server-api-key
+NVIDIA_API_KEY=your-server-api-key
 LLM_MODEL=your-model-name
 ```
 
 **Key points for all self-hosted setups:**
 - `LLM_BASE_URL` must end with `/v1` (the SDK appends `/chat/completions`)
-- `LLM_API_KEY` must be non-empty (use any placeholder if the server has no auth)
+- An API key must be non-empty (use any placeholder if the server has no auth)
 - `LLM_MODEL` must match the model name the server expects
 - Increase `REQUEST_TIMEOUT_SECONDS` for slower local hardware (e.g., `300`)
 - Set `TOKEN_TIER=free` and `RATE_LIMIT_RPM=0` (unlimited) for local servers
+
+**Tip:** You can register self-hosted servers as custom providers using `provider add` in the interactive REPL. This lets you switch between them with `Ctrl+P` and tracks their models in `~/.cra/providers.json`.
 
 ---
 
@@ -415,11 +369,11 @@ cra> pr list
 
 ## Troubleshooting
 
-### "LLM_API_KEY field required"
+### "API key is required"
 
 You have not set an API key. Add it to `.env` or export it:
 ```bash
-export LLM_API_KEY=your-key-here
+export NVIDIA_API_KEY=your-key-here  # or OPENROUTER_API_KEY
 ```
 
 ### Connection refused / timeout
@@ -433,7 +387,7 @@ export LLM_API_KEY=your-key-here
 
 - API key is invalid or expired
 - For OpenRouter: check the key at https://openrouter.ai/keys
-- For OpenAI: check at https://platform.openai.com/api-keys
+- For NVIDIA: check at https://build.nvidia.com/
 - Ensure no extra whitespace in the key
 
 ### 429 Rate Limit
@@ -446,7 +400,7 @@ export LLM_API_KEY=your-key-here
 
 - Verify the exact model identifier with your provider
 - OpenRouter uses `provider/model-name` format (e.g., `nvidia/nemotron-3-super-120b-a12b`)
-- OpenAI uses short names (e.g., `gpt-4o`)
+- NVIDIA uses `nvidia/model-name` format (e.g., `nvidia/nemotron-3-super-120b-a12b`)
 - For local servers, check what model name the server reports
 
 ### GitHub PR fetch fails
@@ -480,6 +434,16 @@ docker run \
 docker run --env-file .env code-review-ai review --diff /data/file.patch
 ```
 
+### Connection Test
+
+On startup and after LLM config changes, the tool sends a minimal 1-token request to verify connectivity. This can be disabled:
+
+```env
+TEST_CONNECTION_ON_START=false
+```
+
+The connection test also runs automatically when you change provider, model, base URL, or API key via `config edit`, `config set`, or `Ctrl+P`.
+
 ---
 
 ## Quick Reference: Minimum `.env` by Provider
@@ -487,27 +451,20 @@ docker run --env-file .env code-review-ai review --diff /data/file.patch
 **OpenRouter (recommended for variety):**
 ```env
 LLM_PROVIDER=openrouter
-LLM_API_KEY=sk-or-v1-xxx
-LLM_MODEL=nvidia/nemotron-3-super-120b-a12b
-```
-
-**OpenAI:**
-```env
-LLM_PROVIDER=openai
-LLM_API_KEY=sk-xxx
-LLM_MODEL=gpt-4o
+OPENROUTER_API_KEY=sk-or-v1-xxx
+LLM_MODEL=openrouter/auto
 ```
 
 **NVIDIA:**
 ```env
 LLM_PROVIDER=nvidia
-LLM_API_KEY=nvapi-xxx
+NVIDIA_API_KEY=nvapi-xxx
 LLM_MODEL=nvidia/nemotron-3-super-120b-a12b
 ```
 
 **Ollama (local):**
 ```env
-LLM_PROVIDER=openai
+# Use 'provider add' in interactive mode to register as a custom provider
 LLM_BASE_URL=http://localhost:11434/v1
 LLM_API_KEY=ollama
 LLM_MODEL=llama3.1
@@ -517,7 +474,7 @@ REQUEST_TIMEOUT_SECONDS=300
 
 **Any OpenAI-compatible server:**
 ```env
-LLM_PROVIDER=openai
+# Use 'provider add' in interactive mode to register as a custom provider
 LLM_BASE_URL=http://your-server:8000/v1
 LLM_API_KEY=your-key
 LLM_MODEL=your-model-name

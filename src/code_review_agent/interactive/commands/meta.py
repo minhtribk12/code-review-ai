@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 console = Console()
 
-_VERSION = "0.1.0"
+_VERSION = "0.1.1"
 
 # Command registry: (name, description) grouped by category.
 COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
@@ -86,6 +86,13 @@ COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
         ("config save", "Persist session config to database"),
         ("config reset", "Reload config from .env"),
         ("config validate", "Check config for errors"),
+    ],
+    "Provider": [
+        ("provider", "Interactive provider/model browser (alias: pv)"),
+        ("provider add", "Add a custom LLM provider (alias: pv add)"),
+        ("provider list", "Table view of all providers"),
+        ("provider models <name>", "List models for a provider"),
+        ("provider remove <name>", "Remove a user-defined provider"),
     ],
     "History": [
         ("history [--repo R] [--days N]", "List past reviews"),

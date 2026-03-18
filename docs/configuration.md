@@ -5,7 +5,7 @@
 Settings are loaded with the following priority (highest wins):
 
 1. **CLI flags** -- `--verbose`, `--output`, etc.
-2. **Environment variables** -- `LLM_API_KEY=...`
+2. **Environment variables** -- `NVIDIA_API_KEY=...`
 3. **`.env` file** -- loaded automatically by pydantic-settings
 4. **Defaults** -- hardcoded in the `Settings` class
 
@@ -15,12 +15,14 @@ Settings are loaded with the following priority (highest wins):
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `LLM_PROVIDER` | `KnownProvider` | `openrouter` | API provider: `openrouter`, `nvidia`, `openai` |
-| `LLM_API_KEY` | `SecretStr` | *required* | API key for the LLM provider (masked in logs) |
+| `LLM_PROVIDER` | `KnownProvider` | `nvidia` | API provider: `nvidia`, `openrouter` |
+| `NVIDIA_API_KEY` | `SecretStr \| None` | `None` | API key for NVIDIA NIM (required when provider is `nvidia`) |
+| `OPENROUTER_API_KEY` | `SecretStr \| None` | `None` | API key for OpenRouter (required when provider is `openrouter`) |
 | `LLM_MODEL` | `str` | `nvidia/nemotron-3-super-120b-a12b` | Model identifier passed to the provider |
 | `LLM_BASE_URL` | `str \| None` | `None` | Custom API URL; overrides provider URL resolution |
 | `LLM_TEMPERATURE` | `float` | `0.1` | Sampling temperature, range 0.0--1.0 (lower = more deterministic) |
 | `REQUEST_TIMEOUT_SECONDS` | `int` | `120` | Per-request timeout in seconds (min: 1) |
+| `TEST_CONNECTION_ON_START` | `bool` | `true` | Send a minimal 1-token request on startup and after LLM config changes to verify connectivity |
 
 ### Token Budget
 
@@ -103,23 +105,33 @@ Settings are loaded with the following priority (highest wins):
 The `resolved_llm_base_url` computed field determines the final API URL:
 
 1. If `LLM_BASE_URL` is set, use it directly (escape hatch for local servers or custom endpoints).
-2. Otherwise, map `LLM_PROVIDER` to a known URL:
-   - `openrouter` -- `https://openrouter.ai/api/v1`
+2. Otherwise, look up `LLM_PROVIDER` in the provider registry:
    - `nvidia` -- `https://integrate.api.nvidia.com/v1`
-   - `openai` -- `https://api.openai.com/v1`
+   - `openrouter` -- `https://openrouter.ai/api/v1`
+   - Custom providers -- URL from `~/.cra/providers.json`
+
+### Provider Registry
+
+Provider metadata (base URLs, models, rate limits) is stored in JSON:
+
+- **Bundled defaults:** `<package>/provider_registry.json` (ships with install)
+- **User overrides:** `~/.cra/providers.json` (add custom providers or extend existing ones)
+
+Use `provider add` in interactive mode or edit `~/.cra/providers.json` directly. User-defined providers are merged on top of bundled defaults.
 
 ## Secrets Handling
 
-- `LLM_API_KEY` and `GITHUB_TOKEN` use Pydantic's `SecretStr` type.
-- `print(settings.llm_api_key)` outputs `**********`.
-- The raw value is accessed only at the HTTP boundary via `settings.llm_api_key.get_secret_value()`.
+- `NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, and `GITHUB_TOKEN` use Pydantic's `SecretStr` type.
+- `print(settings.nvidia_api_key)` outputs `**********`.
+- The raw value is accessed only at the HTTP boundary via `settings.resolved_api_key.get_secret_value()`.
 - Secret values are never logged in prompts, responses, or error messages.
 
 ## Validation Rules
 
 All settings are validated at startup. Invalid values produce a `ValidationError` immediately, not at first use.
 
-- `LLM_PROVIDER` must be one of: `openrouter`, `nvidia`, `openai`.
+- `LLM_PROVIDER` must be one of: `nvidia`, `openrouter`.
+- The active provider must have its API key set (`NVIDIA_API_KEY` for nvidia, `OPENROUTER_API_KEY` for openrouter).
 - `LLM_TEMPERATURE` must be between 0.0 and 1.0 inclusive.
 - `REQUEST_TIMEOUT_SECONDS` must be >= 1.
 - `MAX_REVIEW_SECONDS` must be >= 10.
@@ -138,12 +150,14 @@ All settings are validated at startup. Invalid values produce a `ValidationError
 
 ```env
 # -- LLM --
-LLM_PROVIDER=openrouter
-LLM_API_KEY=your-api-key-here
+LLM_PROVIDER=nvidia
+NVIDIA_API_KEY=your-nvidia-api-key-here
+# OPENROUTER_API_KEY=your-openrouter-api-key-here
 LLM_MODEL=nvidia/nemotron-3-super-120b-a12b
 # LLM_BASE_URL=http://localhost:8000/v1
 LLM_TEMPERATURE=0.1
 REQUEST_TIMEOUT_SECONDS=120
+TEST_CONNECTION_ON_START=true
 
 # -- Token budget --
 TOKEN_TIER=free

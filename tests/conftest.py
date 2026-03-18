@@ -185,8 +185,9 @@ def mock_settings() -> Settings:
     from leaking into tests.
     """
     return Settings(
-        llm_api_key="sk-test-fake-key-00000000",  # pragma: allowlist secret
-        llm_provider="openrouter",
+        nvidia_api_key="nvapi-test-fake-key-00000000",  # pragma: allowlist secret
+        openrouter_api_key="sk-or-test-fake-key-00000000",  # pragma: allowlist secret
+        llm_provider="nvidia",
         llm_model="nvidia/nemotron-3-super-120b-a12b",
         github_token="ghp_test_fake_token_00000000",  # pragma: allowlist secret
         max_tokens_per_review=None,

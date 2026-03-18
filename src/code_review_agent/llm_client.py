@@ -73,7 +73,7 @@ class LLMClient:
         self._max_tokens = settings.llm_max_tokens
         self._rate_limiter = rate_limiter or create_rate_limiter(settings)
         self._client = openai.OpenAI(
-            api_key=settings.llm_api_key.get_secret_value(),
+            api_key=settings.resolved_api_key.get_secret_value(),
             base_url=settings.resolved_llm_base_url,
             timeout=float(settings.request_timeout_seconds),
         )

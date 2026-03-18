@@ -27,6 +27,7 @@ _CONFIG_CATEGORIES: dict[str, list[str]] = {
         "llm_max_tokens",
         "llm_api_key",
         "request_timeout_seconds",
+        "test_connection_on_start",
     ],
     "Token Budget": [
         "token_tier",
@@ -61,6 +62,16 @@ _CONFIG_CATEGORIES: dict[str, list[str]] = {
         "auto_save_history",
         "usage_window",
     ],
+    "Interactive": [
+        "interactive_history_file",
+        "interactive_prompt",
+        "interactive_vi_mode",
+        "interactive_autocomplete_cache_ttl",
+        "watch_debounce_seconds",
+    ],
+    "Logging": [
+        "log_level",
+    ],
 }
 
 
@@ -76,6 +87,15 @@ def _mask_secret(value: object) -> str:
 
 def _get_config_value(session: SessionState, key: str) -> object:
     """Get a config value, checking session overrides first."""
+    # Virtual llm_api_key: map to {provider}_api_key
+    if key == "llm_api_key":
+        settings = session.effective_settings
+        provider = settings.llm_provider
+        real_key = f"{provider}_api_key"
+        if real_key in session.config_overrides:
+            return session.config_overrides[real_key]
+        return getattr(session.settings, real_key, None)
+
     if key in session.config_overrides:
         return session.config_overrides[key]
     return getattr(session.settings, key, None)
@@ -149,7 +169,7 @@ def cmd_config_get(args: list[str], session: SessionState) -> None:
 
 
 def cmd_config_set(args: list[str], session: SessionState) -> None:
-    """Set a config value for this session only (not persisted)."""
+    """Set a config value and persist to database immediately."""
     if len(args) < 2:
         console.print("[red]Usage: config set <key> <value>[/red]")
         return
@@ -162,7 +182,11 @@ def cmd_config_set(args: list[str], session: SessionState) -> None:
 
     session.config_overrides[key] = value
     session.invalidate_settings_cache()
-    console.print(f"  [green]{key}[/green] = {value} [dim](session only)[/dim]")
+
+    # Auto-save to DB immediately
+    saved = save_config_to_db(session)
+    persist_label = "(saved)" if saved else "(session only)"
+    console.print(f"  [green]{key}[/green] = {value} [dim]{persist_label}[/dim]")
 
     # Show cost warning for cost-related keys
     _COST_KEYS = {"max_deepening_rounds", "is_validation_enabled", "max_validation_rounds"}
@@ -175,6 +199,25 @@ def cmd_config_set(args: list[str], session: SessionState) -> None:
             )
             for reason in reasons:
                 console.print(f"    [dim]{reason}[/dim]")
+
+    # Run connection test for LLM-related config changes
+    _LLM_SET = {
+        "llm_provider",
+        "llm_model",
+        "llm_base_url",
+        "nvidia_api_key",
+        "openrouter_api_key",
+    }
+    if key in _LLM_SET and session.effective_settings.test_connection_on_start:
+        from code_review_agent.interactive.repl import run_connection_test
+
+        # Build previous config snapshot for revert
+        prev: dict[str, str] = {}
+        for k in ("llm_provider", "llm_model", "llm_base_url"):
+            old_val = getattr(session.settings, k, None)
+            if old_val is not None:
+                prev[k] = str(old_val)
+        run_connection_test(session, previous_llm_config=prev)
 
 
 def cmd_config_save(args: list[str], session: SessionState) -> None:
@@ -196,6 +239,7 @@ def cmd_config_save(args: list[str], session: SessionState) -> None:
 def save_config_to_db(session: SessionState) -> int:
     """Write config overrides to the database.
 
+    Skips health marks and API keys (those are managed separately).
     Returns the number of settings saved.
     """
     from code_review_agent.storage import ReviewStorage
@@ -205,6 +249,8 @@ def save_config_to_db(session: SessionState) -> int:
         storage = ReviewStorage(settings.history_db_path)
         count = 0
         for key, value in session.config_overrides.items():
+            if key.startswith("health:") or key.endswith("_api_key"):
+                continue
             storage.save_config(key, str(value))
             count += 1
         return count
@@ -235,7 +281,7 @@ def cmd_config_validate(args: list[str], session: SessionState) -> None:
     try:
         from code_review_agent.config import Settings
 
-        Settings()  # type: ignore[call-arg]
+        Settings()
         console.print("[green]Config is valid.[/green]")
     except Exception as exc:
         console.print(f"[red]Config validation error: {exc}[/red]")
@@ -248,4 +294,5 @@ def cmd_config_diff(args: list[str], session: SessionState) -> None:
         return
     for key, value in session.config_overrides.items():
         original = getattr(session.settings, key, None)
-        console.print(f"  {key}: {_mask_secret(original)} -> {value}")
+        display_new = "****" if key.endswith("_api_key") or key == "llm_api_key" else value
+        console.print(f"  {key}: {_mask_secret(original)} -> {display_new}")

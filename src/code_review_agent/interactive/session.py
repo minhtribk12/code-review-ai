@@ -185,6 +185,23 @@ class SessionState:
         compare=False,
     )
 
+    def _inject_custom_api_keys_to_env(self) -> None:
+        """Load custom provider API keys from DB into environment variables."""
+        import os
+
+        from code_review_agent.config import Settings as SettingsCls
+
+        try:
+            from code_review_agent.storage import ReviewStorage
+
+            storage = ReviewStorage(self.settings.history_db_path)
+            all_db = storage.load_all_config_overrides()
+            for key, raw_val in all_db.items():
+                if key.endswith("_api_key") and key not in SettingsCls.model_fields and raw_val:
+                    os.environ[key.upper()] = raw_val
+        except Exception:
+            logger.debug("failed to inject custom API keys from DB", exc_info=True)
+
     @property
     def effective_settings(self) -> Settings:
         """Return settings with session overrides applied.
@@ -236,6 +253,8 @@ class SessionState:
 
         if not validated_updates:
             return self.settings
+
+        self._inject_custom_api_keys_to_env()
 
         try:
             rebuilt = self.settings.model_copy(update=validated_updates)

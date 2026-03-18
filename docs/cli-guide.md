@@ -11,7 +11,7 @@ git clone https://github.com/minhtribk12/code-review-ai.git
 cd code-review-ai
 make install
 cp .env.example .env
-# Edit .env: set LLM_API_KEY and LLM_PROVIDER
+# Edit .env: set NVIDIA_API_KEY (or OPENROUTER_API_KEY) and LLM_PROVIDER
 ```
 
 Two entry points are available:
@@ -210,8 +210,9 @@ See [Configuration](configuration.md) for the complete reference.
 Essential variables:
 
 ```env
-LLM_API_KEY=your-key-here          # required
-LLM_PROVIDER=openrouter            # openrouter, nvidia, openai
+LLM_PROVIDER=nvidia                # nvidia or openrouter
+NVIDIA_API_KEY=your-key-here       # required for nvidia provider
+# OPENROUTER_API_KEY=your-key      # required for openrouter provider
 GITHUB_TOKEN=ghp_your_token        # required for PR reviews
-TOKEN_TIER=standard                # free, standard, premium
+TOKEN_TIER=free                    # free, standard, premium
 ```

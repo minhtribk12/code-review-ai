@@ -35,6 +35,9 @@ def session() -> SessionState:
     settings.llm_temperature = 0.1
     settings.llm_provider = "openrouter"
     settings.github_token = None
+    settings.test_connection_on_start = False
+    # model_copy() must also return settings with connection test disabled
+    settings.model_copy.return_value = settings
     return SessionState(settings=settings)
 
 
@@ -49,6 +52,8 @@ def session_with_token() -> SessionState:
     settings.github_token = SecretStr("ghp_test_fake_token")
     settings.github_rate_limit_warn_threshold = 100
     settings.watch_debounce_seconds = 5.0
+    settings.test_connection_on_start = False
+    settings.model_copy.return_value = settings
     return SessionState(settings=settings)
 
 
@@ -180,7 +185,7 @@ class TestMetaCommands:
     def test_version(self, session: SessionState) -> None:
         with patch("code_review_agent.interactive.commands.meta.console") as mock_con:
             cmd_version([], session)
-        assert "0.1.0" in str(mock_con.print.call_args)
+        assert "0.1.1" in str(mock_con.print.call_args)
 
 
 class TestSessionState:
@@ -1228,8 +1233,8 @@ class TestGitOpsRepoHelpers:
 @pytest.fixture
 def real_session(monkeypatch: pytest.MonkeyPatch) -> SessionState:
     """Session with real Settings (not MagicMock) for effective_settings tests."""
-    monkeypatch.setenv("LLM_API_KEY", "sk-test-fake-key")
-    monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-fake-key")  # pragma: allowlist secret
+    monkeypatch.setenv("LLM_PROVIDER", "nvidia")
     from code_review_agent.config import Settings
 
     settings = Settings()
@@ -1608,8 +1613,7 @@ class TestConfigCacheInvalidation:
         ):
             cmd_config_set(["llm_temperature", "0.9"], real_session)
 
-        # Cache should be invalidated
-        assert real_session._effective_settings_cache is None
+        # New value should be applied (cache rebuilt with updated overrides)
         assert real_session.effective_settings.llm_temperature == 0.9
 
     def test_config_reset_invalidates_cache(

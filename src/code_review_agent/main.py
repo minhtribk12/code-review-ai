@@ -22,7 +22,7 @@ app = typer.Typer(
     help="Multi-agent code review powered by Nemotron 3 Super",
 )
 
-_VERSION = "0.1.0"
+_VERSION = "0.1.1"
 
 
 def _version_callback(value: bool) -> None:
@@ -54,7 +54,7 @@ def main(
     from code_review_agent.config import Settings
 
     try:
-        settings = Settings()  # type: ignore[call-arg]
+        settings = Settings()
     except Exception:
         settings = None
 
@@ -332,12 +332,14 @@ def _parse_agent_names(agents_arg: str | None) -> list[str] | None:
 def _load_settings() -> Settings:
     """Load settings with a user-friendly error on missing configuration."""
     try:
-        return Settings()  # type: ignore[call-arg]
+        return Settings()
     except Exception as exc:
         error_str = str(exc)
-        if "llm_api_key" in error_str.lower():
+        if "api_key" in error_str.lower():
             msg = (
-                "LLM_API_KEY is required. Set it in .env or as an environment variable.\n"
+                "An API key is required for your configured provider.\n"
+                "  Set NVIDIA_API_KEY or OPENROUTER_API_KEY in .env"
+                " or as an environment variable.\n"
                 "  Run: cp .env.example .env\n"
                 "  Then edit .env and add your API key."
             )

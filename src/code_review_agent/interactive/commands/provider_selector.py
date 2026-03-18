@@ -11,7 +11,8 @@ from prompt_toolkit.layout.containers import HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
 
-from code_review_agent.config import KnownProvider
+import code_review_agent.providers as _providers_mod
+from code_review_agent.providers import get_provider
 from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
@@ -25,14 +26,19 @@ class _ProviderSelector:
 
     def __init__(self, session: SessionState) -> None:
         self.session = session
-        self.choices: list[str] = [p.value for p in KnownProvider]
+        self.choices: list[str] = sorted(_providers_mod.PROVIDER_REGISTRY.keys())
         self.cursor: int = 0
         self.is_confirmed: bool = False
+
+        # Load health status for "(not working)" labels
+        from code_review_agent.interactive.repl import get_health_status
+
+        self.health = get_health_status(session)
 
         # Determine current provider from overrides or base settings
         current = session.config_overrides.get(
             "llm_provider",
-            str(getattr(session.settings, "llm_provider", "openrouter")),
+            str(getattr(session.settings, "llm_provider", "nvidia")),
         )
         for i, choice in enumerate(self.choices):
             if choice == current:
@@ -73,11 +79,21 @@ class _ProviderSelector:
             else:
                 lines.append(("", "( ) "))
 
+            is_broken = choice in self.health.get("provider", set())
             style = "bold" if is_cursor else ""
             lines.append((style, choice))
 
-            if choice == current:
-                lines.append(("green", "  (current)"))
+            if is_broken:
+                lines.append(("red bold", " (not working)"))
+            elif choice == current:
+                lines.append(("green", " (current)"))
+
+            # Show provider info from registry
+            try:
+                provider_info = get_provider(choice)
+                lines.append(("dim", f"  {provider_info.base_url}"))
+            except KeyError:
+                pass
 
             lines.append(("", "\n"))
 
@@ -87,8 +103,9 @@ class _ProviderSelector:
 def run_provider_selector(session: SessionState) -> None:
     """Launch the full-screen provider selector and persist the choice.
 
-    Updates ``session.config_overrides["llm_provider"]`` and saves to
-    the database so the selection persists across restarts.
+    Updates ``session.config_overrides["llm_provider"]`` and cascades
+    changes to ``llm_model`` and ``llm_base_url``. Saves to the database
+    so the selection persists across restarts.
     """
     selector = _ProviderSelector(session)
 
@@ -128,7 +145,33 @@ def run_provider_selector(session: SessionState) -> None:
         return
 
     value = selector.selected_value()
+    old_value = session.config_overrides.get(
+        "llm_provider",
+        str(getattr(session.settings, "llm_provider", "")),
+    )
+
+    # Snapshot previous LLM config for revert on failure
+    prev_config = {
+        "llm_provider": old_value,
+        "llm_model": session.config_overrides.get(
+            "llm_model", str(getattr(session.settings, "llm_model", ""))
+        ),
+        "llm_base_url": session.config_overrides.get(
+            "llm_base_url", str(getattr(session.settings, "llm_base_url", "") or "")
+        ),
+    }
+
     session.config_overrides["llm_provider"] = value
+
+    # Cascade: update base_url and model when provider changes
+    if value != old_value:
+        try:
+            provider_info = get_provider(value)
+            session.config_overrides["llm_base_url"] = provider_info.base_url
+            session.config_overrides["llm_model"] = provider_info.default_model
+        except KeyError:
+            pass
+
     session.invalidate_settings_cache()
 
     from code_review_agent.interactive.commands.config_cmd import save_config_to_db
@@ -139,3 +182,16 @@ def run_provider_selector(session: SessionState) -> None:
 
     con = Console()
     con.print(f"  [{theme.success}]Provider: {value}[/{theme.success}] (saved)")
+    if value != old_value:
+        try:
+            provider_info = get_provider(value)
+            con.print(f"  [{theme.success}]Model: {provider_info.default_model}[/{theme.success}]")
+            con.print(f"  [{theme.success}]Base URL: {provider_info.base_url}[/{theme.success}]")
+        except KeyError:
+            pass
+
+        # Run connection test after provider change (revert on failure)
+        if session.effective_settings.test_connection_on_start:
+            from code_review_agent.interactive.repl import run_connection_test
+
+            run_connection_test(session, previous_llm_config=prev_config)

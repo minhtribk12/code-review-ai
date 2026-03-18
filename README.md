@@ -38,7 +38,7 @@ Built with Python 3.12+, Typer, Pydantic, and any OpenAI-compatible API.
 **Extensibility:**
 - Custom agents defined in YAML (no Python required)
 - File pattern matching -- agents run only on relevant file types
-- Provider-agnostic -- OpenRouter, NVIDIA, OpenAI, or any compatible API
+- Provider-agnostic -- NVIDIA, OpenRouter, or any OpenAI-compatible API (add custom providers via JSON)
 
 ## Quick Start
 
@@ -69,8 +69,9 @@ cp .env.example .env
 Edit `.env` and set your API key:
 
 ```env
-LLM_API_KEY=your-api-key-here
-LLM_PROVIDER=openrouter          # openrouter, nvidia, or openai
+LLM_PROVIDER=nvidia                   # nvidia or openrouter
+NVIDIA_API_KEY=your-nvidia-api-key    # get from build.nvidia.com
+# OPENROUTER_API_KEY=your-openrouter-key  # get from openrouter.ai
 ```
 
 See [docs/configuration.md](docs/configuration.md) for all settings.
@@ -232,8 +233,11 @@ Key bindings: Up/Down navigate, `f` filter, `s`/`S` sort forward/backward, `m` m
 
 ```bash
 config                          # show all settings
-config edit                     # full-screen config editor
+config edit                     # full-screen config editor (paste supported)
 config set llm_temperature 0.3  # session override
+provider                        # list all LLM providers
+provider add                    # add custom provider (wizard)
+provider models nvidia          # list models for a provider
 history                         # past reviews
 history trends --days 30        # aggregated stats
 usage                           # session token/cost stats
@@ -299,7 +303,7 @@ make check      # All of the above
 
 ### Test Suite
 
-630+ unit tests covering models, config, LLM client, agents, agent loader,
+650+ unit tests covering models, config, LLM client, agents, agent loader,
 CLI, report, orchestrator, deduplication, GitHub client, and the interactive TUI.
 
 ### Interactive Tests
@@ -330,6 +334,9 @@ src/code_review_agent/
     session.py           # Session state, PR cache
   agent_loader.py        # Custom YAML agent discovery + loading
   config.py              # Settings with pydantic-settings
+  providers.py           # Provider registry (bundled + user ~/.cra/providers.json)
+  provider_registry.json # Bundled provider/model knowledge base
+  connection_test.py     # LLM connection verification
   dedup.py               # Cross-agent finding deduplication
   github_client.py       # GitHub API (PR read + write + rate limiting)
   llm_client.py          # OpenAI-compatible client with retry + JSON parsing
@@ -341,7 +348,7 @@ src/code_review_agent/
   storage.py             # SQLite review history
   token_budget.py        # Tiers, budgets, cost estimation
 
-tests/                   # 630+ unit tests
+tests/                   # 650+ unit tests
 interactive_tests/cli/   # Mock servers + scenario tests
 docs/                    # Architecture, configuration, models, custom agents
 ```

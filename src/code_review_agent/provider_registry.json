@@ -1,0 +1,84 @@
+{
+  "providers": {
+    "nvidia": {
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "default_model": "nvidia/nemotron-3-super-120b-a12b",
+      "rate_limit_rpm": 40,
+      "models": [
+        {
+          "id": "nvidia/nemotron-3-super-120b-a12b",
+          "name": "Nemotron 3 Super 120B (MoE, 12B active)",
+          "is_free": true,
+          "context_window": 1000000
+        },
+        {
+          "id": "nvidia/nemotron-3-nano-30b-a3b",
+          "name": "Nemotron 3 Nano 30B (MoE, 3B active)",
+          "is_free": true,
+          "context_window": 1000000
+        },
+        {
+          "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+          "name": "Llama 3.3 Nemotron Super 49B",
+          "is_free": true,
+          "context_window": 131072
+        },
+        {
+          "id": "nvidia/nemotron-mini-4b-instruct",
+          "name": "Nemotron Mini 4B Instruct",
+          "is_free": true,
+          "context_window": 4096
+        },
+        {
+          "id": "nvidia/llama-3.1-nemotron-70b-instruct",
+          "name": "Llama 3.1 Nemotron 70B Instruct",
+          "is_free": true,
+          "context_window": 131072
+        }
+      ]
+    },
+    "openrouter": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "default_model": "openrouter/auto",
+      "rate_limit_rpm": 20,
+      "models": [
+        {
+          "id": "nvidia/nemotron-3-super-120b-a12b:free",
+          "name": "Nemotron 3 Super 120B",
+          "is_free": true,
+          "context_window": 262000
+        },
+        {
+          "id": "qwen/qwen3-coder:free",
+          "name": "Qwen3 Coder",
+          "is_free": true,
+          "context_window": 262000
+        },
+        {
+          "id": "meta-llama/llama-3.3-70b-instruct:free",
+          "name": "Llama 3.3 70B Instruct",
+          "is_free": true,
+          "context_window": 131072
+        },
+        {
+          "id": "mistralai/mistral-small-3.1-24b-instruct:free",
+          "name": "Mistral Small 3.1 24B",
+          "is_free": true,
+          "context_window": 131072
+        },
+        {
+          "id": "google/gemma-3-27b-it:free",
+          "name": "Gemma 3 27B",
+          "is_free": true,
+          "context_window": 131072
+        },
+        {
+          "id": "google/gemma-3-12b-it:free",
+          "name": "Gemma 3 12B",
+          "is_free": true,
+          "context_window": 32768
+        }
+      ]
+    }
+  }
+}

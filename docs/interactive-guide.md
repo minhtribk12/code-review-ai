@@ -31,7 +31,7 @@ cra> _
 | Key | Action |
 |-----|--------|
 | `Ctrl+A` | Open agent selector (multi-select, saved to database) |
-| `Ctrl+P` | Open provider selector (single-select, saved to database) |
+| `Ctrl+P` | Open provider selector (auto-updates model and base URL) |
 | `Ctrl+O` | Open repo selector (interactive picker) |
 | `Ctrl+L` | Open git graph navigator |
 | `Tab` | Autocomplete commands and arguments |
@@ -423,7 +423,7 @@ Opens a full-screen interactive editor:
 
   LLM
   --------------------------------------------------------
-  > llm_provider         openrouter      [openrouter|nvidia|openai]
+  > llm_provider         nvidia          [nvidia|openrouter]
     llm_model            nvidia/nemotron...
     llm_temperature      0.1
     ...
@@ -442,12 +442,76 @@ Opens a full-screen interactive editor:
 - Enter to confirm (validates input)
 - Esc to cancel edit or exit editor
 - Invalid input shows an error, keeps old value
+- Paste supported: paste text from clipboard directly into text fields
 
 Session overrides are active until `config reset` or session end.
 Use `config save` to persist to the database (survives restarts).
 You can also press `Ctrl+A` to quickly change agents or `Ctrl+P` to
-change the LLM provider -- selections
+change the LLM provider -- it cascades model and base_url changes, and selections
 are saved to the database automatically.
+
+---
+
+## Provider Management
+
+### `provider`
+
+Manage LLM providers and their models. Shortcut alias: `pv`.
+
+```
+cra> provider                        # list all providers (alias: pv)
+cra> provider add                    # add custom provider (wizard)
+cra> provider models nvidia          # list models for a provider
+cra> provider models openrouter      # list OpenRouter free models
+cra> provider remove my-custom       # remove a user-defined provider
+```
+
+### `provider add`
+
+Interactive wizard to register a custom LLM provider or add models to an existing one:
+
+```
+cra> provider add
+
+  Add LLM Provider  (Ctrl+C to abort)
+  Paste or type values. Enter accepts defaults.
+
+  Provider name: ollama
+  Base URL: http://localhost:11434/v1
+  API key env var name [OLLAMA_API_KEY]:
+  Rate limit requests/min [10]:
+
+  Add models  (Ctrl+C to abort)
+
+  --- Model #1 ---
+  Model ID: llama3.1
+  Display name [llama3.1]:
+  Is free? [yes]:
+  Context window tokens [128000]:
+    Added: llama3.1
+  Add another model? (y/N):
+
+  Summary:
+    Provider:      ollama
+    Base URL:      http://localhost:11434/v1
+    API key env:   OLLAMA_API_KEY
+    Rate limit:    10 rpm
+    Default model: llama3.1
+    Model:         llama3.1 (free)  [128,000 ctx]
+
+  Save this provider? (Y/n): y
+  Provider 'ollama' saved to ~/.cra/providers.json
+```
+
+**Features:**
+- Paste support for all fields (URLs, model IDs, etc.)
+- Immediate validation (URLs must start with `http://` or `https://`)
+- Ctrl+C to abort at any step (no changes saved)
+- Enter to accept sensible defaults for optional fields
+- Summary and confirmation before saving
+- Connection test runs automatically if the provider is currently active
+
+Custom providers are stored in `~/.cra/providers.json` and merged with the bundled provider registry.
 
 ---
 

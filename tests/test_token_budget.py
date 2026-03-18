@@ -81,11 +81,11 @@ class TestResolvePromptBudget:
     """Test the budget resolution hierarchy."""
 
     def test_explicit_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.setenv("MAX_PROMPT_TOKENS", "99999")
         monkeypatch.setenv("TOKEN_TIER", "free")
-        monkeypatch.setenv("LLM_MODEL", "gpt-4o")  # known model
+        monkeypatch.setenv("LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b")  # known model
 
         from code_review_agent.config import Settings
 
@@ -94,22 +94,22 @@ class TestResolvePromptBudget:
         assert budget == 99999
 
     def test_model_auto_detect_when_no_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.delenv("MAX_PROMPT_TOKENS", raising=False)
-        monkeypatch.setenv("LLM_MODEL", "gpt-4o")
+        monkeypatch.setenv("LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b")
         monkeypatch.setenv("TOKEN_TIER", "free")
 
         from code_review_agent.config import Settings
 
         settings = Settings()  # type: ignore[call-arg]
         budget = resolve_prompt_budget(settings)
-        # gpt-4o has 128000 context, budget = 128000 * 0.4 = 51200
-        assert budget == int(128000 * 0.4)
+        # nemotron-3-super has 1000000 context, budget = 1000000 * 0.4 = 400000
+        assert budget == int(1_000_000 * 0.4)
 
     def test_tier_fallback_for_unknown_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.delenv("MAX_PROMPT_TOKENS", raising=False)
         monkeypatch.setenv("LLM_MODEL", "unknown/custom-model-xyz")
         monkeypatch.setenv("TOKEN_TIER", "standard")
@@ -121,8 +121,8 @@ class TestResolvePromptBudget:
         assert budget == _TIER_BUDGETS[TokenTier.STANDARD]
 
     def test_free_tier_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.delenv("MAX_PROMPT_TOKENS", raising=False)
         monkeypatch.setenv("LLM_MODEL", "unknown/model")
         monkeypatch.setenv("TOKEN_TIER", "free")
@@ -296,8 +296,8 @@ class TestModelRegistry:
     def test_nemotron_is_registered(self) -> None:
         assert "nvidia/nemotron-3-super-120b-a12b" in _MODEL_CONTEXT_WINDOWS
 
-    def test_gpt4o_is_registered(self) -> None:
-        assert "gpt-4o" in _MODEL_CONTEXT_WINDOWS
+    def test_nemotron_nano_is_registered(self) -> None:
+        assert "nvidia/nemotron-3-nano-30b-a3b" in _MODEL_CONTEXT_WINDOWS
 
 
 # ---------------------------------------------------------------------------
@@ -339,12 +339,13 @@ class TestEstimateCost:
 
     def test_auto_detect_known_model(self) -> None:
         cost = estimate_cost(
-            model="gpt-4o",
+            model="nvidia/nemotron-3-super-120b-a12b",
             prompt_tokens=10_000,
             completion_tokens=5_000,
         )
         assert cost is not None
-        assert cost > 0
+        # Free model, pricing is 0
+        assert cost >= 0
 
     def test_unknown_model_returns_none(self) -> None:
         cost = estimate_cost(
@@ -357,7 +358,7 @@ class TestEstimateCost:
     def test_custom_overrides_auto_detect(self) -> None:
         # Custom pricing should be used even for known models
         cost = estimate_cost(
-            model="gpt-4o",
+            model="nvidia/nemotron-3-super-120b-a12b",
             prompt_tokens=1_000_000,
             completion_tokens=0,
             input_price_per_m=99.0,
@@ -367,7 +368,7 @@ class TestEstimateCost:
 
     def test_zero_tokens_zero_cost(self) -> None:
         cost = estimate_cost(
-            model="gpt-4o",
+            model="nvidia/nemotron-3-super-120b-a12b",
             prompt_tokens=0,
             completion_tokens=0,
         )
@@ -386,7 +387,7 @@ class TestEstimateCost:
     def test_partial_custom_pricing_ignored(self) -> None:
         """If only one price is provided, fall back to auto-detect."""
         cost = estimate_cost(
-            model="gpt-4o",
+            model="nvidia/nemotron-3-super-120b-a12b",
             prompt_tokens=10_000,
             completion_tokens=5_000,
             input_price_per_m=1.0,

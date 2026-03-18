@@ -1,20 +1,17 @@
 from __future__ import annotations
 
+import os
 from enum import StrEnum
 
 from pydantic import Field, SecretStr, computed_field, model_validator
 from pydantic_settings import BaseSettings
 
 from code_review_agent.dedup import DedupStrategy
+from code_review_agent.providers import get_base_url, get_default_model
 from code_review_agent.token_budget import TokenTier
 
-
-class KnownProvider(StrEnum):
-    """Supported LLM API providers."""
-
-    OPENROUTER = "openrouter"
-    NVIDIA = "nvidia"
-    OPENAI = "openai"
+# Built-in providers with dedicated API key env var fields.
+BUILTIN_PROVIDERS = frozenset({"nvidia", "openrouter"})
 
 
 class LogLevel(StrEnum):
@@ -26,18 +23,12 @@ class LogLevel(StrEnum):
     ERROR = "ERROR"
 
 
-_PROVIDER_BASE_URLS: dict[KnownProvider, str] = {
-    KnownProvider.OPENROUTER: "https://openrouter.ai/api/v1",
-    KnownProvider.NVIDIA: "https://integrate.api.nvidia.com/v1",
-    KnownProvider.OPENAI: "https://api.openai.com/v1",
-}
-
-
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables and .env file."""
 
-    llm_provider: KnownProvider = KnownProvider.OPENROUTER
-    llm_api_key: SecretStr
+    llm_provider: str = "nvidia"
+    nvidia_api_key: SecretStr | None = None
+    openrouter_api_key: SecretStr | None = None
     llm_model: str = "nvidia/nemotron-3-super-120b-a12b"
     llm_base_url: str | None = None
     llm_temperature: float = Field(default=0.1, ge=0.0, le=1.0)
@@ -87,6 +78,24 @@ class Settings(BaseSettings):
     # Options: session, hour, day, week, month, year, all
     usage_window: str = Field(default="hour")
 
+    # Connection test: send a minimal request on startup and config changes
+    test_connection_on_start: bool = True
+
+    @model_validator(mode="after")
+    def _validate_provider_in_registry(self) -> Settings:
+        """Validate that the provider exists in the registry."""
+        from code_review_agent.providers import PROVIDER_REGISTRY
+
+        if self.llm_provider not in PROVIDER_REGISTRY:
+            available = ", ".join(sorted(PROVIDER_REGISTRY.keys()))
+            msg = (
+                f"Unknown provider '{self.llm_provider}'. "
+                f"Available: {available}. "
+                f"Add custom providers with 'provider add' or edit ~/.cra/providers.json."
+            )
+            raise ValueError(msg)
+        return self
+
     @model_validator(mode="after")
     def _validate_custom_pricing(self) -> Settings:
         """Validate that custom pricing is either both set or both unset."""
@@ -101,17 +110,66 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return self
 
+    @model_validator(mode="after")
+    def _validate_api_key_for_provider(self) -> Settings:
+        """Validate that the active provider has an API key configured."""
+        key = self._resolve_api_key()
+        if key is None:
+            env_name = f"{self.llm_provider.upper()}_API_KEY"
+            msg = (
+                f"{env_name} is required when llm_provider is '{self.llm_provider}'. "
+                f"Set it in .env or as an environment variable."
+            )
+            raise ValueError(msg)
+        return self
+
+    def _resolve_api_key(self) -> SecretStr | None:
+        """Resolve the API key for the current provider.
+
+        Delegates to :meth:`resolve_api_key_for` with the active provider.
+        """
+        return self.resolve_api_key_for(self.llm_provider)
+
+    def resolve_api_key_for(self, provider: str) -> SecretStr | None:
+        """Resolve the API key for an arbitrary provider (not just the active one)."""
+        if provider == "nvidia":
+            return self.nvidia_api_key
+        if provider == "openrouter":
+            return self.openrouter_api_key
+        env_key = f"{provider.upper()}_API_KEY"
+        env_val = os.environ.get(env_key)
+        if env_val:
+            return SecretStr(env_val)
+        return None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def resolved_api_key(self) -> SecretStr:
+        """Return the API key for the currently active provider."""
+        key = self._resolve_api_key()
+        if key is None:
+            env_name = f"{self.llm_provider.upper()}_API_KEY"
+            msg = f"No API key configured for provider '{self.llm_provider}' ({env_name})"
+            raise ValueError(msg)
+        return key
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def resolved_llm_base_url(self) -> str:
         """Return the base URL for the configured LLM provider.
 
         If ``llm_base_url`` is set explicitly, use it (escape hatch for custom
-        providers). Otherwise map the known provider name to its URL.
+        providers). Otherwise look up the provider in the registry.
         """
         if self.llm_base_url is not None:
             return self.llm_base_url
-        return _PROVIDER_BASE_URLS[self.llm_provider]
+        return get_base_url(self.llm_provider)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def resolved_default_model(self) -> str:
+        """Return the default model for the currently active provider."""
+        return get_default_model(self.llm_provider)
 
     model_config = {
         "env_file": ".env",

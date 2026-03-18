@@ -280,19 +280,27 @@ class TestLoadSettings:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        monkeypatch.delenv("LLM_API_KEY", raising=False)
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         # Prevent pydantic-settings from reading .env file
         monkeypatch.chdir(tmp_path)
 
         from code_review_agent.main import _load_settings
 
-        with pytest.raises(SystemExit, match="LLM_API_KEY is required"):
+        with pytest.raises(SystemExit, match="An API key is required"):
             _load_settings()
 
-    def test_valid_settings_loads(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-key-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    def test_valid_settings_loads(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-key-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+        # Prevent pydantic-settings from reading .env file
+        monkeypatch.chdir(tmp_path)
 
         from code_review_agent.main import _load_settings
 
@@ -467,7 +475,7 @@ class TestVersionCommand:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "code-review-ai" in result.output
-        assert "0.1.0" in result.output
+        assert "0.1.1" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -479,64 +487,74 @@ class TestSettingsValidation:
     """Test Settings validation for edge cases."""
 
     def test_invalid_provider_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-key-00000000")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-key-00000000")  # pragma: allowlist secret
         monkeypatch.setenv("LLM_PROVIDER", "invalid_provider")
 
         with pytest.raises(ValidationError):
             Settings()  # type: ignore[call-arg]
 
     def test_temperature_too_high_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-key-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-key-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.setenv("LLM_TEMPERATURE", "1.5")
 
         with pytest.raises(ValidationError):
             Settings()  # type: ignore[call-arg]
 
     def test_temperature_negative_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-key-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-key-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.setenv("LLM_TEMPERATURE", "-0.1")
 
         with pytest.raises(ValidationError):
             Settings()  # type: ignore[call-arg]
 
     def test_timeout_zero_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-key-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-key-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.setenv("REQUEST_TIMEOUT_SECONDS", "0")
 
         with pytest.raises(ValidationError):
             Settings()  # type: ignore[call-arg]
 
     def test_custom_base_url_overrides_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-key-00000000")
+        monkeypatch.setenv(
+            "OPENROUTER_API_KEY",
+            "sk-test-key-00000000",  # pragma: allowlist secret
+        )
         monkeypatch.setenv("LLM_PROVIDER", "openrouter")
         monkeypatch.setenv("LLM_BASE_URL", "http://localhost:8000/v1")
 
         settings = Settings()  # type: ignore[call-arg]
         assert settings.resolved_llm_base_url == "http://localhost:8000/v1"
 
-    def test_provider_url_used_when_no_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-key-00000000")
+    def test_provider_url_used_when_no_override(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-key-00000000")  # pragma: allowlist secret
         monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.delenv("LLM_BASE_URL", raising=False)
+        # Prevent pydantic-settings from reading .env file
+        monkeypatch.chdir(tmp_path)
 
         settings = Settings()  # type: ignore[call-arg]
         assert "nvidia" in settings.resolved_llm_base_url
 
     def test_valid_temperature_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-key-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-key-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.setenv("LLM_TEMPERATURE", "0.5")
 
         settings = Settings()  # type: ignore[call-arg]
         assert settings.llm_temperature == 0.5
 
     def test_api_key_is_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-secret-key-12345")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-secret-key-12345")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
 
         settings = Settings()  # type: ignore[call-arg]
-        assert "sk-secret-key-12345" not in str(settings.llm_api_key)
-        assert settings.llm_api_key.get_secret_value() == "sk-secret-key-12345"
+        assert "sk-secret-key-12345" not in str(  # pragma: allowlist secret
+            settings.nvidia_api_key
+        )
+        key_value = settings.resolved_api_key.get_secret_value()
+        assert key_value == "sk-secret-key-12345"  # pragma: allowlist secret

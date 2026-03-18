@@ -130,8 +130,8 @@ class TestCreateRateLimiter:
     """Test factory function with settings."""
 
     def test_explicit_rpm_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.setenv("RATE_LIMIT_RPM", "42")
 
         from code_review_agent.config import Settings
@@ -142,8 +142,8 @@ class TestCreateRateLimiter:
         assert limiter._max_requests == 42
 
     def test_free_tier_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.setenv("TOKEN_TIER", "free")
         monkeypatch.delenv("RATE_LIMIT_RPM", raising=False)
 
@@ -155,8 +155,8 @@ class TestCreateRateLimiter:
         assert limiter._max_requests == _TIER_RPM[TokenTier.FREE]
 
     def test_premium_tier_unlimited(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.setenv("TOKEN_TIER", "premium")
         monkeypatch.delenv("RATE_LIMIT_RPM", raising=False)
 
@@ -167,8 +167,8 @@ class TestCreateRateLimiter:
         assert isinstance(limiter, NoOpRateLimiter)
 
     def test_explicit_zero_rpm_unlimited(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_API_KEY", "sk-test-00000000")
-        monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+        monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-00000000")  # pragma: allowlist secret
+        monkeypatch.setenv("LLM_PROVIDER", "nvidia")
         monkeypatch.setenv("RATE_LIMIT_RPM", "0")
 
         from code_review_agent.config import Settings

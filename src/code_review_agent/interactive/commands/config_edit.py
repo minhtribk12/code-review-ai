@@ -18,6 +18,7 @@ from pydantic import SecretStr
 
 from code_review_agent.agents import AGENT_REGISTRY
 from code_review_agent.config import Settings
+from code_review_agent.providers import get_provider
 from code_review_agent.theme import theme
 
 if TYPE_CHECKING:
@@ -26,14 +27,38 @@ if TYPE_CHECKING:
 
     from code_review_agent.interactive.session import SessionState
 
-# Fields to exclude from the editor (computed or internal).
-_EXCLUDED_FIELDS = frozenset({"resolved_llm_base_url"})
+# Fields to exclude from the editor (computed, internal, or replaced by virtual).
+_EXCLUDED_FIELDS = frozenset(
+    {
+        "resolved_llm_base_url",
+        "resolved_api_key",
+        "resolved_default_model",
+        "nvidia_api_key",
+        "openrouter_api_key",
+    }
+)
+
+# Virtual field: llm_api_key maps to {provider}_api_key in overrides.
+_VIRTUAL_API_KEY = "llm_api_key"  # pragma: allowlist secret
 
 
 # Fields that use multi-select (checkbox) instead of single-select (radio).
 def _get_multi_select_fields() -> dict[str, list[str]]:
     """Build multi-select options at runtime so custom agents are included."""
     return {"default_agents": [*AGENT_REGISTRY.keys(), "all"]}
+
+
+def _get_model_choices(session_or_overrides: dict[str, str], settings: Settings) -> list[str]:
+    """Return model IDs for the currently active provider from the registry."""
+    provider_key = session_or_overrides.get(
+        "llm_provider",
+        str(getattr(settings, "llm_provider", "nvidia")),
+    )
+    try:
+        provider_info = get_provider(provider_key)
+        return [m.id for m in provider_info.models]
+    except KeyError:
+        return []
 
 
 # Config keys grouped by category.
@@ -49,6 +74,7 @@ _CATEGORIES: list[tuple[str, list[str]]] = [
             "llm_max_tokens",
             "llm_api_key",
             "request_timeout_seconds",
+            "test_connection_on_start",
         ],
     ),
     (
@@ -160,6 +186,8 @@ def _is_bool_field(field_type: type | None) -> bool:
 
 
 def _is_secret_field(key: str) -> bool:
+    if key == _VIRTUAL_API_KEY:
+        return True
     resolved_hints = typing.get_type_hints(Settings)
     raw = resolved_hints.get(key)
     if raw is SecretStr:
@@ -259,6 +287,7 @@ class ConfigEditor:
         self.values: dict[str, str] = {}
         self.cursor: int = 0
         self.has_changes: bool = False
+        self.changed_keys: set[str] = set()
         self.error_message: str = ""
         self.status_message: str = ""
 
@@ -274,8 +303,19 @@ class ConfigEditor:
         # Multi-select state (checkboxes)
         self.multi_checked: list[bool] = []
 
+        self.original_values: dict[str, str] = {}
         self.mode: str = _EditMode.NAVIGATE
         self._build_rows()
+        # Snapshot original values after build so we can detect real changes
+        self.original_values = dict(self.values)
+
+    def _provider_api_key_field(self) -> str:
+        """Return the actual config key for the current provider's API key."""
+        provider = self.session.config_overrides.get(
+            "llm_provider",
+            str(getattr(self.session.settings, "llm_provider", "nvidia")),
+        )
+        return f"{provider}_api_key"  # pragma: allowlist secret
 
     def _build_rows(self) -> None:
         for cat_name, keys in _CATEGORIES:
@@ -284,6 +324,20 @@ class ConfigEditor:
                 if key in _EXCLUDED_FIELDS:
                     continue
                 self.rows.append((key, "field"))
+
+                # Virtual llm_api_key: read from {provider}_api_key
+                if key == _VIRTUAL_API_KEY:
+                    real_key = self._provider_api_key_field()
+                    if real_key in self.session.config_overrides:
+                        self.values[key] = self.session.config_overrides[real_key]
+                    else:
+                        raw = getattr(self.session.settings, real_key, None)
+                        if isinstance(raw, SecretStr):
+                            self.values[key] = raw.get_secret_value()
+                        else:
+                            self.values[key] = "None"
+                    continue
+
                 if key in self.session.config_overrides:
                     self.values[key] = self.session.config_overrides[key]
                 else:
@@ -308,10 +362,70 @@ class ConfigEditor:
         return None
 
     def _apply_value(self, key: str, value: str) -> None:
+        original = self.original_values.get(key, "")
         self.values[key] = value
-        self.session.config_overrides[key] = value
-        self.has_changes = True
         self.error_message = ""
+
+        # Virtual llm_api_key: save directly to DB and env, not config_overrides
+        if key == _VIRTUAL_API_KEY:
+            if value != original and value and value != "None":
+                import os
+
+                real_key = self._provider_api_key_field()
+                os.environ[real_key.upper()] = value
+                try:
+                    from code_review_agent.storage import ReviewStorage
+
+                    storage = ReviewStorage(self.session.effective_settings.history_db_path)
+                    storage.save_config(real_key, value)
+                except Exception:  # noqa: S110
+                    pass
+            self.changed_keys.add(key) if value != original else self.changed_keys.discard(key)
+            self.has_changes = bool(self.changed_keys)
+            self.session.invalidate_settings_cache()
+            return
+
+        if value == original:
+            self.session.config_overrides.pop(key, None)
+            self.changed_keys.discard(key)
+            self.has_changes = bool(self.changed_keys)
+            return
+
+        self.session.config_overrides[key] = value
+        self.changed_keys.add(key)
+        self.has_changes = True
+
+    def _apply_provider_cascade(self, provider_value: str) -> None:
+        """When provider changes, auto-update base_url, model, and api_key display."""
+        try:
+            provider_info = get_provider(provider_value)
+        except KeyError:
+            return
+
+        # Set base_url to the provider's URL from registry
+        self._apply_value("llm_base_url", provider_info.base_url)
+
+        # Update model to the new provider's default free model
+        self._apply_value("llm_model", provider_info.default_model)
+
+        # Refresh the virtual llm_api_key to show the new provider's key
+        new_key_field = f"{provider_value}_api_key"  # pragma: allowlist secret
+        if new_key_field in self.session.config_overrides:
+            self.values[_VIRTUAL_API_KEY] = self.session.config_overrides[new_key_field]
+        else:
+            raw = getattr(self.session.settings, new_key_field, None)
+            if isinstance(raw, SecretStr):
+                self.values[_VIRTUAL_API_KEY] = raw.get_secret_value()
+            else:
+                self.values[_VIRTUAL_API_KEY] = "None"  # pragma: allowlist secret
+        # Update original so the * indicator is correct for the new provider
+        self.original_values[_VIRTUAL_API_KEY] = self.values[_VIRTUAL_API_KEY]
+
+        self.status_message = (
+            f"Provider -> {provider_value}, "
+            f"model -> {provider_info.default_model}, "
+            f"base_url -> {provider_info.base_url}"
+        )
 
     # --- Navigation ---
 
@@ -362,6 +476,23 @@ class ConfigEditor:
             self._open_multi_select(key)
             return
 
+        # Provider field: open selector with all registered providers
+        if key == "llm_provider":
+            from code_review_agent.providers import PROVIDER_REGISTRY
+
+            provider_choices = sorted(PROVIDER_REGISTRY.keys())
+            self._open_selector(key, provider_choices)
+            return
+
+        # Model field: open selector with provider's models
+        if key == "llm_model":
+            model_choices = _get_model_choices(
+                self.session.config_overrides, self.session.settings
+            )
+            if model_choices:
+                self._open_selector(key, model_choices)
+                return
+
         # Enum: open single-select sub-screen
         choices = _get_enum_choices(field_type) if field_type else None
         if choices:
@@ -409,8 +540,13 @@ class ConfigEditor:
         """Confirm selection in single-select mode."""
         if self.mode == _EditMode.SELECT:
             chosen = self.selector_choices[self.selector_cursor]
+            old_value = self.values.get(self.selector_key, "")
             self._apply_value(self.selector_key, chosen)
             self.mode = _EditMode.NAVIGATE
+
+            # Cascade: provider change -> update base_url + model
+            if self.selector_key == "llm_provider" and chosen != old_value:
+                self._apply_provider_cascade(chosen)
 
     def multi_toggle(self) -> None:
         """Toggle checkbox in multi-select mode."""
@@ -562,8 +698,15 @@ class ConfigEditor:
             # Value column
             if is_selected and self.mode == _EditMode.TEXT:
                 lines.append(("", " "))
-                lines.append(("bg:ansiwhite fg:ansiblack", self.edit_buffer))
-                lines.append(("blink", "|"))
+                pos = self.edit_cursor_pos
+                before = self.edit_buffer[:pos]
+                after = self.edit_buffer[pos:]
+                lines.append(("bg:ansiwhite fg:ansiblack", before))
+                # Blinking cursor character at the current position
+                cursor_char = after[0] if after else " "
+                lines.append(("bg:ansicyan fg:ansiblack blink", cursor_char))
+                if len(after) > 1:
+                    lines.append(("bg:ansiwhite fg:ansiblack", after[1:]))
             elif _is_bool_field(field_type):
                 val = self.values.get(key, "false")
                 is_true = val.lower() in ("true", "1", "yes")
@@ -587,7 +730,7 @@ class ConfigEditor:
                 elif not display or display == "None":
                     display = "not set"
 
-                is_override = key in self.session.config_overrides
+                is_changed = key in self.changed_keys
                 is_placeholder = display in ("not set", "tier defaults")
                 if not display or is_placeholder:
                     val_style = "dim" if not is_selected else "bold dim"
@@ -596,7 +739,7 @@ class ConfigEditor:
                 else:
                     val_style = ""
                 lines.append((val_style, f" {display}"))
-                if is_override:
+                if is_changed:
                     lines.append((theme.warning, " *"))
 
             lines.append(("", "\n"))
@@ -642,6 +785,31 @@ class ConfigEditor:
             lines.append(("dim", "  Up/Down to navigate, Enter to select, Esc to cancel\n"))
         lines.append(("", "\n"))
 
+        # For model selector, show model name annotations from registry
+        model_names: dict[str, str] = {}
+        if self.selector_key == "llm_model":
+            provider_key = self.session.config_overrides.get(
+                "llm_provider",
+                str(getattr(self.session.settings, "llm_provider", "nvidia")),
+            )
+            try:
+                provider_info = get_provider(provider_key)
+                for m in provider_info.models:
+                    label_parts = [m.name]
+                    if m.is_free:
+                        label_parts.append("free")
+                    label_parts.append(f"{m.context_window // 1000}k ctx")
+                    model_names[m.id] = " | ".join(label_parts)
+            except KeyError:
+                pass
+
+        # Load health status for "(not working)" labels
+        from code_review_agent.interactive.repl import get_health_status
+
+        health = get_health_status(self.session)
+        broken_models = health.get("model", set())
+        broken_providers = health.get("provider", set())
+
         for i, choice in enumerate(self.selector_choices):
             is_cursor = i == self.selector_cursor
 
@@ -668,17 +836,27 @@ class ConfigEditor:
             # Choice label
             style = "bold" if is_cursor else ""
 
+            # Determine if this choice is marked as broken
+            is_model_broken = self.selector_key == "llm_model" and choice in broken_models
+            is_prov_broken = self.selector_key == "llm_provider" and choice in broken_providers
+            is_broken = is_model_broken or is_prov_broken
+
             # Special formatting for "all"
             if choice == "all":
                 lines.append((style, "all (select/deselect all)"))
+            elif choice in model_names:
+                lines.append((style, f"{choice}  "))
+                lines.append(("dim", f"({model_names[choice]})"))
             else:
                 lines.append((style, choice))
 
-            # Mark current value for single-select
-            if not is_multi:
+            # Show health and current status (broken replaces current)
+            if is_broken:
+                lines.append(("red bold", " (not working)"))
+            elif not is_multi:
                 current_val = self.values.get(self.selector_key, "")
                 if choice == current_val:
-                    lines.append(("green", "  (current)"))
+                    lines.append(("green", " (current)"))
 
             lines.append(("", "\n"))
 
@@ -841,13 +1019,17 @@ def cmd_config_edit(args: list[str], session: SessionState) -> None:
 
     @kb.add("<any>")
     def on_char(event: KeyPressEvent) -> None:
-        if editor.mode == _EditMode.TEXT and len(event.data) == 1 and event.data.isprintable():
+        if editor.mode != _EditMode.TEXT:
+            return
+        # Accept single keystrokes and multi-character paste data
+        printable = "".join(c for c in event.data if c.isprintable())
+        if printable:
             editor.edit_buffer = (
                 editor.edit_buffer[: editor.edit_cursor_pos]
-                + event.data
+                + printable
                 + editor.edit_buffer[editor.edit_cursor_pos :]
             )
-            editor.edit_cursor_pos += 1
+            editor.edit_cursor_pos += len(printable)
 
     control = FormattedTextControl(editor.render)
     window = Window(content=control, wrap_lines=True)
@@ -864,13 +1046,55 @@ def cmd_config_edit(args: list[str], session: SessionState) -> None:
     from rich.console import Console
 
     con = Console()
-    if editor.has_changes:
-        session.invalidate_settings_cache()
-        con.print(
-            f"  [green]{len(session.config_overrides)} session override(s) applied.[/green] "
-            "Use [bold]config diff[/bold] to review, [bold]config reset[/bold] to discard."
-        )
-        _show_cost_warning(con, session)
+    if not editor.changed_keys:
+        return
+
+    session.invalidate_settings_cache()
+    con.print(
+        f"  [green]{len(editor.changed_keys)} setting(s) changed:[/green] "
+        + ", ".join(sorted(editor.changed_keys))
+    )
+
+    # Auto-save changed keys to DB; delete reverted keys from DB
+    from code_review_agent.interactive.commands.config_cmd import save_config_to_db
+    from code_review_agent.storage import ReviewStorage
+
+    saved = save_config_to_db(session)
+
+    # Remove keys that were reverted to original from the DB
+    try:
+        settings = session.effective_settings
+        storage = ReviewStorage(settings.history_db_path)
+        for key in list(editor.original_values.keys()):
+            if key not in editor.changed_keys and key not in session.config_overrides:
+                storage.delete_config(key)
+    except Exception:  # noqa: S110
+        pass
+
+    if saved:
+        con.print(f"  [dim]{saved} setting(s) saved to database (persisted).[/dim]")
+
+    _show_cost_warning(con, session)
+
+    # Run connection test only if LLM-related config was changed in this session
+    _LLM_KEYS = {
+        "llm_provider",
+        "llm_model",
+        "llm_base_url",
+        "nvidia_api_key",
+        "openrouter_api_key",
+    }
+    llm_changed = editor.changed_keys & _LLM_KEYS
+    if llm_changed and session.effective_settings.test_connection_on_start:
+        from code_review_agent.interactive.repl import run_connection_test
+
+        # Pass original values so we can revert on failure
+        prev = {
+            k: editor.original_values.get(k, "") for k in _LLM_KEYS if k in editor.original_values
+        }
+        run_connection_test(session, previous_llm_config=prev)
+    elif not llm_changed:
+        con.print("  [dim]No LLM changes, skipping connection test.[/dim]")
 
 
 def _show_cost_warning(con: object, session: SessionState) -> None:

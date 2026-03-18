@@ -40,25 +40,23 @@ def default_agents_for_tier(tier: TokenTier) -> list[str]:
 
 # Known model context windows (tokens).
 # Used for auto-detection when max_prompt_tokens is not set explicitly.
+# Also populated dynamically from provider_registry.json at module load.
 _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
-    # NVIDIA
-    "nvidia/nemotron-3-super-120b-a12b": 128_000,
-    "nvidia/llama-3.1-nemotron-70b-instruct": 128_000,
-    # Meta Llama
-    "meta-llama/llama-3-8b-instruct": 8_192,
-    "meta-llama/llama-3-70b-instruct": 8_192,
-    "meta-llama/llama-3.1-8b-instruct": 128_000,
-    "meta-llama/llama-3.1-70b-instruct": 128_000,
-    # OpenAI
-    "gpt-4o": 128_000,
-    "gpt-4o-mini": 128_000,
-    "gpt-4-turbo": 128_000,
-    "gpt-3.5-turbo": 16_385,
-    # Mistral
-    "mistralai/mistral-7b-instruct": 32_768,
-    "mistralai/mixtral-8x7b-instruct": 32_768,
-    # Google
-    "google/gemma-2-9b-it": 8_192,
+    # NVIDIA (via NIM API)
+    "nvidia/nemotron-3-super-120b-a12b": 1_000_000,
+    "nvidia/nemotron-3-nano-30b-a3b": 1_000_000,
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5": 131_072,
+    "nvidia/nemotron-mini-4b-instruct": 4_096,
+    "nvidia/llama-3.1-nemotron-70b-instruct": 131_072,
+    # OpenRouter free models
+    "openrouter/auto": 200_000,
+    "nvidia/nemotron-3-super-120b-a12b:free": 262_000,
+    "qwen/qwen3-coder:free": 262_000,
+    "meta-llama/llama-3.3-70b-instruct:free": 131_072,
+    "mistralai/mistral-small-3.1-24b-instruct:free": 131_072,
+    "google/gemma-3-27b-it:free": 131_072,
+    "google/gemma-3-12b-it:free": 32_768,
+    "deepseek/deepseek-v3.2-20251201:free": 131_072,
 }
 
 # Use 40% of context window for the user prompt (diff content).
@@ -68,25 +66,23 @@ _CONTEXT_BUDGET_RATIO = 0.4
 
 # Known model pricing: (input_price_per_M_tokens, output_price_per_M_tokens).
 # Used for auto-detection when user does not provide custom pricing.
+# Free models on NVIDIA NIM and OpenRouter (:free suffix) are priced at 0.
 _MODEL_PRICING: dict[str, tuple[float, float]] = {
-    # NVIDIA (OpenRouter pricing)
-    "nvidia/nemotron-3-super-120b-a12b": (0.30, 0.60),
-    "nvidia/llama-3.1-nemotron-70b-instruct": (0.20, 0.40),
-    # Meta Llama (OpenRouter pricing)
-    "meta-llama/llama-3-8b-instruct": (0.06, 0.06),
-    "meta-llama/llama-3-70b-instruct": (0.52, 0.75),
-    "meta-llama/llama-3.1-8b-instruct": (0.05, 0.08),
-    "meta-llama/llama-3.1-70b-instruct": (0.35, 0.40),
-    # OpenAI
-    "gpt-4o": (2.50, 10.00),
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4-turbo": (10.00, 30.00),
-    "gpt-3.5-turbo": (0.50, 1.50),
-    # Mistral
-    "mistralai/mistral-7b-instruct": (0.06, 0.06),
-    "mistralai/mixtral-8x7b-instruct": (0.24, 0.24),
-    # Google
-    "google/gemma-2-9b-it": (0.08, 0.08),
+    # NVIDIA NIM (free tier)
+    "nvidia/nemotron-3-super-120b-a12b": (0.0, 0.0),
+    "nvidia/nemotron-3-nano-30b-a3b": (0.0, 0.0),
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5": (0.0, 0.0),
+    "nvidia/nemotron-mini-4b-instruct": (0.0, 0.0),
+    "nvidia/llama-3.1-nemotron-70b-instruct": (0.0, 0.0),
+    # OpenRouter free models
+    "openrouter/auto": (0.0, 0.0),
+    "nvidia/nemotron-3-super-120b-a12b:free": (0.0, 0.0),
+    "qwen/qwen3-coder:free": (0.0, 0.0),
+    "meta-llama/llama-3.3-70b-instruct:free": (0.0, 0.0),
+    "mistralai/mistral-small-3.1-24b-instruct:free": (0.0, 0.0),
+    "google/gemma-3-27b-it:free": (0.0, 0.0),
+    "google/gemma-3-12b-it:free": (0.0, 0.0),
+    "deepseek/deepseek-v3.2-20251201:free": (0.0, 0.0),
 }
 
 
