@@ -1,0 +1,122 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "code-review-ai"
+version = "0.1.0"
+description = "Multi-agent code review CLI powered by LLMs. Runs specialized agents in parallel to review GitHub PRs or local diffs."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Tri Nguyen", email = "minhtribk12@gmail.com" },
+]
+keywords = [
+    "code-review",
+    "llm",
+    "multi-agent",
+    "cli",
+    "github",
+    "security",
+    "performance",
+    "static-analysis",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.0",
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "httpx",
+    "openai",
+    "pygithub",
+    "structlog",
+    "tenacity>=9.1.4",
+    "prompt-toolkit>=3.0",
+    "textual>=0.50",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+code-review-ai = "code_review_agent.main:app"
+cra = "code_review_agent.main:app"
+
+[project.urls]
+Homepage = "https://github.com/minhtribk12/code-review-ai"
+Repository = "https://github.com/minhtribk12/code-review-ai"
+Documentation = "https://github.com/minhtribk12/code-review-ai/tree/main/docs"
+Issues = "https://github.com/minhtribk12/code-review-ai/issues"
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "mypy",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "pytest-asyncio",
+    "respx",
+    "detect-secrets",
+    "fastapi>=0.135.1",
+    "uvicorn>=0.41.0",
+    "types-pyyaml>=6.0.12.20250915",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/code_review_agent"]
+
+[tool.ruff]
+line-length = 99
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "UP",
+    "B",
+    "SIM",
+    "TCH",
+    "RUF",
+    "ANN",
+    "S",
+    "PT",
+]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S106", "RUF012"]
+"src/code_review_agent/main.py" = ["B008"]
+"src/code_review_agent/models.py" = ["TC003"]
+
+[tool.mypy]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["textual.*", "yaml.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "code_review_agent.interactive.tui_app",
+    "code_review_agent.interactive.tabs.*",
+]
+disallow_subclassing_any = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=code_review_agent --cov-report=term-missing"
