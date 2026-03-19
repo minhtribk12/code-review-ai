@@ -1,8 +1,6 @@
-# Interactive REPL Guide
+# Interactive TUI Guide
 
-The interactive mode provides a full-featured REPL with git operations, PR
-management, code review, findings triage, configuration editing, review
-history, and continuous file monitoring -- all without leaving the terminal.
+The interactive TUI (Terminal User Interface) is the recommended way to use Code Review AI. It provides a full-featured terminal interface with git operations, PR management, code review, findings triage, API key management, provider/model browsing, agent management, configuration editing, review history, and continuous file monitoring -- all without leaving the terminal.
 
 ## Launch
 
@@ -11,7 +9,7 @@ cra interactive
 ```
 
 ```
-  Code Review AI v0.1.6
+  Code Review AI v0.1.8
   Multi-agent code review powered by LLM.
   Analyzes security, performance, style, and test coverage.
 
@@ -83,7 +81,7 @@ Once at least one provider is configured, the panel shows:
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+A` | Open agent selector (multi-select, saved to database) |
+| `Ctrl+A` | Open agent selector (multi-select, saved to config.yaml) |
 | `Ctrl+P` | Open provider selector (auto-updates model and base URL) |
 | `Ctrl+O` | Open repo selector (interactive picker) |
 | `Ctrl+L` | Open git graph navigator |
@@ -554,6 +552,34 @@ You can also press `Ctrl+A` to quickly change agents or `Ctrl+P` to
 change the LLM provider -- it cascades model and base_url changes, and selections
 are saved to `~/.cra/config.yaml` automatically.
 
+### `config keys`
+
+Opens a full-screen API key manager for viewing, editing, syncing, and deleting API keys across `secrets.env` and `.env`.
+
+```
+ API Key Manager  (Arrows navigate, Enter edit, s sync, d delete, q quit)
+
+   Provider            >secrets.env             .env Key
+   ────────────────────────────────────────────────────────────────
+ > nvidia              [nvap****HsL2          ] nvap****HsL2
+   openrouter           sk-o****3c77            sk-o****3c77
+   ollama               --                      --
+
+  3 providers
+```
+
+**Navigation:**
+- Up/Down to select a provider row
+- Left/Right to select a column (`secrets.env` or `.env`) -- the selected column header shows `>` and the active cell is highlighted with `[brackets]`
+
+**Actions:**
+- **Enter** -- edit the key in the selected cell. Opens an inline editor with masked display and paste support. Enter to save, Esc to cancel.
+- **s** -- sync the key between columns. Opens a popup to choose direction (secrets.env -> .env or .env -> secrets.env).
+- **d** -- delete the key from the selected column (with confirmation).
+- **q / Esc** -- exit the key manager.
+
+Values update immediately after edit, sync, or delete.
+
 ### `config reset`
 
 Discards all session overrides and clears persisted config from `~/.cra/config.yaml`. Reloads settings from `.env`. **API keys and health marks are preserved.**
@@ -806,18 +832,43 @@ cra> exit                            # exit (or Ctrl+D)
 
 ### `agents`
 
-Lists all registered agents with type, priority, and description:
+Opens the full-screen agent browser for viewing, creating, editing, and deleting review agents.
 
 ```
 cra> agents
+```
 
- Available Agents
-  Name            Type        Pri  Description
-  security        [built-in]    0  Specialized security reviewer
-  performance     [built-in]    1  Specialized performance reviewer
-  style           [built-in]    2  Specialized style reviewer
-  test_coverage   [built-in]    3  Specialized test_coverage reviewer
-  django_security [custom]     10  Django-specific security review
+#### Agent Browser Layout
+
+```
+ Agent Browser  (Up/Down navigate, Enter expand, a add, i edit, d delete, q quit)
+
+ > v security  [built-in]  pri:0  Specialized security reviewer
+       System prompt: You are a senior security engineer...
+       File patterns: *
+   > performance  [built-in]  pri:1  Specialized performance reviewer
+   > style  [built-in]  pri:2  Specialized style reviewer
+   > test_coverage  [built-in]  pri:3  Specialized test_coverage reviewer
+   > django_security  [custom]  pri:10  Django-specific security review
+
+  5 agents
+```
+
+#### Key Bindings
+
+| Key | Action |
+|-----|--------|
+| Up/Down, j/k | Navigate agents |
+| Enter | Expand/collapse agent to show details |
+| `a` | Create a new custom agent (YAML) |
+| `i` | Edit agent fields (name, description, prompt, priority, file patterns) |
+| `d` | Delete a custom agent (with confirmation) |
+| `q` / Esc | Exit browser |
+
+#### Agent Commands
+
+```
+cra> agents list                    # table view of all agents
 ```
 
 ---
