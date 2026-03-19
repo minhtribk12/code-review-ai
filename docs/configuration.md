@@ -179,6 +179,29 @@ Preserves:
 
 This is useful when the database has accumulated stale data or you want a clean start without re-entering API keys.
 
+### `config clean`
+
+Removes all tool-generated files from `~/.cra/` and related paths. Launches a full-screen confirmation panel that lists every managed file with its size before deleting anything.
+
+**Removed:**
+- `~/.cra/config.yaml` -- persisted config overrides
+- `~/.cra/secrets.env` -- stored API keys
+- `~/.cra/providers.yaml` -- user-defined provider overrides
+- `~/.cra/reviews.db` (+ WAL/SHM files) -- review history database
+- `~/.cra/agents/` -- custom agent definitions
+- `~/.cra_history` -- interactive shell command history
+- `~/.cra/providers.json` -- legacy provider registry (if present)
+- `~/.cra/` directory itself, if empty after cleanup
+
+**Preserved:**
+- Project `.env` file -- user-managed, never deleted. A warning is shown if it exists.
+
+**Controls:**
+- Press `y` to confirm deletion
+- Press `q` or Escape to cancel
+
+This is a destructive operation that cannot be undone. All API keys, config overrides, review history, and custom agents are permanently deleted.
+
 ## Example `.env`
 
 ```env

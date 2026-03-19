@@ -511,6 +511,7 @@ cra> config set token_tier premium   # change tier mid-session
 cra> config diff                     # show session overrides vs .env
 cra> config reset                    # reload from .env (preserves API keys)
 cra> config factory-reset            # full reset (clears history, keeps keys)
+cra> config clean                    # remove all tool-generated files from ~/.cra/
 cra> config validate                 # check config for errors
 cra> config save                     # persist session overrides to config.yaml
 ```
@@ -576,6 +577,23 @@ cra> config factory-reset
 
   Type 'reset' to confirm:
 ```
+
+### `config clean`
+
+Removes all tool-generated files from `~/.cra/` and related paths. Opens a full-screen confirmation panel showing every managed file with its size.
+
+**Removed:**
+- `~/.cra/config.yaml`, `~/.cra/secrets.env`, `~/.cra/providers.yaml`
+- `~/.cra/reviews.db` (+ WAL/SHM files)
+- `~/.cra/agents/` directory
+- `~/.cra_history`
+- `~/.cra/providers.json` (legacy)
+- `~/.cra/` directory itself if empty after cleanup
+
+**Preserved:**
+- Project `.env` file (user-managed). A warning is displayed if it exists.
+
+Press `y` to confirm, `q` or Escape to cancel. This is a destructive operation that cannot be undone -- all API keys, config, history, and custom agents are permanently deleted.
 
 ---
 
