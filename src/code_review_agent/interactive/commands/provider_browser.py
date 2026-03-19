@@ -27,6 +27,7 @@ _Lines = list[tuple[str, str]]
 class _Mode(StrEnum):
     NAVIGATE = "navigate"
     CONFIRM_DELETE = "confirm_delete"
+    FIELD_SELECT = "field_select"
     EDIT_FIELD = "edit_field"
     ADD_INPUT = "add_input"
 
@@ -76,6 +77,10 @@ class ProviderBrowser:
         self.edit_field_name: str = ""
         self.edit_buffer: str = ""
         self.edit_cursor_pos: int = 0
+
+        # Field selector state
+        self.field_choices: list[tuple[str, str]] = []  # (field_key, current_value)
+        self.field_cursor: int = 0
 
         # Add wizard state
         self.add_kind: str = ""  # "provider" or "model"
@@ -175,25 +180,40 @@ class ProviderBrowser:
     # -- Edit ------------------------------------------------------------------
 
     def start_edit(self) -> None:
-        """Start inline edit. Works for both built-in and custom providers."""
+        """Open field selector for the current row."""
         if not self.rows:
             return
         row = self.rows[self.cursor]
+        info = get_provider(row.provider_key)
 
         if row.kind == _RowKind.PROVIDER:
-            info = get_provider(row.provider_key)
-            self.edit_field_name = "base_url"
-            self.edit_buffer = info.base_url
+            self.field_choices = [
+                ("base_url", info.base_url),
+                ("default_model", info.default_model),
+                ("rate_limit_rpm", str(info.rate_limit_rpm)),
+            ]
         elif row.kind == _RowKind.MODEL:
-            info = get_provider(row.provider_key)
             for m in info.models:
                 if m.id == row.model_id:
-                    self.edit_field_name = "name"
-                    self.edit_buffer = m.name
+                    self.field_choices = [
+                        ("name", m.name),
+                        ("is_free", str(m.is_free).lower()),
+                        ("context_window", str(m.context_window)),
+                    ]
                     break
             else:
                 return
 
+        self.field_cursor = 0
+        self.mode = _Mode.FIELD_SELECT
+
+    def select_field(self) -> None:
+        """Confirm field selection and open text editor."""
+        if not self.field_choices:
+            return
+        field_key, current_value = self.field_choices[self.field_cursor]
+        self.edit_field_name = field_key
+        self.edit_buffer = current_value
         self.edit_cursor_pos = len(self.edit_buffer)
         self.mode = _Mode.EDIT_FIELD
 
@@ -217,15 +237,37 @@ class ProviderBrowser:
             }
         return user_providers
 
+    def _coerce_field_value(self, field: str, raw: str) -> tuple[object, str]:
+        """Coerce a raw string to the correct type. Returns (value, error)."""
+        if field in ("rate_limit_rpm", "context_window"):
+            try:
+                return int(raw), ""
+            except ValueError:
+                return None, "Must be a number"
+        if field == "is_free":
+            if raw.lower() in ("true", "yes", "y", "1"):
+                return True, ""
+            if raw.lower() in ("false", "no", "n", "0"):
+                return False, ""
+            return None, "Must be true/false or yes/no"
+        if field == "base_url" and not raw.startswith(("http://", "https://")):
+            return None, "Must start with http:// or https://"
+        return raw, ""
+
     def confirm_edit(self) -> None:
         """Save the inline edit to user registry."""
         if not self.rows:
             self.mode = _Mode.NAVIGATE
             return
         row = self.rows[self.cursor]
-        new_value = self.edit_buffer.strip()
-        if not new_value:
+        raw_value = self.edit_buffer.strip()
+        if not raw_value:
             self.status_message = "Value cannot be empty"
+            return
+
+        coerced, err = self._coerce_field_value(self.edit_field_name, raw_value)
+        if err:
+            self.status_message = err
             return
 
         from code_review_agent.interactive.commands.provider_cmd import (
@@ -236,7 +278,7 @@ class ProviderBrowser:
         prov = user_providers[row.provider_key]
 
         if row.kind == _RowKind.PROVIDER:
-            prov[self.edit_field_name] = new_value
+            prov[self.edit_field_name] = coerced
         elif row.kind == _RowKind.MODEL:
             # Ensure models list exists in user override
             if "models" not in prov:
@@ -245,7 +287,7 @@ class ProviderBrowser:
             found = False
             for m in prov["models"]:
                 if m.get("id") == row.model_id:
-                    m[self.edit_field_name] = new_value
+                    m[self.edit_field_name] = coerced
                     found = True
                     break
             if not found:
@@ -253,19 +295,19 @@ class ProviderBrowser:
                 info = get_provider(row.provider_key)
                 for m in info.models:
                     if m.id == row.model_id:
-                        prov["models"].append(
-                            {
-                                "id": m.id,
-                                "name": new_value if self.edit_field_name == "name" else m.name,
-                                "is_free": m.is_free,
-                                "context_window": m.context_window,
-                            }
-                        )
+                        override = {
+                            "id": m.id,
+                            "name": m.name,
+                            "is_free": m.is_free,
+                            "context_window": m.context_window,
+                        }
+                        override[self.edit_field_name] = coerced
+                        prov["models"].append(override)
                         break
 
         _save_user_registry(user_providers)
         reload_registry()
-        self.status_message = f"Updated {self.edit_field_name} -> {new_value}"
+        self.status_message = f"Updated {self.edit_field_name} -> {raw_value}"
 
         self.mode = _Mode.NAVIGATE
         self.edit_field_name = ""
@@ -514,6 +556,8 @@ class ProviderBrowser:
 
         if self.mode == _Mode.CONFIRM_DELETE:
             return self._render_confirm(lines)
+        if self.mode == _Mode.FIELD_SELECT:
+            return self._render_field_select(lines)
         if self.mode == _Mode.EDIT_FIELD:
             return self._render_edit(lines)
         if self.mode == _Mode.ADD_INPUT:
@@ -586,6 +630,36 @@ class ProviderBrowser:
                 free_tag = " free" if m.is_free else ""
                 lines.append(("dim", f"  ({m.name}{free_tag}, {m.context_window:,} ctx)"))
                 break
+
+    def _render_field_select(self, lines: _Lines) -> FormattedText:
+        """Render the field selector for editing."""
+        row = self.rows[self.cursor] if self.rows else None
+        if row is None:
+            return FormattedText(lines)
+
+        label = row.provider_key if row.kind == _RowKind.PROVIDER else row.model_id
+        lines.append(("bold", f"\n  Edit: {label}\n"))
+        lines.append(("dim", "  Select a field to edit:\n\n"))
+
+        for i, (field_key, current_val) in enumerate(self.field_choices):
+            is_sel = i == self.field_cursor
+            prefix = " > " if is_sel else "   "
+            style = "bold cyan" if is_sel else ""
+            lines.append((style, prefix))
+            lines.append((style, f"{field_key:<20}"))
+            lines.append(("dim", f" {current_val}"))
+            lines.append(("", "\n"))
+
+        lines.append(("", "\n"))
+        lines.append(("", "  "))
+        lines.append(("cyan", "Up/Down"))
+        lines.append(("", " navigate, "))
+        lines.append(("cyan", "Enter"))
+        lines.append(("", " edit, "))
+        lines.append(("cyan", "Esc"))
+        lines.append(("", " cancel\n"))
+
+        return FormattedText(lines)
 
     def _render_confirm(self, lines: _Lines) -> FormattedText:
         target = self.confirm_target
@@ -691,17 +765,23 @@ def run_provider_browser(session: SessionState) -> None:
     def on_up(_event: KeyPressEvent) -> None:
         if browser.mode == _Mode.NAVIGATE:
             browser.move_up()
+        elif browser.mode == _Mode.FIELD_SELECT:
+            browser.field_cursor = max(0, browser.field_cursor - 1)
 
     @kb.add("down")
     @kb.add("j")
     def on_down(_event: KeyPressEvent) -> None:
         if browser.mode == _Mode.NAVIGATE:
             browser.move_down()
+        elif browser.mode == _Mode.FIELD_SELECT:
+            browser.field_cursor = min(len(browser.field_choices) - 1, browser.field_cursor + 1)
 
     @kb.add("enter")
     def on_enter(_event: KeyPressEvent) -> None:
         if browser.mode == _Mode.NAVIGATE:
             browser.toggle_expand()
+        elif browser.mode == _Mode.FIELD_SELECT:
+            browser.select_field()
         elif browser.mode == _Mode.EDIT_FIELD:
             browser.confirm_edit()
         elif browser.mode == _Mode.ADD_INPUT:
@@ -758,7 +838,12 @@ def run_provider_browser(session: SessionState) -> None:
 
     @kb.add("escape")
     def on_escape(event: KeyPressEvent) -> None:
-        if browser.mode in (_Mode.CONFIRM_DELETE, _Mode.EDIT_FIELD, _Mode.ADD_INPUT):
+        if browser.mode in (
+            _Mode.CONFIRM_DELETE,
+            _Mode.FIELD_SELECT,
+            _Mode.EDIT_FIELD,
+            _Mode.ADD_INPUT,
+        ):
             browser.cancel_action()
         else:
             event.app.exit()
@@ -767,7 +852,7 @@ def run_provider_browser(session: SessionState) -> None:
     def on_quit(event: KeyPressEvent) -> None:
         if browser.mode in (_Mode.EDIT_FIELD, _Mode.ADD_INPUT):
             _insert_char(browser, "q")
-        elif browser.mode == _Mode.CONFIRM_DELETE:
+        elif browser.mode in (_Mode.CONFIRM_DELETE, _Mode.FIELD_SELECT):
             browser.cancel_action()
         else:
             event.app.exit()
