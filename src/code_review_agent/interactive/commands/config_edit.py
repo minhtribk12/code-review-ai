@@ -251,17 +251,10 @@ class ConfigEditor:
                     continue
                 self.rows.append((key, "field"))
 
-                # Virtual llm_api_key: read from {provider}_api_key
+                # Virtual llm_api_key: resolve from all sources
                 if key == _VIRTUAL_API_KEY:
-                    real_key = self._provider_api_key_field()
-                    if real_key in self.session.config_overrides:
-                        self.values[key] = self.session.config_overrides[real_key]
-                    else:
-                        raw = getattr(self.session.settings, real_key, None)
-                        if isinstance(raw, SecretStr):
-                            self.values[key] = raw.get_secret_value()
-                        else:
-                            self.values[key] = "None"
+                    resolved = self.session.resolve_api_key_display()
+                    self.values[key] = resolved if resolved else "None"
                     continue
 
                 if key in self.session.config_overrides:
@@ -335,15 +328,8 @@ class ConfigEditor:
         self._apply_value("llm_model", provider_info.default_model)
 
         # Refresh the virtual llm_api_key to show the new provider's key
-        new_key_field = f"{provider_value}_api_key"  # pragma: allowlist secret
-        if new_key_field in self.session.config_overrides:
-            self.values[_VIRTUAL_API_KEY] = self.session.config_overrides[new_key_field]
-        else:
-            raw = getattr(self.session.settings, new_key_field, None)
-            if isinstance(raw, SecretStr):
-                self.values[_VIRTUAL_API_KEY] = raw.get_secret_value()
-            else:
-                self.values[_VIRTUAL_API_KEY] = "None"  # pragma: allowlist secret
+        resolved = self.session.resolve_api_key_display(provider_value)
+        self.values[_VIRTUAL_API_KEY] = resolved if resolved else "None"
         # Update original so the * indicator is correct for the new provider
         self.original_values[_VIRTUAL_API_KEY] = self.values[_VIRTUAL_API_KEY]
 

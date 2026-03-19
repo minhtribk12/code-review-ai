@@ -808,6 +808,10 @@ def _run_repl_loop(settings: Settings) -> None:
 
     run_startup_key_setup(session)
 
+    # Inject DB-stored API keys into environment so Settings() picks them up.
+    # This covers keys entered via the startup panel on a previous session.
+    session._inject_db_api_keys_to_env()
+
     # Rebuild settings from env after key setup (picks up newly added keys)
     try:
         from code_review_agent.config import Settings

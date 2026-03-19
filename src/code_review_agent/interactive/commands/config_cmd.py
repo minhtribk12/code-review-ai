@@ -37,15 +37,17 @@ def _mask_secret(value: object) -> str:
 
 
 def _get_config_value(session: SessionState, key: str) -> object:
-    """Get a config value, checking session overrides first."""
+    """Get a config value, checking session overrides first.
+
+    For API key fields, uses ``session.resolve_api_key_display()`` which
+    checks overrides, .env, database, and environment variables.
+    """
     # Virtual llm_api_key: map to {provider}_api_key
     if key == "llm_api_key":
-        settings = session.effective_settings
-        provider = settings.llm_provider
-        real_key = f"{provider}_api_key"
-        if real_key in session.config_overrides:
-            return session.config_overrides[real_key]
-        return getattr(session.settings, real_key, None)
+        val = session.resolve_api_key_display()
+        if val:
+            return SecretStr(val)
+        return None
 
     if key in session.config_overrides:
         return session.config_overrides[key]

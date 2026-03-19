@@ -185,11 +185,14 @@ class SessionState:
         compare=False,
     )
 
-    def _inject_custom_api_keys_to_env(self) -> None:
-        """Load custom provider API keys from DB into environment variables."""
-        import os
+    def _inject_db_api_keys_to_env(self) -> None:
+        """Load all DB-stored API keys into environment variables.
 
-        from code_review_agent.config import Settings as SettingsCls
+        Covers both built-in providers (nvidia, openrouter) and custom
+        providers. Keys already present in the environment are not
+        overwritten so that .env / shell exports take precedence.
+        """
+        import os
 
         try:
             from code_review_agent.storage import ReviewStorage
@@ -197,10 +200,14 @@ class SessionState:
             storage = ReviewStorage(self.settings.history_db_path)
             all_db = storage.load_all_config_overrides()
             for key, raw_val in all_db.items():
-                if key.endswith("_api_key") and key not in SettingsCls.model_fields and raw_val:
-                    os.environ[key.upper()] = raw_val
+                if key.endswith("_api_key") and raw_val:
+                    env_key = key.upper()
+                    existing = os.environ.get(env_key, "")
+                    # Don't overwrite real keys; do overwrite placeholders
+                    if not existing or existing == "__placeholder__":
+                        os.environ[env_key] = raw_val
         except (OSError, Exception):
-            logger.debug("failed to inject custom API keys from DB", exc_info=True)
+            logger.debug("failed to inject DB API keys to env", exc_info=True)
 
     @property
     def effective_settings(self) -> Settings:
@@ -254,7 +261,7 @@ class SessionState:
         if not validated_updates:
             return self.settings
 
-        self._inject_custom_api_keys_to_env()
+        self._inject_db_api_keys_to_env()
 
         try:
             rebuilt = self.settings.model_copy(update=validated_updates)
@@ -270,6 +277,61 @@ class SessionState:
     def invalidate_settings_cache(self) -> None:
         """Clear the effective settings cache (call after modifying overrides)."""
         self._effective_settings_cache = None
+
+    def resolve_api_key_display(self, provider: str | None = None) -> str:
+        """Resolve the API key value for display, checking all sources.
+
+        Checks in priority order:
+        1. session.config_overrides[{provider}_api_key]
+        2. session.settings.{provider}_api_key (from .env / env var)
+        3. Database (storage.load_config)
+        4. os.environ[{PROVIDER}_API_KEY]
+
+        Returns the raw key string, or empty string if not found.
+        """
+        import os
+
+        from pydantic import SecretStr
+
+        if provider is None:
+            provider = self.config_overrides.get(
+                "llm_provider",
+                str(self.settings.llm_provider),
+            )
+
+        real_key = f"{provider}_api_key"  # pragma: allowlist secret
+
+        # 1. Session overrides
+        if real_key in self.config_overrides:
+            val = self.config_overrides[real_key]
+            if val and val != "None":
+                return val
+
+        # 2. Settings fields (.env / env vars loaded by pydantic)
+        raw = getattr(self.settings, real_key, None)
+        if isinstance(raw, SecretStr):
+            val = raw.get_secret_value()
+            if val and val != "__placeholder__":
+                return val
+
+        # 3. Database
+        try:
+            from code_review_agent.storage import ReviewStorage
+
+            storage = ReviewStorage(self.settings.history_db_path)
+            db_val = storage.load_config(real_key)
+            if db_val:
+                return db_val
+        except Exception:  # noqa: S110
+            pass
+
+        # 4. Environment variable (may have been injected at runtime)
+        env_key = f"{provider.upper()}_API_KEY"
+        env_val = os.environ.get(env_key, "")
+        if env_val and env_val != "__placeholder__":
+            return env_val
+
+        return ""
 
     @property
     def display_tier(self) -> str:
