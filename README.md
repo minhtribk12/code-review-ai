@@ -6,30 +6,45 @@
 [![Python](https://img.shields.io/pypi/pyversions/code-review-ai)](https://pypi.org/project/code-review-ai/)
 [![License](https://img.shields.io/github/license/minhtribk12/code-review-ai)](LICENSE)
 
-Multi-agent code review CLI powered by LLMs. Runs specialized agents in parallel
-to review GitHub pull requests or local diffs, deduplicates findings, and
-synthesizes results into a structured report with severity, file location, and
-actionable suggestions.
+**AI-powered code review that runs locally, works with any OpenAI-compatible LLM, and costs nothing with free-tier APIs.**
 
-Built with Python 3.12+, Typer, Pydantic, and any OpenAI-compatible API.
+Multiple specialized agents (security, performance, style, test coverage) review your code in parallel, deduplicate findings across agents, and synthesize everything into one structured report -- all from a rich interactive TUI or a single CLI command.
+
+```bash
+pip install code-review-ai && cra interactive
+```
+
+### Why Code Review AI?
+
+- **Free to run** -- works out of the box with NVIDIA and OpenRouter free-tier models
+- **Multi-agent** -- 4 built-in agents catch different issue types simultaneously
+- **Full TUI** -- git, PR management, provider switching, and config editing in one terminal
+- **Any LLM** -- NVIDIA, OpenRouter, Ollama, vLLM, or any OpenAI-compatible endpoint
+- **Extensible** -- define custom review agents in YAML, no Python needed
+- **Privacy-first** -- runs locally, your code never leaves your machine (unless you choose a cloud API)
 
 ## Features
 
 **Review pipeline:**
 - 4 built-in agents (security, performance, style, test coverage) + custom YAML agents
-- Parallel execution via ThreadPoolExecutor with configurable concurrency
+- Parallel execution with configurable concurrency
 - Iterative deepening -- multiple review rounds with convergence detection
-- Validation loop -- skeptical validator agent filters false positives
+- Validation loop -- skeptical validator filters false positives
 - Cross-agent deduplication (exact, location-based, or similarity-based)
 - Token budget enforcement with automatic diff truncation
+
+**Interactive TUI:**
+- Full-screen provider browser -- add, edit, switch LLM providers and models
+- API key manager -- edit, sync, delete keys across secrets.env and .env
+- Git commands, PR workflows, findings navigator with triage and PR posting
+- Tab autocomplete, keyboard shortcuts (Ctrl+A agents, Ctrl+P provider, Ctrl+O repo)
 
 **Input/output:**
 - GitHub PR review (`--pr owner/repo#123`) or local diff (`--diff file.patch`)
 - Rich terminal, JSON, and Markdown output formats
-- Interactive findings navigator with triage and PR comment posting
+- SQLite review history with trends and export
 
 **Operations:**
-- SQLite review history with trends and export
 - Prompt injection defense (random delimiters, instruction anchoring)
 - Cost estimation with per-model pricing
 - Graceful degradation -- partial results when agents fail
@@ -38,7 +53,7 @@ Built with Python 3.12+, Typer, Pydantic, and any OpenAI-compatible API.
 **Extensibility:**
 - Custom agents defined in YAML (no Python required)
 - File pattern matching -- agents run only on relevant file types
-- Provider-agnostic -- NVIDIA, OpenRouter, or any OpenAI-compatible API. Full-screen provider browser for adding, editing, and managing providers and models
+- Provider-agnostic -- any OpenAI-compatible server, including local ones
 
 ## Quick Start
 
@@ -93,74 +108,16 @@ See [docs/configuration.md](docs/configuration.md) for all settings.
 ### Run
 
 ```bash
-# Review a local diff
-uv run cra review --diff path/to/file.patch
+# Interactive TUI (recommended)
+cra interactive
 
-# Review a GitHub PR
-uv run cra review --pr owner/repo#123
-
-# JSON output for CI pipelines
-uv run cra review --diff file.patch --format json --quiet
-
-# Interactive mode
-uv run cra interactive
-```
-
-## CLI Usage
-
-### Review Commands
-
-```bash
-# Local diffs
-cra review --diff changes.patch
-cra review --diff changes.patch --agents security,performance
-cra review --diff changes.patch --format json --output report.json
-
-# GitHub PRs (requires GITHUB_TOKEN)
+# One-shot CLI review
+cra review --diff path/to/file.patch
 cra review --pr owner/repo#123
-cra review --pr https://github.com/owner/repo/pull/123
-
-# Open findings navigator after review
-cra review --diff changes.patch --findings
+cra review --diff file.patch --format json --quiet
 ```
 
-### Token Tiers
-
-| Tier | Default Agents | Budget | Use Case |
-|------|---------------|--------|----------|
-| `free` | security | 5k tokens | Free-tier APIs, small context |
-| `standard` | all 4 built-in | 16k tokens | 32k context models |
-| `premium` | all 4 built-in | 48k tokens | 128k context models |
-
-Budget is auto-detected from the model's context window when possible.
-Override with `--agents` or `MAX_PROMPT_TOKENS`.
-
-### Custom Agents
-
-Define domain-specific agents in YAML without writing Python:
-
-```yaml
-# ~/.cra/agents/django_security.yaml
-name: django_security
-description: "Django-specific security review"
-system_prompt: |
-  You are a Django security expert. Focus on:
-  - CSRF token usage in views
-  - SQL injection via raw() and extra()
-  - Insecure deserialization with pickle
-priority: 10
-file_patterns:
-  - "*.py"
-```
-
-```bash
-# Use custom agents alongside built-in ones
-cra review --diff changes.patch --agents security,django_security
-```
-
-See [docs/custom-agents.md](docs/custom-agents.md) for the full guide.
-
-## Interactive TUI
+## Interactive TUI (Recommended)
 
 ```bash
 cra interactive
@@ -251,6 +208,7 @@ config edit                     # full-screen config editor (paste supported)
 config set llm_temperature 0.3  # session override
 config reset                    # reload from .env (preserves API keys)
 config factory-reset            # full reset (clears history, keeps keys)
+config clean                    # remove all tool data from ~/.cra/ (confirmation panel)
 # Provider management
 provider                        # full-screen provider browser (alias: pv)
 provider add                    # add custom provider (wizard)
@@ -280,6 +238,64 @@ Run `provider` or `pv` to open the full-screen provider/model browser:
 
 Key bindings: `Enter` expand/collapse, `a` add provider, `m` add model to selected provider,
 `d` delete (custom only), `i` edit any field (works on built-in too), `q` quit.
+
+See the [Interactive Guide](docs/interactive-guide.md) for the full command reference.
+
+## CLI Usage
+
+For one-shot reviews and CI/CD integration, use the CLI directly:
+
+### Review Commands
+
+```bash
+# Local diffs
+cra review --diff changes.patch
+cra review --diff changes.patch --agents security,performance
+cra review --diff changes.patch --format json --output report.json
+
+# GitHub PRs (requires GITHUB_TOKEN)
+cra review --pr owner/repo#123
+cra review --pr https://github.com/owner/repo/pull/123
+
+# Open findings navigator after review
+cra review --diff changes.patch --findings
+```
+
+### Token Tiers
+
+| Tier | Default Agents | Budget | Use Case |
+|------|---------------|--------|----------|
+| `free` | security | 5k tokens | Free-tier APIs, small context |
+| `standard` | all 4 built-in | 16k tokens | 32k context models |
+| `premium` | all 4 built-in | 48k tokens | 128k context models |
+
+Budget is auto-detected from the model's context window when possible.
+Override with `--agents` or `MAX_PROMPT_TOKENS`.
+
+### Custom Agents
+
+Define domain-specific agents in YAML without writing Python:
+
+```yaml
+# ~/.cra/agents/django_security.yaml
+name: django_security
+description: "Django-specific security review"
+system_prompt: |
+  You are a Django security expert. Focus on:
+  - CSRF token usage in views
+  - SQL injection via raw() and extra()
+  - Insecure deserialization with pickle
+priority: 10
+file_patterns:
+  - "*.py"
+```
+
+```bash
+# Use custom agents alongside built-in ones
+cra review --diff changes.patch --agents security,django_security
+```
+
+See [docs/custom-agents.md](docs/custom-agents.md) for the full guide and the [CLI Guide](docs/cli-guide.md) for all flags and CI/CD integration.
 
 ## Architecture
 
@@ -311,15 +327,15 @@ See [docs/architecture.md](docs/architecture.md) for full design details.
 
 For the full command reference with all flags, smart behaviors, and
 workflows, see the detailed guides:
-- **[CLI Guide](docs/cli-guide.md)** -- all CLI commands, flags, CI/CD integration, exit codes
-- **[Interactive Guide](docs/interactive-guide.md)** -- all REPL commands, findings navigator, PR workflows
+- **[Interactive Guide](docs/interactive-guide.md)** -- all TUI commands, findings navigator, PR workflows
+- **[CLI Guide](docs/cli-guide.md)** -- one-shot CLI commands, flags, CI/CD integration, exit codes
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [docs/cli-guide.md](docs/cli-guide.md) | CLI commands, flags, CI/CD integration, cost control |
-| [docs/interactive-guide.md](docs/interactive-guide.md) | REPL commands, findings navigator, PR workflows |
+| [docs/interactive-guide.md](docs/interactive-guide.md) | TUI commands, findings navigator, PR workflows |
+| [docs/cli-guide.md](docs/cli-guide.md) | One-shot CLI commands, flags, CI/CD integration |
 | [docs/architecture.md](docs/architecture.md) | System design, pipeline flow, component responsibilities |
 | [docs/configuration.md](docs/configuration.md) | All settings, provider URL resolution, secrets handling |
 | [docs/data-models.md](docs/data-models.md) | Pydantic models, StrEnums, LLM contracts |
