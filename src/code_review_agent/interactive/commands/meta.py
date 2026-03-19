@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 console = Console()
 
-_VERSION = "0.1.4"
+_VERSION = "0.1.5"
 
 # Command registry: (name, description) grouped by category.
 COMMAND_HELP: dict[str, list[tuple[str, str]]] = {

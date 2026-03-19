@@ -475,7 +475,7 @@ class TestVersionCommand:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "code-review-ai" in result.output
-        assert "0.1.4" in result.output
+        assert "0.1.5" in result.output
 
 
 # ---------------------------------------------------------------------------

@@ -185,7 +185,7 @@ class TestMetaCommands:
     def test_version(self, session: SessionState) -> None:
         with patch("code_review_agent.interactive.commands.meta.console") as mock_con:
             cmd_version([], session)
-        assert "0.1.4" in str(mock_con.print.call_args)
+        assert "0.1.5" in str(mock_con.print.call_args)
 
 
 class TestSessionState:
