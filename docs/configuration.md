@@ -24,6 +24,8 @@ Settings are loaded with the following priority (highest wins):
 | `REQUEST_TIMEOUT_SECONDS` | `int` | `120` | Per-request timeout in seconds (min: 1) |
 | `TEST_CONNECTION_ON_START` | `bool` | `true` | Send a minimal 1-token request on startup and after LLM config changes to verify connectivity |
 
+**Note:** In the interactive config editor (`config edit`), API keys are shown as a single `llm_api_key` field that automatically maps to the active provider's key. When you switch providers, the displayed key updates accordingly. Keys are stored per-provider in the database and never appear in `config_overrides`.
+
 ### Token Budget
 
 | Setting | Type | Default | Description |
@@ -119,6 +121,16 @@ Provider metadata (base URLs, models, rate limits) is stored in JSON:
 
 Use `provider add` in interactive mode or edit `~/.cra/providers.json` directly. User-defined providers are merged on top of bundled defaults.
 
+### API Key Resolution
+
+API keys are resolved in this order:
+
+1. **Built-in provider fields** -- `NVIDIA_API_KEY` or `OPENROUTER_API_KEY` environment variables or `.env` entries
+2. **Environment variable** -- `{PROVIDER}_API_KEY` for any provider (e.g., `OLLAMA_API_KEY`)
+3. **Database** -- Keys entered via the startup panel, `provider add`, or `config edit` are stored in `~/.cra/reviews.db`
+
+Local LLM servers (URLs matching `localhost`, `127.x`, `10.x`, `172.16-31.x`, `192.168.x`) are auto-detected and do not require API keys.
+
 ## Secrets Handling
 
 - `NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, and `GITHUB_TOKEN` use Pydantic's `SecretStr` type.
@@ -130,6 +142,7 @@ Use `provider add` in interactive mode or edit `~/.cra/providers.json` directly.
 
 All settings are validated at startup. Invalid values produce a `ValidationError` immediately, not at first use.
 
+- The active provider must exist in the provider registry (bundled or user-defined).
 - `LLM_PROVIDER` must be one of: `nvidia`, `openrouter`.
 - The active provider must have its API key set (`NVIDIA_API_KEY` for nvidia, `OPENROUTER_API_KEY` for openrouter).
 - `LLM_TEMPERATURE` must be between 0.0 and 1.0 inclusive.

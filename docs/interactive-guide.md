@@ -26,6 +26,38 @@ cra> _
 - Vi keybinding mode (set `INTERACTIVE_VI_MODE=true`)
 - Shell escape with `!` prefix
 
+### First Launch
+
+On the first launch (or when no provider has an API key configured), a **provider setup panel** appears:
+
+```
+ LLM Provider Setup
+
+  No LLM provider is configured.
+  Select a provider and press Enter to input your API key.
+
+ > nvidia (no key)       https://integrate.api.nvidia.com/v1
+   openrouter (no key)   https://openrouter.ai/api/v1
+
+  Up/Down navigate, Enter input key, c continue, q quit
+```
+
+**How it works:**
+- Navigate with Up/Down arrows
+- Press Enter to input your API key (paste supported, display is masked)
+- Local LLM servers (localhost, 127.x, 192.168.x, etc.) show `(local server)` and don't need keys
+- After entering at least one key, press `c` to continue to the REPL
+- Keys are saved to the database and persist across restarts
+
+Once at least one provider is configured, the panel shows:
+```
+  At least one provider is ready.
+  Press c to continue, or configure more providers.
+
+ > nvidia (key set)      https://integrate.api.nvidia.com/v1
+   openrouter (no key)   https://openrouter.ai/api/v1
+```
+
 ### Keyboard Shortcuts
 
 | Key | Action |
@@ -425,6 +457,7 @@ Opens a full-screen interactive editor:
   --------------------------------------------------------
   > llm_provider         nvidia          [nvidia|openrouter]
     llm_model            nvidia/nemotron...
+    llm_api_key          nvap****HsL2
     llm_temperature      0.1
     ...
 
@@ -454,64 +487,124 @@ are saved to the database automatically.
 
 ## Provider Management
 
-### `provider`
+### `provider` / `pv`
 
-Manage LLM providers and their models. Shortcut alias: `pv`.
+Opens the full-screen provider/model browser. This is the primary interface for managing LLM providers and their models.
 
 ```
-cra> provider                        # list all providers (alias: pv)
-cra> provider add                    # add custom provider (wizard)
-cra> provider models nvidia          # list models for a provider
-cra> provider models openrouter      # list OpenRouter free models
+cra> provider
+cra> pv                              # shortcut alias
+```
+
+#### Provider Browser Layout
+
+```
+ Provider Browser  (Up/Down navigate, Enter expand, a add provider, m add model, d delete, i edit, q quit)
+
+ > v nvidia  [built-in]  https://integrate.api.nvidia.com/v1  (5 models)
+       nvidia/nemotron-3-super-120b-a12b  (Nemotron 3 Super 120B free, 1,000,000 ctx)
+       nvidia/nemotron-3-nano-30b-a3b  (Nemotron 3 Nano 30B free, 1,000,000 ctx)
+       nvidia/llama-3.3-nemotron-super-49b-v1.5  (Llama 3.3 Nemotron Super 49B free, 131,072 ctx)
+   > openrouter  [built-in]  https://openrouter.ai/api/v1  (6 models)
+   > ollama  [custom]  http://localhost:11434/v1  (1 models)
+
+  3 items | 1 expanded
+```
+
+#### Key Bindings
+
+| Key | Action |
+|-----|--------|
+| Up/Down, j/k | Navigate providers and models |
+| Enter | Expand/collapse provider to show models |
+| `a` | Add a new provider (multi-step wizard) |
+| `m` | Add a model to the selected provider |
+| `d` | Delete selected provider or model (custom only, with confirmation) |
+| `i` | Edit selected provider or model (opens field selector) |
+| `q` / Esc | Exit browser |
+
+#### Editing Fields
+
+Press `i` on any provider or model (including built-in ones) to open the field selector:
+
+**Provider fields:**
+```
+  Edit: nvidia
+  Select a field to edit:
+
+ > base_url             https://integrate.api.nvidia.com/v1
+   default_model        nvidia/nemotron-3-super-120b-a12b
+   rate_limit_rpm       40
+
+  Up/Down navigate, Enter edit, Esc cancel
+```
+
+**Model fields:**
+```
+  Edit: nvidia/nemotron-3-super-120b-a12b
+  Select a field to edit:
+
+ > name                 Nemotron 3 Super 120B (MoE, 12B active)
+   is_free              true
+   context_window       1000000
+
+  Up/Down navigate, Enter edit, Esc cancel
+```
+
+Edits to built-in providers are saved as user overrides in `~/.cra/providers.json` and merged on top of bundled defaults.
+
+#### Adding a Provider
+
+Press `a` in the browser to start the add wizard. The wizard prompts for:
+1. Provider name
+2. Base URL (validated: must start with http:// or https://)
+3. API key (saved securely, masked in display)
+4. Rate limit (requests per minute)
+
+After saving, expand the new provider and press `m` to add models.
+
+#### Adding a Model
+
+Press `m` while a provider row is selected. The wizard prompts for:
+1. Model name (the exact API identifier sent to the LLM server)
+2. Display label (shown in selectors)
+3. Is free? (yes/no)
+4. Context window (tokens)
+
+#### Deleting
+
+Press `d` on a custom provider or model. A confirmation prompt appears:
+```
+  Delete provider 'ollama'?
+
+  Press y to confirm, n/Esc to cancel
+```
+
+Built-in providers (nvidia, openrouter) cannot be deleted, only edited.
+
+#### Health Status
+
+Providers and models that failed a connection test show `(not working)` in red:
+```
+   openrouter (not working)  https://openrouter.ai/api/v1  (6 models)
+```
+
+This status is cleared automatically when a successful connection test runs.
+
+### Other Provider Commands
+
+```
+cra> provider add                    # add provider via text wizard
+cra> provider list                   # table view of all providers
+cra> provider models nvidia          # list models for a specific provider
 cra> provider remove my-custom       # remove a user-defined provider
 ```
 
-### `provider add`
+### Provider Data Storage
 
-Interactive wizard to register a custom LLM provider or add models to an existing one:
-
-```
-cra> provider add
-
-  Add LLM Provider  (Ctrl+C to abort)
-  Paste or type values. Enter accepts defaults.
-
-  Provider name: ollama
-  Base URL: http://localhost:11434/v1
-  API key env var name [OLLAMA_API_KEY]:
-  Rate limit requests/min [10]:
-
-  Add models  (Ctrl+C to abort)
-
-  --- Model #1 ---
-  Model ID: llama3.1
-  Display name [llama3.1]:
-  Is free? [yes]:
-  Context window tokens [128000]:
-    Added: llama3.1
-  Add another model? (y/N):
-
-  Summary:
-    Provider:      ollama
-    Base URL:      http://localhost:11434/v1
-    API key env:   OLLAMA_API_KEY
-    Rate limit:    10 rpm
-    Default model: llama3.1
-    Model:         llama3.1 (free)  [128,000 ctx]
-
-  Save this provider? (Y/n): y
-  Provider 'ollama' saved to ~/.cra/providers.json
-```
-
-**Features:**
-- Paste support for all fields (URLs, model IDs, etc.)
-- Immediate validation (URLs must start with `http://` or `https://`)
-- Ctrl+C to abort at any step (no changes saved)
-- Enter to accept sensible defaults for optional fields
-- Summary and confirmation before saving
-- Connection test runs automatically if the provider is currently active
-
-Custom providers are stored in `~/.cra/providers.json` and merged with the bundled provider registry.
+- **Bundled providers:** `<package>/provider_registry.json` (ships with install, read-only)
+- **User overrides:** `~/.cra/providers.json` (your additions and edits, merged on top)
+- **API keys:** Stored in `~/.cra/reviews.db` (SQLite, persists across restarts)
 
 ---
 

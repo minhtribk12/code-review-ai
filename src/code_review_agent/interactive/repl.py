@@ -722,7 +722,7 @@ def _run_repl_loop(settings: Settings) -> None:
     session = SessionState(settings=settings)
 
     # Load persisted config overrides from database (DB is the source of truth)
-    # Skip health marks and API keys — those are accessed separately
+    # Skip: health marks, API keys, and values matching the base settings default
     try:
         from code_review_agent.storage import ReviewStorage
 
@@ -731,6 +731,12 @@ def _run_repl_loop(settings: Settings) -> None:
         if persisted:
             for k, v in persisted.items():
                 if k.startswith("health:") or k.endswith("_api_key"):
+                    continue
+                # Skip if the value matches the current base setting
+                base_val = getattr(settings, k, None)
+                if base_val is not None and str(base_val) == v:
+                    # Redundant — clean it from DB
+                    storage.delete_config(k)
                     continue
                 session.config_overrides[k] = v
             session.invalidate_settings_cache()

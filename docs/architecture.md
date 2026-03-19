@@ -176,6 +176,23 @@ The loop exits on convergence (zero new findings) or when `max_tokens_per_review
 - User overrides merge on top of bundled defaults: new providers are added, existing ones are extended with new models
 - `reload_registry()` allows runtime refresh after `provider add`
 
+### Provider Browser (`interactive/commands/provider_browser.py`)
+
+- Full-screen TUI for browsing, editing, adding, and deleting providers and models
+- Tree view: providers expand to show their models
+- Field selector: `i` opens a list of editable fields for the selected item
+- Type coercion: validates and converts field values (int for rpm/context, bool for is_free, URL for base_url)
+- User overrides: edits to built-in providers are saved as overrides in `~/.cra/providers.json`
+- Modes: NAVIGATE, FIELD_SELECT, EDIT_FIELD, CONFIRM_DELETE, ADD_INPUT
+
+### Startup Key Setup (`interactive/startup_keys.py`)
+
+- Full-screen panel shown on first launch or when no provider has an API key
+- Detects local/private network providers via regex pattern matching on base URLs
+- Stores API keys in SQLite database (not in `config_overrides` or environment files)
+- Blocks `continue` until at least one provider is available (has key or is local)
+- After key entry, rebuilds Settings object to pick up new environment variables
+
 ### Connection Test (`connection_test.py`)
 
 - Sends a minimal 1-token request (`max_tokens=1`, message: `"hi"`) to verify LLM connectivity

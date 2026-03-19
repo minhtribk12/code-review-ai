@@ -38,7 +38,7 @@ Built with Python 3.12+, Typer, Pydantic, and any OpenAI-compatible API.
 **Extensibility:**
 - Custom agents defined in YAML (no Python required)
 - File pattern matching -- agents run only on relevant file types
-- Provider-agnostic -- NVIDIA, OpenRouter, or any OpenAI-compatible API (add custom providers via JSON)
+- Provider-agnostic -- NVIDIA, OpenRouter, or any OpenAI-compatible API. Full-screen provider browser for adding, editing, and managing providers and models
 
 ## Quick Start
 
@@ -62,16 +62,30 @@ make install  # requires uv
 
 ### Configure
 
+On first launch of `cra interactive`, a **provider setup panel** appears automatically:
+
+```
+ LLM Provider Setup
+
+  Select a provider and press Enter to input your API key.
+
+ > nvidia (no key)       https://integrate.api.nvidia.com/v1
+   openrouter (no key)   https://openrouter.ai/api/v1
+
+  Up/Down navigate, Enter input key, c continue, q quit
+```
+
+Enter your API key for at least one provider. Keys are saved securely and persist across restarts. Local LLM servers (localhost, private IPs) are auto-detected and don't need keys.
+
+Alternatively, configure via `.env` file:
+
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and set your API key:
-
 ```env
-LLM_PROVIDER=nvidia                   # nvidia or openrouter
+LLM_PROVIDER=nvidia
 NVIDIA_API_KEY=your-nvidia-api-key    # get from build.nvidia.com
-# OPENROUTER_API_KEY=your-openrouter-key  # get from openrouter.ai
 ```
 
 See [docs/configuration.md](docs/configuration.md) for all settings.
@@ -235,15 +249,35 @@ Key bindings: Up/Down navigate, `f` filter, `s`/`S` sort forward/backward, `m` m
 config                          # show all settings
 config edit                     # full-screen config editor (paste supported)
 config set llm_temperature 0.3  # session override
-provider                        # list all LLM providers
+# Provider management
+provider                        # full-screen provider browser (alias: pv)
 provider add                    # add custom provider (wizard)
+provider list                   # table view of all providers
 provider models nvidia          # list models for a provider
+provider remove my-custom       # remove a user-defined provider
 history                         # past reviews
 history trends --days 30        # aggregated stats
 usage                           # session token/cost stats
 watch --interval 10             # continuous monitoring
 agents                          # list all agents (built-in + custom)
 ```
+
+### Provider Browser
+
+Run `provider` or `pv` to open the full-screen provider/model browser:
+
+```
+ Provider Browser  (Up/Down navigate, Enter expand, a add provider, m add model, d delete, i edit, q quit)
+
+ > v nvidia  [built-in]  https://integrate.api.nvidia.com/v1  (5 models)
+       nvidia/nemotron-3-super-120b-a12b  (Nemotron 3 Super 120B free, 1,000,000 ctx)
+       nvidia/nemotron-3-nano-30b-a3b  (Nemotron 3 Nano 30B free, 1,000,000 ctx)
+   > openrouter  [built-in]  https://openrouter.ai/api/v1  (6 models)
+   > ollama  [custom]  http://localhost:11434/v1  (1 models)
+```
+
+Key bindings: `Enter` expand/collapse, `a` add provider, `m` add model to selected provider,
+`d` delete (custom only), `i` edit any field (works on built-in too), `q` quit.
 
 ## Architecture
 
@@ -303,7 +337,7 @@ make check      # All of the above
 
 ### Test Suite
 
-650+ unit tests covering models, config, LLM client, agents, agent loader,
+696 unit tests covering models, config, LLM client, agents, agent loader,
 CLI, report, orchestrator, deduplication, GitHub client, and the interactive TUI.
 
 ### Interactive Tests
@@ -330,8 +364,11 @@ src/code_review_agent/
     commands/            # REPL commands (git, pr, review, config, etc.)
     tabs/                # Textual TUI tabs
     completers.py        # Tab completion
+    provider_browser.py  # Full-screen provider/model browser
+    provider_cmd.py      # Provider management commands
     repl.py              # REPL loop, dispatch, toolbar
     session.py           # Session state, PR cache
+    startup_keys.py      # First-launch provider key setup panel
   agent_loader.py        # Custom YAML agent discovery + loading
   config.py              # Settings with pydantic-settings
   providers.py           # Provider registry (bundled + user ~/.cra/providers.json)
@@ -348,7 +385,7 @@ src/code_review_agent/
   storage.py             # SQLite review history
   token_budget.py        # Tiers, budgets, cost estimation
 
-tests/                   # 650+ unit tests
+tests/                   # 696 unit tests
 interactive_tests/cli/   # Mock servers + scenario tests
 docs/                    # Architecture, configuration, models, custom agents
 ```

@@ -35,6 +35,19 @@ cd code-review-ai
 make install
 ```
 
+## First Launch
+
+When you run `cra interactive` for the first time, a **provider setup panel** appears automatically. This panel:
+
+1. Shows all registered providers with their connection status
+2. Lets you input API keys interactively (paste from clipboard supported)
+3. Auto-detects local LLM servers (localhost, 127.x, 10.x, 172.16-31.x, 192.168.x) as not needing API keys
+4. Requires at least one provider to be available before continuing
+
+You can also configure providers later using the `provider` command in the REPL, or by editing `.env` / `~/.cra/providers.json` directly.
+
+---
+
 ## Configuration File (.env)
 
 All configuration is done through environment variables. The easiest way is to create a `.env` file in the project root:
@@ -350,7 +363,13 @@ The rate limiter also adapts dynamically: when the provider returns a 429 with a
 
 ## Verification
 
-After configuring, verify your setup:
+The tool automatically tests your LLM connection on startup and after any configuration change. A minimal 1-token request is sent to verify connectivity. This can be disabled:
+
+```env
+TEST_CONNECTION_ON_START=false
+```
+
+To manually verify:
 
 ```bash
 # Check configuration loads correctly

@@ -11,7 +11,7 @@ git clone https://github.com/minhtribk12/code-review-ai.git
 cd code-review-ai
 make install
 cp .env.example .env
-# Edit .env: set NVIDIA_API_KEY (or OPENROUTER_API_KEY) and LLM_PROVIDER
+# Edit .env with your API key, or use the interactive setup on first launch
 ```
 
 Two entry points are available:
@@ -201,6 +201,42 @@ Cost scales with the number of agents, deepening rounds, and validation:
 | 4 agents, 1 round, no validation | 4 + 1 synthesis = 5 |
 | 4 agents, 2 rounds, validation | 8 + 1 synthesis + 1 validation = 10 |
 | 2 agents, 1 round, no validation | 2 + 1 synthesis = 3 |
+
+## Provider Management
+
+The `provider` command manages LLM providers and models. In interactive mode, running `provider` (or `pv`) opens a full-screen browser.
+
+### Sub-commands
+
+| Command | Description |
+|---------|-------------|
+| `provider` | Open full-screen provider/model browser |
+| `provider add` | Interactive wizard to add a custom provider |
+| `provider list` | Table view of all providers |
+| `provider models <name>` | List models for a specific provider |
+| `provider remove <name>` | Remove a user-defined provider |
+
+### Provider Browser Keys
+
+| Key | Action |
+|-----|--------|
+| Enter | Expand/collapse provider |
+| `a` | Add provider |
+| `m` | Add model to selected provider |
+| `d` | Delete (custom only) |
+| `i` | Edit any field (including built-in) |
+| `q` | Quit |
+
+### Custom Providers
+
+Add custom providers (e.g., Ollama, vLLM) via the browser or wizard:
+
+```bash
+cra> provider add
+# or press 'a' in the provider browser
+```
+
+Custom providers are stored in `~/.cra/providers.json` and merged with bundled providers on startup.
 
 ## Environment Variables
 
