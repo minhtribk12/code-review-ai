@@ -768,7 +768,7 @@ cra> history export --repo acme/app  # export filtered
 **`history trends`** shows:
 - Total reviews, total findings, average findings per review
 - Finding distribution by severity
-- Cost trends over time
+- Estimated cost trends over time (see `usage` for cost accuracy notes)
 - Most-reviewed repositories
 
 ---
@@ -787,8 +787,8 @@ Displays:
 - Total reviews completed this session
 - Total tokens used (prompt + completion)
 - Total LLM calls
-- Estimated cost (USD)
-- Per-agent breakdown (tokens, calls, cost)
+- Estimated cost (USD) -- this is a rough estimate based on default per-model pricing, not an actual bill. If you use free-tier APIs (NVIDIA, OpenRouter free models), the real cost is zero. For pay-as-you-go APIs, set `llm_input_price_per_m` and `llm_output_price_per_m` via `config edit` to get accurate estimates.
+- Per-agent breakdown (tokens, calls)
 - Time window stats (last hour, day, week)
 
 ---
@@ -934,5 +934,5 @@ cra> watch --interval 15 --agents security
 ```
 cra> history trends --days 30
 cra> history trends --repo acme/app --days 7
-cra> usage                           # session cost so far
+cra> usage                           # session token usage and estimated cost
 ```
