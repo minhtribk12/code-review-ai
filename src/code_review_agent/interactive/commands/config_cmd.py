@@ -79,6 +79,10 @@ def cmd_config(args: list[str], session: SessionState) -> None:
         return cmd_config_validate(args[1:], session)
     if args and args[0] == "diff":
         return cmd_config_diff(args[1:], session)
+    if args and args[0] == "clean":
+        from code_review_agent.interactive.commands.clean_cmd import cmd_config_clean
+
+        return cmd_config_clean()
 
     # Show specific category
     if args:

@@ -92,6 +92,7 @@ COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
         ("config save", "Persist session config to config.yaml"),
         ("config reset", "Reload from .env (preserves API keys)"),
         ("config factory-reset", "Full reset (clears history, keeps keys)"),
+        ("config clean", "Remove all tool data from ~/.cra/ (confirmation panel)"),
         ("config validate", "Check config for errors"),
     ],
     "Provider": [
