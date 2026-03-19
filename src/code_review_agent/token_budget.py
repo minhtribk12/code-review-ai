@@ -41,7 +41,7 @@ def default_agents_for_tier(tier: TokenTier) -> list[str]:
 
 # Known model context windows (tokens).
 # Used for auto-detection when max_prompt_tokens is not set explicitly.
-# Also populated dynamically from provider_registry.json at module load.
+# Hardcoded fallbacks; runtime context windows come from provider_registry.yaml.
 _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     # NVIDIA (via NIM API)
     "nvidia/nemotron-3-super-120b-a12b": 1_000_000,

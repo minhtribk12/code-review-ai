@@ -373,8 +373,8 @@ src/code_review_agent/
     startup_keys.py      # First-launch provider key setup panel
   agent_loader.py        # Custom YAML agent discovery + loading
   config.py              # Settings with pydantic-settings
-  providers.py           # Provider registry (bundled + user ~/.cra/providers.json)
-  provider_registry.json # Bundled provider/model knowledge base
+  providers.py           # Provider registry (bundled + user ~/.cra/providers.yaml)
+  provider_registry.yaml # Bundled provider/model knowledge base
   connection_test.py     # LLM connection verification
   dedup.py               # Cross-agent finding deduplication
   github_client.py       # GitHub API (PR read + write + rate limiting)

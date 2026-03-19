@@ -165,13 +165,13 @@ The loop exits on convergence (zero new findings) or when `max_tokens_per_review
 ### Config (`config.py`)
 
 - `pydantic-settings` based, loads from environment variables and `.env` file
-- Supports two built-in LLM providers (NVIDIA, OpenRouter) with per-provider API keys. Custom providers can be added via `~/.cra/providers.json` or `provider add` command. Any OpenAI-compatible server is supported via `llm_base_url` escape hatch.
+- Supports two built-in LLM providers (NVIDIA, OpenRouter) with per-provider API keys. Custom providers can be added via `~/.cra/providers.yaml` or `provider add` command. Any OpenAI-compatible server is supported via `llm_base_url` escape hatch.
 - Model validator ensures custom pricing is either both set or both unset
 - All timeouts, limits, and feature flags are configurable with sensible defaults
 
 ### Provider Registry (`providers.py`)
 
-- Loads provider metadata from bundled JSON (`provider_registry.json`) and user overrides (`~/.cra/providers.json`)
+- Loads provider metadata from bundled YAML (`provider_registry.yaml`) and user overrides (`~/.cra/providers.yaml`)
 - Each provider has: base URL, default model, rate limit RPM, and a list of models with context windows
 - User overrides merge on top of bundled defaults: new providers are added, existing ones are extended with new models
 - `reload_registry()` allows runtime refresh after `provider add`
@@ -182,14 +182,14 @@ The loop exits on convergence (zero new findings) or when `max_tokens_per_review
 - Tree view: providers expand to show their models
 - Field selector: `i` opens a list of editable fields for the selected item
 - Type coercion: validates and converts field values (int for rpm/context, bool for is_free, URL for base_url)
-- User overrides: edits to built-in providers are saved as overrides in `~/.cra/providers.json`
+- User overrides: edits to built-in providers are saved as overrides in `~/.cra/providers.yaml`
 - Modes: NAVIGATE, FIELD_SELECT, EDIT_FIELD, CONFIRM_DELETE, ADD_INPUT
 
 ### Startup Key Setup (`interactive/startup_keys.py`)
 
 - Full-screen panel shown on first launch or when no provider has an API key
 - Detects local/private network providers via regex pattern matching on base URLs
-- Stores API keys in SQLite database (not in `config_overrides` or environment files)
+- Stores API keys in `~/.cra/secrets.env` (not in `config_overrides` or environment files)
 - Blocks `continue` until at least one provider is available (has key or is local)
 - After key entry, rebuilds Settings object to pick up new environment variables
 

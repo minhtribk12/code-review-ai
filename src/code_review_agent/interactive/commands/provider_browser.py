@@ -313,10 +313,6 @@ class ProviderBrowser:
         self.edit_field_name = ""
         self._rebuild_rows()
 
-        self.mode = _Mode.NAVIGATE
-        self.edit_field_name = ""
-        self._rebuild_rows()
-
     # -- Add -------------------------------------------------------------------
 
     def start_add_provider(self) -> None:
@@ -468,13 +464,7 @@ class ProviderBrowser:
         # Save API key if provided
         api_key = d.get("api_key", "")  # pragma: allowlist secret
         if api_key:
-            import os
-
-            from code_review_agent.storage import ReviewStorage
-
-            storage = ReviewStorage(self.session.effective_settings.history_db_path)
-            storage.save_config(f"{name}_api_key", api_key)  # pragma: allowlist secret
-            os.environ[f"{name.upper()}_API_KEY"] = api_key
+            self.session.save_api_key(name, api_key)
 
         reload_registry()
         self.expanded.add(name)

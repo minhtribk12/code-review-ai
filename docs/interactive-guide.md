@@ -68,7 +68,7 @@ On the first launch (or when no provider has an API key configured), a **provide
 - Press Enter to input your API key (paste supported, display is masked)
 - Local LLM servers (localhost, 127.x, 192.168.x, etc.) show `(local server)` and don't need keys
 - After entering at least one key, press `c` to continue to the REPL
-- Keys are saved to the database and persist across restarts
+- Keys are saved to `~/.cra/secrets.env` and persist across restarts
 
 Once at least one provider is configured, the panel shows:
 ```
@@ -122,7 +122,7 @@ test verifies the LLM is reachable:
 
 If the test fails, the provider or model is marked as `(not working)` and
 you are offered the option to remove or switch. Connection health is
-persisted in the database and shown in the provider browser.
+persisted in `~/.cra/config.yaml` and shown in the provider browser.
 
 ---
 
@@ -512,7 +512,7 @@ cra> config diff                     # show session overrides vs .env
 cra> config reset                    # reload from .env (preserves API keys)
 cra> config factory-reset            # full reset (clears history, keeps keys)
 cra> config validate                 # check config for errors
-cra> config save                     # persist session overrides to database
+cra> config save                     # persist session overrides to config.yaml
 ```
 
 ### `config edit`
@@ -548,14 +548,14 @@ Opens a full-screen interactive editor:
 - Paste supported: paste text from clipboard directly into text fields
 
 Session overrides are active until `config reset` or session end.
-Use `config save` to persist to the database (survives restarts).
+Use `config save` to persist to `~/.cra/config.yaml` (survives restarts).
 You can also press `Ctrl+A` to quickly change agents or `Ctrl+P` to
 change the LLM provider -- it cascades model and base_url changes, and selections
-are saved to the database automatically.
+are saved to `~/.cra/config.yaml` automatically.
 
 ### `config reset`
 
-Discards all session overrides and clears persisted config from the database. Reloads settings from `.env`. **API keys and health marks are preserved.**
+Discards all session overrides and clears persisted config from `~/.cra/config.yaml`. Reloads settings from `.env`. **API keys and health marks are preserved.**
 
 ### `config factory-reset`
 
@@ -645,7 +645,7 @@ Press `i` on any provider or model (including built-in ones) to open the field s
   Up/Down navigate, Enter edit, Esc cancel
 ```
 
-Edits to built-in providers are saved as user overrides in `~/.cra/providers.json` and merged on top of bundled defaults.
+Edits to built-in providers are saved as user overrides in `~/.cra/providers.yaml` and merged on top of bundled defaults.
 
 #### Adding a Provider
 
@@ -696,9 +696,9 @@ cra> provider remove my-custom       # remove a user-defined provider
 
 ### Provider Data Storage
 
-- **Bundled providers:** `<package>/provider_registry.json` (ships with install, read-only)
-- **User overrides:** `~/.cra/providers.json` (your additions and edits, merged on top)
-- **API keys:** Stored in `~/.cra/reviews.db` (SQLite, persists across restarts)
+- **Bundled providers:** `<package>/provider_registry.yaml` (ships with install, read-only)
+- **User overrides:** `~/.cra/providers.yaml` (your additions and edits, merged on top)
+- **API keys:** Stored in `~/.cra/secrets.env` (persists across restarts)
 
 ---
 

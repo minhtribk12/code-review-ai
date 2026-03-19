@@ -24,7 +24,7 @@ Settings are loaded with the following priority (highest wins):
 | `REQUEST_TIMEOUT_SECONDS` | `int` | `120` | Per-request timeout in seconds (min: 1) |
 | `TEST_CONNECTION_ON_START` | `bool` | `true` | Send a minimal 1-token request on startup and after LLM config changes to verify connectivity |
 
-**Note:** In the interactive config editor (`config edit`), API keys are shown as a single `llm_api_key` field that automatically maps to the active provider's key. When you switch providers, the displayed key updates accordingly. Keys are stored per-provider in the database and never appear in `config_overrides`.
+**Note:** In the interactive config editor (`config edit`), API keys are shown as a single `llm_api_key` field that automatically maps to the active provider's key. When you switch providers, the displayed key updates accordingly. Keys are stored per-provider in `~/.cra/secrets.env` and never appear in `config_overrides`.
 
 ### Token Budget
 
@@ -110,16 +110,16 @@ The `resolved_llm_base_url` computed field determines the final API URL:
 2. Otherwise, look up `LLM_PROVIDER` in the provider registry:
    - `nvidia` -- `https://integrate.api.nvidia.com/v1`
    - `openrouter` -- `https://openrouter.ai/api/v1`
-   - Custom providers -- URL from `~/.cra/providers.json`
+   - Custom providers -- URL from `~/.cra/providers.yaml`
 
 ### Provider Registry
 
-Provider metadata (base URLs, models, rate limits) is stored in JSON:
+Provider metadata (base URLs, models, rate limits) is stored in YAML:
 
-- **Bundled defaults:** `<package>/provider_registry.json` (ships with install)
-- **User overrides:** `~/.cra/providers.json` (add custom providers or extend existing ones)
+- **Bundled defaults:** `<package>/provider_registry.yaml` (ships with install)
+- **User overrides:** `~/.cra/providers.yaml` (add custom providers or extend existing ones)
 
-Use `provider add` in interactive mode or edit `~/.cra/providers.json` directly. User-defined providers are merged on top of bundled defaults.
+Use `provider add` in interactive mode or edit `~/.cra/providers.yaml` directly. User-defined providers are merged on top of bundled defaults.
 
 ### API Key Resolution
 
@@ -127,7 +127,7 @@ API keys are resolved in this order:
 
 1. **Built-in provider fields** -- `NVIDIA_API_KEY` or `OPENROUTER_API_KEY` environment variables or `.env` entries
 2. **Environment variable** -- `{PROVIDER}_API_KEY` for any provider (e.g., `OLLAMA_API_KEY`)
-3. **Database** -- Keys entered via the startup panel, `provider add`, or `config edit` are stored in `~/.cra/reviews.db`
+3. **Secrets file** -- Keys entered via the startup panel, `provider add`, or `config edit` are stored in `~/.cra/secrets.env`
 
 Local LLM servers (URLs matching `localhost`, `127.x`, `10.x`, `172.16-31.x`, `192.168.x`) are auto-detected and do not require API keys.
 
@@ -163,7 +163,7 @@ All settings are validated at startup. Invalid values produce a `ValidationError
 
 ### `config reset`
 
-Clears all session overrides and persisted config from the database, then reloads from `.env`. Preserves:
+Clears all session overrides and persisted config from `~/.cra/config.yaml`, then reloads from `.env`. Preserves:
 - API keys for all providers
 - Provider health marks
 

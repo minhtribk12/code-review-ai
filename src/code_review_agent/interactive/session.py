@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from code_review_agent.config import Settings
+    from code_review_agent.config_store import ConfigStore, SecretsStore
     from code_review_agent.interactive.background import BackgroundReview
     from code_review_agent.models import ReviewReport
 
@@ -167,6 +168,8 @@ class SessionState:
     """
 
     settings: Settings
+    config_store: ConfigStore | None = None
+    secrets_store: SecretsStore | None = None
     reviews_completed: int = 0
     total_tokens_used: int = 0
     current_context: str = "default"
@@ -185,25 +188,35 @@ class SessionState:
         compare=False,
     )
 
-    def _inject_db_api_keys_to_env(self) -> None:
-        """Load all DB-stored API keys into environment variables.
+    def _get_secrets_store(self) -> SecretsStore:
+        """Return the secrets store, creating a default if not set."""
+        if self.secrets_store is not None:
+            return self.secrets_store
+        from code_review_agent.config_store import SecretsStore as _SecretsStore
 
-        DB is the primary source of truth for API keys. DB values
+        self.secrets_store = _SecretsStore()
+        return self.secrets_store
+
+    def _get_config_store(self) -> ConfigStore:
+        """Return the config store, creating a default if not set."""
+        if self.config_store is not None:
+            return self.config_store
+        from code_review_agent.config_store import ConfigStore as _ConfigStore
+
+        self.config_store = _ConfigStore()
+        return self.config_store
+
+    def _inject_secrets_to_env(self) -> None:
+        """Load all API keys from secrets.env into environment variables.
+
+        secrets.env is the primary source of truth for API keys. Values
         always overwrite environment variables so that
         ``Settings.resolve_api_key_for()`` picks them up.
         """
-        import os
-
         try:
-            from code_review_agent.storage import ReviewStorage
-
-            storage = ReviewStorage(self.settings.history_db_path)
-            all_db = storage.load_all_config_overrides()
-            for key, raw_val in all_db.items():
-                if key.endswith("_api_key") and raw_val:
-                    os.environ[key.upper()] = raw_val
-        except (OSError, Exception):
-            logger.debug("failed to inject DB API keys to env", exc_info=True)
+            self._get_secrets_store().inject_to_env()
+        except Exception:
+            logger.debug("failed to inject secrets.env API keys to env", exc_info=True)
 
     @property
     def effective_settings(self) -> Settings:
@@ -257,7 +270,7 @@ class SessionState:
         if not validated_updates:
             return self.settings
 
-        self._inject_db_api_keys_to_env()
+        self._inject_secrets_to_env()
 
         try:
             rebuilt = self.settings.model_copy(update=validated_updates)
@@ -277,8 +290,8 @@ class SessionState:
     def resolve_api_key_display(self, provider: str | None = None) -> str:
         """Resolve the API key value for display.
 
-        Two-source model (DB is primary, .env is fallback):
-        1. Database (highest priority, app-managed)
+        Two-source model (secrets.env is primary, .env is fallback):
+        1. secrets.env (highest priority, app-managed)
         2. .env / environment variables (user-managed fallback)
 
         Returns the raw key string, or empty string if not found.
@@ -288,19 +301,15 @@ class SessionState:
                 "llm_provider",
                 str(self.settings.llm_provider),
             )
-        db_val = self.load_api_key_from_db(provider)
-        if db_val:
-            return db_val
+        secrets_val = self.load_api_key_from_secrets(provider)
+        if secrets_val:
+            return secrets_val
         return self.load_api_key_from_env(provider)
 
-    def load_api_key_from_db(self, provider: str) -> str:
-        """Load an API key from the SQLite database."""
-        real_key = f"{provider}_api_key"  # pragma: allowlist secret
+    def load_api_key_from_secrets(self, provider: str) -> str:
+        """Load an API key from secrets.env."""
         try:
-            from code_review_agent.storage import ReviewStorage
-
-            storage = ReviewStorage(self.settings.history_db_path)
-            return storage.load_config(real_key) or ""
+            return self._get_secrets_store().load_key(provider)
         except Exception:
             return ""
 
@@ -327,30 +336,14 @@ class SessionState:
 
         return ""
 
-    def save_api_key_to_db(self, provider: str, value: str) -> None:
-        """Save an API key to the database and inject into env."""
-        import os
-
-        real_key = f"{provider}_api_key"  # pragma: allowlist secret
-        from code_review_agent.storage import ReviewStorage
-
-        storage = ReviewStorage(self.settings.history_db_path)
-        storage.save_config(real_key, value)
-        os.environ[f"{provider.upper()}_API_KEY"] = value
+    def save_api_key(self, provider: str, value: str) -> None:
+        """Save an API key to secrets.env and inject into env."""
+        self._get_secrets_store().save_key(provider, value)
         self.invalidate_settings_cache()
 
-    def delete_api_key_from_db(self, provider: str) -> None:
-        """Delete an API key from the database and clear env."""
-        import os
-
-        real_key = f"{provider}_api_key"  # pragma: allowlist secret
-        from code_review_agent.storage import ReviewStorage
-
-        storage = ReviewStorage(self.settings.history_db_path)
-        storage.delete_config(real_key)
-        env_key = f"{provider.upper()}_API_KEY"
-        if os.environ.get(env_key):
-            os.environ.pop(env_key, None)
+    def delete_api_key(self, provider: str) -> None:
+        """Delete an API key from secrets.env and clear env."""
+        self._get_secrets_store().delete_key(provider)
         self.invalidate_settings_cache()
 
     @property

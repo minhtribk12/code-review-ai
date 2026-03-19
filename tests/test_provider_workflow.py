@@ -45,7 +45,7 @@ def real_session(real_settings: Settings) -> SessionState:
 @pytest.fixture
 def user_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Point user registry to a temp path across all relevant modules."""
-    user_path = tmp_path / "providers.json"
+    user_path = tmp_path / "providers.yaml"
     monkeypatch.setattr("code_review_agent.providers._USER_REGISTRY_PATH", user_path)
     monkeypatch.setattr(
         "code_review_agent.interactive.commands.provider_cmd._USER_REGISTRY_PATH",
@@ -66,13 +66,13 @@ def _model(
 
 
 def _write_user_providers(path: Path, providers: dict[str, Any]) -> None:
-    """Write a providers.json file and reload the registry."""
-    import json
+    """Write a providers.yaml file and reload the registry."""
+    import yaml
 
     from code_review_agent.providers import reload_registry
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"providers": providers}, indent=2))
+    path.write_text(yaml.safe_dump({"providers": providers}, default_flow_style=False))
     reload_registry()
 
 
@@ -716,44 +716,28 @@ class TestProviderValidation:
 
 
 # ---------------------------------------------------------------------------
-# save_config_to_db filtering
+# save_config_to_yaml filtering
 # ---------------------------------------------------------------------------
 
 
 class TestSaveConfigFiltering:
-    """Test that save_config_to_db skips health marks and API keys."""
-
-    def test_skips_health_marks(
-        self,
-        real_session: SessionState,
-        tmp_path: Path,
-    ) -> None:
-        from code_review_agent.interactive.commands.config_cmd import save_config_to_db
-
-        real_session.config_overrides["history_db_path"] = str(tmp_path / "test_filter.db")
-        real_session.invalidate_settings_cache()
-
-        real_session.config_overrides["health:provider:test"] = "not_working"
-        real_session.config_overrides["llm_temperature"] = "0.5"
-        saved = save_config_to_db(real_session)
-        # history_db_path + llm_temperature saved; health mark skipped
-        assert saved == 2
+    """Test that save_config_to_yaml skips API keys."""
 
     def test_skips_api_keys(
         self,
         real_session: SessionState,
         tmp_path: Path,
     ) -> None:
-        from code_review_agent.interactive.commands.config_cmd import save_config_to_db
+        from code_review_agent.config_store import ConfigStore
+        from code_review_agent.interactive.commands.config_cmd import save_config_to_yaml
 
-        real_session.config_overrides["history_db_path"] = str(tmp_path / "test_filter.db")
-        real_session.invalidate_settings_cache()
+        real_session.config_store = ConfigStore(path=tmp_path / "config.yaml")
 
         real_session.config_overrides["custom_api_key"] = "secret"  # pragma: allowlist secret
         real_session.config_overrides["llm_temperature"] = "0.5"
-        saved = save_config_to_db(real_session)
-        # history_db_path + llm_temperature saved; api_key skipped
-        assert saved == 2
+        saved = save_config_to_yaml(real_session)
+        # llm_temperature saved; api_key skipped
+        assert saved == 1
 
 
 # ---------------------------------------------------------------------------
@@ -820,13 +804,13 @@ class TestHealthMarkConsolidation:
         real_session: SessionState,
         tmp_path: Path,
     ) -> None:
+        from code_review_agent.config_store import ConfigStore
         from code_review_agent.interactive.repl import (
             _set_health_mark,
             get_health_status,
         )
 
-        real_session.config_overrides["history_db_path"] = str(tmp_path / "test_health.db")
-        real_session.invalidate_settings_cache()
+        real_session.config_store = ConfigStore(path=tmp_path / "config.yaml")
 
         _set_health_mark(real_session, "provider", "test-prov", is_healthy=False)
         health = get_health_status(real_session)

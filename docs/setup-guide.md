@@ -44,7 +44,7 @@ When you run `cra interactive` for the first time, a **provider setup panel** ap
 3. Auto-detects local LLM servers (localhost, 127.x, 10.x, 172.16-31.x, 192.168.x) as not needing API keys
 4. Requires at least one provider to be available before continuing
 
-You can also configure providers later using the `provider` command in the REPL, or by editing `.env` / `~/.cra/providers.json` directly.
+You can also configure providers later using the `provider` command in the REPL, or by editing `.env` / `~/.cra/providers.yaml` directly.
 
 ---
 
@@ -77,7 +77,7 @@ uv run cra review --diff file.patch
 
 ## LLM Provider Setup
 
-The agent uses the OpenAI Python SDK as its HTTP transport. This means it works with **any API server that implements the OpenAI chat completions endpoint** (`/v1/chat/completions`). Two providers (NVIDIA and OpenRouter) have built-in URL mappings with free models. Additional providers can be added via the `provider add` command or by creating `~/.cra/providers.json`. Any OpenAI-compatible server is supported via `LLM_BASE_URL`.
+The agent uses the OpenAI Python SDK as its HTTP transport. This means it works with **any API server that implements the OpenAI chat completions endpoint** (`/v1/chat/completions`). Two providers (NVIDIA and OpenRouter) have built-in URL mappings with free models. Additional providers can be added via the `provider add` command or by creating `~/.cra/providers.yaml`. Any OpenAI-compatible server is supported via `LLM_BASE_URL`.
 
 ### How Provider URL Resolution Works
 
@@ -85,7 +85,7 @@ The agent uses the OpenAI Python SDK as its HTTP transport. This means it works 
 2. Otherwise, `LLM_PROVIDER` maps to a URL from the provider registry:
    - `nvidia` -> `https://integrate.api.nvidia.com/v1`
    - `openrouter` -> `https://openrouter.ai/api/v1`
-   - Custom providers -> URL from `~/.cra/providers.json`
+   - Custom providers -> URL from `~/.cra/providers.yaml`
 
 ---
 
@@ -227,7 +227,7 @@ LLM_MODEL=your-model-name
 - Increase `REQUEST_TIMEOUT_SECONDS` for slower local hardware (e.g., `300`)
 - Set `TOKEN_TIER=free` and `RATE_LIMIT_RPM=0` (unlimited) for local servers
 
-**Tip:** You can register self-hosted servers as custom providers using `provider add` in the interactive REPL. This lets you switch between them with `Ctrl+P` and tracks their models in `~/.cra/providers.json`.
+**Tip:** You can register self-hosted servers as custom providers using `provider add` in the interactive REPL. This lets you switch between them with `Ctrl+P` and tracks their models in `~/.cra/providers.yaml`.
 
 ---
 
