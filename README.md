@@ -249,6 +249,8 @@ Key bindings: Up/Down navigate, `f` filter, `s`/`S` sort forward/backward, `m` m
 config                          # show all settings
 config edit                     # full-screen config editor (paste supported)
 config set llm_temperature 0.3  # session override
+config reset                    # reload from .env (preserves API keys)
+config factory-reset            # full reset (clears history, keeps keys)
 # Provider management
 provider                        # full-screen provider browser (alias: pv)
 provider add                    # add custom provider (wizard)

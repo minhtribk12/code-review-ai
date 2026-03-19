@@ -440,7 +440,8 @@ cra> config get llm_model            # get a single value
 cra> config set llm_temperature 0.3  # set for this session only
 cra> config set token_tier premium   # change tier mid-session
 cra> config diff                     # show session overrides vs .env
-cra> config reset                    # discard all session overrides
+cra> config reset                    # reload from .env (preserves API keys)
+cra> config factory-reset            # full reset (clears history, keeps keys)
 cra> config validate                 # check config for errors
 cra> config save                     # persist session overrides to database
 ```
@@ -482,6 +483,28 @@ Use `config save` to persist to the database (survives restarts).
 You can also press `Ctrl+A` to quickly change agents or `Ctrl+P` to
 change the LLM provider -- it cascades model and base_url changes, and selections
 are saved to the database automatically.
+
+### `config reset`
+
+Discards all session overrides and clears persisted config from the database. Reloads settings from `.env`. **API keys and health marks are preserved.**
+
+### `config factory-reset`
+
+Full factory reset with confirmation. Clears all config overrides, health marks, and review history (findings, agent results, reviews). **API keys are preserved** so you don't have to re-enter them.
+
+```
+cra> config factory-reset
+
+  Factory Reset
+  This will clear:
+    - All config overrides
+    - All health marks (not working status)
+    - All review history and findings
+
+  Preserved: API keys for all providers
+
+  Type 'reset' to confirm:
+```
 
 ---
 

@@ -159,6 +159,26 @@ All settings are validated at startup. Invalid values produce a `ValidationError
 - `LOG_LEVEL` must be one of: `DEBUG`, `INFO`, `WARNING`, `ERROR`.
 - `LLM_INPUT_PRICE_PER_M` and `LLM_OUTPUT_PRICE_PER_M` must both be set or both be unset. Setting only one raises a `ValueError`.
 
+## Reset and Factory Reset
+
+### `config reset`
+
+Clears all session overrides and persisted config from the database, then reloads from `.env`. Preserves:
+- API keys for all providers
+- Provider health marks
+
+### `config factory-reset`
+
+Full wipe requiring confirmation (type "reset" to confirm). Clears:
+- All config overrides (session + database)
+- All health marks (not working status)
+- All review history, findings, and agent results
+
+Preserves:
+- API keys for all providers
+
+This is useful when the database has accumulated stale data or you want a clean start without re-entering API keys.
+
 ## Example `.env`
 
 ```env
