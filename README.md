@@ -75,14 +75,30 @@ cd code-review-ai
 make install  # requires uv
 ```
 
+### Get an API Key (free)
+
+You need an API key from at least one provider. Both offer free tiers with no credit card required:
+
+**NVIDIA (recommended)** -- powers the default model, [Nemotron 3 Super 120B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b), a 120B MoE model with only 12B active parameters and a 1M token context window:
+
+1. Go to [build.nvidia.com](https://build.nvidia.com)
+2. Sign in with your NVIDIA account (or create one free)
+3. Click any model, then **"Get API Key"** in the top right
+4. Copy the key (starts with `nvapi-`)
+
+**OpenRouter** -- access to 100+ models from multiple providers, many free:
+
+1. Go to [openrouter.ai/keys](https://openrouter.ai/keys)
+2. Sign in with Google/GitHub
+3. Click **"Create Key"**
+4. Copy the key (starts with `sk-or-`)
+
 ### Configure
 
-On first launch of `cra interactive`, a **provider setup panel** appears automatically:
+**Option A: Interactive setup (easiest)** -- on first launch, a provider setup panel appears automatically. Just paste your API key:
 
 ```
  LLM Provider Setup
-
-  Select a provider and press Enter to input your API key.
 
  > nvidia (no key)       https://integrate.api.nvidia.com/v1
    openrouter (no key)   https://openrouter.ai/api/v1
@@ -90,20 +106,21 @@ On first launch of `cra interactive`, a **provider setup panel** appears automat
   Up/Down navigate, Enter input key, c continue, q quit
 ```
 
-Enter your API key for at least one provider. Keys are saved securely and persist across restarts. Local LLM servers (localhost, private IPs) are auto-detected and don't need keys.
+Keys are saved to `~/.cra/secrets.env` and persist across restarts.
 
-Alternatively, configure via `.env` file:
+**Option B: Manual `.env` file** -- create a `.env` file in your project directory:
 
 ```bash
-cp .env.example .env
+vim .env
+# or: nano .env, code .env, etc.
 ```
 
 ```env
 LLM_PROVIDER=nvidia
-NVIDIA_API_KEY=your-nvidia-api-key    # get from build.nvidia.com
+NVIDIA_API_KEY=nvapi-your-key-here
 ```
 
-See [docs/configuration.md](docs/configuration.md) for all settings.
+The `.env` file is loaded automatically on startup. See [docs/configuration.md](docs/configuration.md) for all settings.
 
 ### Run
 
@@ -118,6 +135,8 @@ cra review --diff file.patch --format json --quiet
 ```
 
 ## Interactive TUI (Recommended)
+
+The TUI (Terminal User Interface) is a full-screen interactive mode that runs entirely in your terminal. It provides git commands, code review, PR management, provider switching, and configuration editing -- all without leaving the terminal.
 
 ```bash
 cra interactive
@@ -263,14 +282,15 @@ cra review --diff changes.patch --findings
 
 ### Token Tiers
 
-| Tier | Default Agents | Budget | Use Case |
-|------|---------------|--------|----------|
-| `free` | security | 5k tokens | Free-tier APIs, small context |
-| `standard` | all 4 built-in | 16k tokens | 32k context models |
-| `premium` | all 4 built-in | 48k tokens | 128k context models |
+Token tiers let you match the tool's behavior to your API plan. **The tool itself is completely free** -- tiers only control how much context is sent per review so you can stay within your API provider's token limits. If you use a free-tier API (like NVIDIA or OpenRouter free models), you pay nothing at all.
 
-Budget is auto-detected from the model's context window when possible.
-Override with `--agents` or `MAX_PROMPT_TOKENS`.
+| Tier | Default Agents | Budget | When to Use |
+|------|---------------|--------|-------------|
+| `free` | security | 5k tokens | Free-tier APIs (NVIDIA, OpenRouter free models) |
+| `standard` | all 4 built-in | 16k tokens | Pay-as-you-go APIs with 32k context models |
+| `premium` | all 4 built-in | 48k tokens | Pay-as-you-go APIs with 128k+ context models |
+
+The tier is auto-detected from the model's context window when possible. You can override with `config set token_tier standard` or `--agents` / `MAX_PROMPT_TOKENS` on the CLI.
 
 ### Custom Agents
 
