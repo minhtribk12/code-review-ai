@@ -282,10 +282,10 @@ def run_connection_test(
     """Test the LLM connection, handle failures, and persist changes.
 
     On failure:
-    - Marks model/provider as "(not working)" in the DB
+    - Marks model/provider as "(not working)" in config.yaml
     - Reverts LLM config to ``previous_llm_config`` (if provided)
     - Re-tests with reverted config
-    All config changes are auto-saved to DB immediately.
+    All config changes are auto-saved to config.yaml immediately.
     """
     from code_review_agent.connection_test import FailureKind, test_llm_connection
 
@@ -361,44 +361,31 @@ def _revert_llm_config(
 
 
 def _set_health_mark(session: SessionState, kind: str, name: str, *, is_healthy: bool) -> None:
-    """Set or clear a health mark in the DB."""
+    """Set or clear a health mark in config.yaml."""
     try:
-        from code_review_agent.storage import ReviewStorage
-
-        storage = ReviewStorage(session.effective_settings.history_db_path)
+        store = session._get_config_store()
         if is_healthy:
-            storage.delete_config(f"health:{kind}:{name}")
+            store.clear_health(kind, name)
         else:
-            storage.save_config(f"health:{kind}:{name}", "not_working")
+            store.set_health(kind, name, "not_working")
     except Exception:
         logger.debug("failed to update health mark", kind=kind, name=name, exc_info=True)
 
 
 def get_health_status(session: SessionState) -> dict[str, set[str]]:
-    """Load all health marks from DB. Returns {kind: {name, ...}}."""
-    result: dict[str, set[str]] = {"model": set(), "provider": set()}
+    """Load all health marks from config.yaml. Returns {kind: {name, ...}}."""
     try:
-        from code_review_agent.storage import ReviewStorage
-
-        storage = ReviewStorage(session.effective_settings.history_db_path)
-        overrides = storage.load_all_config_overrides()
-        for key, value in overrides.items():
-            if key.startswith("health:") and value == "not_working":
-                parts = key.split(":", 2)
-                if len(parts) == 3:
-                    kind, name = parts[1], parts[2]
-                    if kind in result:
-                        result[kind].add(name)
+        return session._get_config_store().load_health()
     except Exception:
         logger.debug("failed to load health status", exc_info=True)
-    return result
+    return {"model": set(), "provider": set()}
 
 
 def _auto_save_config(session: SessionState) -> None:
-    """Persist all config overrides to DB immediately."""
-    from code_review_agent.interactive.commands.config_cmd import save_config_to_db
+    """Persist all config overrides to config.yaml immediately."""
+    from code_review_agent.interactive.commands.config_cmd import save_config_to_yaml
 
-    save_config_to_db(session)
+    save_config_to_yaml(session)
 
 
 def _offer_model_removal(session: SessionState, provider: str, model: str) -> None:
@@ -553,31 +540,27 @@ _REPO_SOURCE_KEY = "active_repo_source"
 
 
 def _save_active_repo(session: SessionState) -> None:
-    """Persist the active repo to the database."""
+    """Persist the active repo to config.yaml."""
     try:
-        from code_review_agent.storage import ReviewStorage
-
-        storage = ReviewStorage(session.effective_settings.history_db_path)
+        store = session._get_config_store()
         if session.active_repo:
-            storage.save_config(_REPO_KEY, session.active_repo)
-            storage.save_config(_REPO_SOURCE_KEY, session.active_repo_source or "local")
+            store.set_state(_REPO_KEY, session.active_repo)
+            store.set_state(_REPO_SOURCE_KEY, session.active_repo_source or "local")
         else:
-            storage.delete_config(_REPO_KEY)
-            storage.delete_config(_REPO_SOURCE_KEY)
+            store.delete_state(_REPO_KEY)
+            store.delete_state(_REPO_SOURCE_KEY)
     except Exception:
         logger.debug("failed to save active repo", exc_info=True)
 
 
 def _load_active_repo(session: SessionState) -> None:
-    """Restore the active repo from the database."""
+    """Restore the active repo from config.yaml."""
     try:
-        from code_review_agent.storage import ReviewStorage
-
-        storage = ReviewStorage(session.effective_settings.history_db_path)
-        repo = storage.load_config(_REPO_KEY)
+        store = session._get_config_store()
+        repo = store.get_state(_REPO_KEY)
         if repo:
             session.active_repo = repo
-            session.active_repo_source = storage.load_config(_REPO_SOURCE_KEY) or "local"
+            session.active_repo_source = store.get_state(_REPO_SOURCE_KEY) or "local"
             logger.debug("restored active repo", repo=repo)
     except Exception:
         logger.debug("failed to load active repo", exc_info=True)
@@ -621,10 +604,10 @@ def _confirm_exit(session: SessionState) -> bool:
     if answer in ("1", ""):
         try:
             from code_review_agent.interactive.commands.config_cmd import (
-                save_config_to_db,
+                save_config_to_yaml,
             )
 
-            saved = save_config_to_db(session)
+            saved = save_config_to_yaml(session)
             _save_active_repo(session)
             if saved:
                 console.print(f"  [green]{saved} setting(s) saved.[/green]")
@@ -753,24 +736,28 @@ def run_repl(settings: Settings) -> None:
 
 def _run_repl_loop(settings: Settings) -> None:
     """Inner REPL loop, separated so suppress_background is always reset."""
-    session = SessionState(settings=settings)
+    from code_review_agent.config_store import ConfigStore, SecretsStore, migrate_from_db
 
-    # Load persisted config overrides from database (DB is the source of truth)
-    # Skip: health marks, API keys, and values matching the base settings default
+    # One-time migration from SQLite DB to YAML/secrets.env
+    migrate_from_db(settings.history_db_path)
+
+    config_store = ConfigStore()
+    secrets_store = SecretsStore()
+    session = SessionState(
+        settings=settings,
+        config_store=config_store,
+        secrets_store=secrets_store,
+    )
+
+    # Load persisted config overrides from config.yaml
     try:
-        from code_review_agent.storage import ReviewStorage
-
-        storage = ReviewStorage(settings.history_db_path)
-        persisted = storage.load_all_config_overrides()
+        persisted = config_store.load_all_overrides()
         if persisted:
             for k, v in persisted.items():
-                if k.startswith("health:") or k.endswith("_api_key"):
-                    continue
                 # Skip if the value matches the current base setting
                 base_val = getattr(settings, k, None)
                 if base_val is not None and str(base_val) == v:
-                    # Redundant — clean it from DB
-                    storage.delete_config(k)
+                    config_store.delete(k)
                     continue
                 session.config_overrides[k] = v
             session.invalidate_settings_cache()
@@ -808,9 +795,9 @@ def _run_repl_loop(settings: Settings) -> None:
 
     run_startup_key_setup(session)
 
-    # Inject DB-stored API keys into environment so Settings() picks them up.
+    # Inject secrets.env API keys into environment so Settings() picks them up.
     # This covers keys entered via the startup panel on a previous session.
-    session._inject_db_api_keys_to_env()
+    session._inject_secrets_to_env()
 
     # Rebuild settings from env after key setup (picks up newly added keys)
     try:

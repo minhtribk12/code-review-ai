@@ -141,7 +141,7 @@ def run_agent_selector(session: SessionState) -> None:
     """Launch the full-screen agent selector and persist the choice.
 
     Updates ``session.config_overrides["default_agents"]`` and saves to
-    the database so the selection persists across restarts.
+    config.yaml so the selection persists across restarts.
     """
     selector = _AgentSelector(session)
 
@@ -192,10 +192,10 @@ def run_agent_selector(session: SessionState) -> None:
 
     session.invalidate_settings_cache()
 
-    # Persist to database
-    from code_review_agent.interactive.commands.config_cmd import save_config_to_db
+    # Persist to config.yaml
+    from code_review_agent.interactive.commands.config_cmd import save_config_to_yaml
 
-    save_config_to_db(session)
+    save_config_to_yaml(session)
 
     from rich.console import Console
 

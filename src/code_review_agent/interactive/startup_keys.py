@@ -54,13 +54,9 @@ def _provider_has_key(provider_key: str, session: SessionState) -> bool:
     if os.environ.get(env_key):
         return True
 
-    # Check DB directly
+    # Check secrets.env
     try:
-        from code_review_agent.storage import ReviewStorage
-
-        storage = ReviewStorage(session.settings.history_db_path)
-        stored = storage.load_config(f"{provider_key}_api_key")  # pragma: allowlist secret
-        return bool(stored)
+        return bool(session._get_secrets_store().load_key(provider_key))
     except Exception:
         return False
 
@@ -131,7 +127,7 @@ class _KeySetup:
         self.mode = _Mode.INPUT_KEY
 
     def confirm_key(self) -> None:
-        """Save the entered key to DB and env var."""
+        """Save the entered key to secrets.env and env var."""
         key_value = self.edit_buffer.strip()
         if not key_value:
             self.status_message = "Key cannot be empty"
@@ -139,22 +135,12 @@ class _KeySetup:
 
         provider = self.edit_provider
 
-        # Save to DB (API keys are stored separately from config_overrides)
+        # Save to secrets.env (also injects into os.environ)
         try:
-            from code_review_agent.storage import ReviewStorage
-
-            storage = ReviewStorage(self.session.settings.history_db_path)
-            storage.save_config(  # pragma: allowlist secret
-                f"{provider}_api_key",
-                key_value,
-            )
+            self.session.save_api_key(provider, key_value)
         except Exception:
-            self.status_message = "Failed to save key to database"
+            self.status_message = "Failed to save key to secrets.env"
             return
-
-        # Set env var for immediate use by _resolve_api_key
-        os.environ[f"{provider.upper()}_API_KEY"] = key_value
-        self.session.invalidate_settings_cache()
 
         self.has_key_configured = True
         self.status_message = f"API key saved for '{provider}'"

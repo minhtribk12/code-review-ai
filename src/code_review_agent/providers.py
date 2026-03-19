@@ -1,11 +1,11 @@
-"""Provider registry: loads provider metadata from bundled + user JSON files.
+"""Provider registry: loads provider metadata from bundled + user YAML files.
 
 Resolution order (later wins):
-1. Bundled defaults:  ``<package>/provider_registry.json``
-2. User overrides:    ``~/.cra/providers.json``
+1. Bundled defaults:  ``<package>/provider_registry.yaml``
+2. User overrides:    ``~/.cra/providers.yaml``
 
 Users can add entirely new providers or extend existing ones with extra
-models by creating ``~/.cra/providers.json`` using the same schema.
+models by creating ``~/.cra/providers.yaml`` using the same schema.
 When a provider key already exists in the bundled defaults, user-defined
 models are appended and provider-level fields (base_url, default_model,
 rate_limit_rpm) are overwritten if specified.
@@ -13,17 +13,17 @@ rate_limit_rpm) are overwritten if specified.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any  # JSON dicts from provider registry files have dynamic shape
+from typing import Any  # YAML dicts from provider registry files have dynamic shape
 
 import structlog
+import yaml
 
 logger = structlog.get_logger(__name__)
 
-_BUNDLED_REGISTRY_PATH = Path(__file__).parent / "provider_registry.json"
-_USER_REGISTRY_PATH = Path("~/.cra/providers.json").expanduser()
+_BUNDLED_REGISTRY_PATH = Path(__file__).parent / "provider_registry.yaml"
+_USER_REGISTRY_PATH = Path("~/.cra/providers.yaml").expanduser()
 
 
 @dataclass(frozen=True)
@@ -116,9 +116,11 @@ def _merge_providers(
     return result
 
 
-def _load_json(path: Path) -> dict[str, Any]:
-    """Load and return the 'providers' dict from a registry JSON file."""
-    raw = json.loads(path.read_text())
+def _load_yaml(path: Path) -> dict[str, Any]:
+    """Load and return the 'providers' dict from a registry YAML file."""
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return {}
     result: dict[str, Any] = raw.get("providers", {})
     return result
 
@@ -126,7 +128,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _load_registry() -> dict[str, ProviderInfo]:
     """Load bundled defaults, then merge user overrides on top."""
     # 1. Bundled defaults (must exist)
-    bundled_raw = _load_json(_BUNDLED_REGISTRY_PATH)
+    bundled_raw = _load_yaml(_BUNDLED_REGISTRY_PATH)
     result: dict[str, ProviderInfo] = {}
     for key, data in bundled_raw.items():
         result[key] = _parse_provider(data)
@@ -137,7 +139,7 @@ def _load_registry() -> dict[str, ProviderInfo]:
     # guard with structlog.is_configured() before logging.
     if _USER_REGISTRY_PATH.is_file():
         try:
-            user_raw = _load_json(_USER_REGISTRY_PATH)
+            user_raw = _load_yaml(_USER_REGISTRY_PATH)
             result = _merge_providers(result, user_raw)
             if structlog.is_configured():
                 logger.debug(

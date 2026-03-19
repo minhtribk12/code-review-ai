@@ -104,7 +104,7 @@ def run_provider_selector(session: SessionState) -> None:
     """Launch the full-screen provider selector and persist the choice.
 
     Updates ``session.config_overrides["llm_provider"]`` and cascades
-    changes to ``llm_model`` and ``llm_base_url``. Saves to the database
+    changes to ``llm_model`` and ``llm_base_url``. Saves to config.yaml
     so the selection persists across restarts.
     """
     selector = _ProviderSelector(session)
@@ -174,9 +174,9 @@ def run_provider_selector(session: SessionState) -> None:
 
     session.invalidate_settings_cache()
 
-    from code_review_agent.interactive.commands.config_cmd import save_config_to_db
+    from code_review_agent.interactive.commands.config_cmd import save_config_to_yaml
 
-    save_config_to_db(session)
+    save_config_to_yaml(session)
 
     from rich.console import Console
 

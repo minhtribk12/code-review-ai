@@ -870,36 +870,8 @@ class ReviewStorage:
             return None
         return str(row["value"])
 
-    # -- Config persistence --
-
-    def save_config(self, key: str, value: str) -> None:
-        """Persist a config override to the database."""
-        self.save_finding_setting(f"config:{key}", value)
-
-    def load_config(self, key: str) -> str | None:
-        """Load a persisted config override from the database."""
-        return self.load_finding_setting(f"config:{key}")
-
-    def load_all_config_overrides(self) -> dict[str, str]:
-        """Load all persisted config overrides from the database."""
-        with self._get_connection() as conn:
-            rows = conn.execute(
-                "SELECT key, value FROM finding_settings WHERE key LIKE 'config:%'"
-            ).fetchall()
-        return {row["key"][7:]: row["value"] for row in rows}
-
-    def delete_config(self, key: str) -> None:
-        """Remove a persisted config override."""
-        with self._get_connection() as conn:
-            conn.execute(
-                "DELETE FROM finding_settings WHERE key = ?",
-                (f"config:{key}",),
-            )
-
-    def clear_all_config(self) -> None:
-        """Remove all persisted config overrides."""
-        with self._get_connection() as conn:
-            conn.execute("DELETE FROM finding_settings WHERE key LIKE 'config:%'")
+    # Config persistence methods removed -- config is now in ~/.cra/config.yaml
+    # and API keys in ~/.cra/secrets.env. See config_store.py.
 
     # Pre-built queries for each allowed field -- avoids dynamic SQL field interpolation.
     _DISTINCT_QUERIES: ClassVar[dict[str, str]] = {

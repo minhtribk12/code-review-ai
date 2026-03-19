@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from code_review_agent.config import Settings
+    from code_review_agent.config_store import ConfigStore, SecretsStore
     from code_review_agent.interactive.background import BackgroundReview
     from code_review_agent.models import ReviewReport
 
@@ -167,6 +168,8 @@ class SessionState:
     """
 
     settings: Settings
+    config_store: ConfigStore | None = None
+    secrets_store: SecretsStore | None = None
     reviews_completed: int = 0
     total_tokens_used: int = 0
     current_context: str = "default"
@@ -185,29 +188,35 @@ class SessionState:
         compare=False,
     )
 
-    def _inject_db_api_keys_to_env(self) -> None:
-        """Load all DB-stored API keys into environment variables.
+    def _get_secrets_store(self) -> SecretsStore:
+        """Return the secrets store, creating a default if not set."""
+        if self.secrets_store is not None:
+            return self.secrets_store
+        from code_review_agent.config_store import SecretsStore as _SecretsStore
 
-        Covers both built-in providers (nvidia, openrouter) and custom
-        providers. Keys already present in the environment are not
-        overwritten so that .env / shell exports take precedence.
+        self.secrets_store = _SecretsStore()
+        return self.secrets_store
+
+    def _get_config_store(self) -> ConfigStore:
+        """Return the config store, creating a default if not set."""
+        if self.config_store is not None:
+            return self.config_store
+        from code_review_agent.config_store import ConfigStore as _ConfigStore
+
+        self.config_store = _ConfigStore()
+        return self.config_store
+
+    def _inject_secrets_to_env(self) -> None:
+        """Load all API keys from secrets.env into environment variables.
+
+        secrets.env is the primary source of truth for API keys. Values
+        always overwrite environment variables so that
+        ``Settings.resolve_api_key_for()`` picks them up.
         """
-        import os
-
         try:
-            from code_review_agent.storage import ReviewStorage
-
-            storage = ReviewStorage(self.settings.history_db_path)
-            all_db = storage.load_all_config_overrides()
-            for key, raw_val in all_db.items():
-                if key.endswith("_api_key") and raw_val:
-                    env_key = key.upper()
-                    existing = os.environ.get(env_key, "")
-                    # Don't overwrite real keys; do overwrite placeholders
-                    if not existing or existing == "__placeholder__":
-                        os.environ[env_key] = raw_val
-        except (OSError, Exception):
-            logger.debug("failed to inject DB API keys to env", exc_info=True)
+            self._get_secrets_store().inject_to_env()
+        except Exception:
+            logger.debug("failed to inject secrets.env API keys to env", exc_info=True)
 
     @property
     def effective_settings(self) -> Settings:
@@ -261,7 +270,7 @@ class SessionState:
         if not validated_updates:
             return self.settings
 
-        self._inject_db_api_keys_to_env()
+        self._inject_secrets_to_env()
 
         try:
             rebuilt = self.settings.model_copy(update=validated_updates)
@@ -279,59 +288,63 @@ class SessionState:
         self._effective_settings_cache = None
 
     def resolve_api_key_display(self, provider: str | None = None) -> str:
-        """Resolve the API key value for display, checking all sources.
+        """Resolve the API key value for display.
 
-        Checks in priority order:
-        1. session.config_overrides[{provider}_api_key]
-        2. session.settings.{provider}_api_key (from .env / env var)
-        3. Database (storage.load_config)
-        4. os.environ[{PROVIDER}_API_KEY]
+        Two-source model (secrets.env is primary, .env is fallback):
+        1. secrets.env (highest priority, app-managed)
+        2. .env / environment variables (user-managed fallback)
 
         Returns the raw key string, or empty string if not found.
         """
-        import os
-
-        from pydantic import SecretStr
-
         if provider is None:
             provider = self.config_overrides.get(
                 "llm_provider",
                 str(self.settings.llm_provider),
             )
+        secrets_val = self.load_api_key_from_secrets(provider)
+        if secrets_val:
+            return secrets_val
+        return self.load_api_key_from_env(provider)
+
+    def load_api_key_from_secrets(self, provider: str) -> str:
+        """Load an API key from secrets.env."""
+        try:
+            return self._get_secrets_store().load_key(provider)
+        except Exception:
+            return ""
+
+    def load_api_key_from_env(self, provider: str) -> str:
+        """Load an API key from .env / environment variables."""
+        import os
+
+        from pydantic import SecretStr
 
         real_key = f"{provider}_api_key"  # pragma: allowlist secret
 
-        # 1. Session overrides
-        if real_key in self.config_overrides:
-            val = self.config_overrides[real_key]
-            if val and val != "None":
-                return val
-
-        # 2. Settings fields (.env / env vars loaded by pydantic)
+        # Settings fields (.env loaded by pydantic)
         raw = getattr(self.settings, real_key, None)
         if isinstance(raw, SecretStr):
             val = raw.get_secret_value()
             if val and val != "__placeholder__":
                 return val
 
-        # 3. Database
-        try:
-            from code_review_agent.storage import ReviewStorage
-
-            storage = ReviewStorage(self.settings.history_db_path)
-            db_val = storage.load_config(real_key)
-            if db_val:
-                return db_val
-        except Exception:  # noqa: S110
-            pass
-
-        # 4. Environment variable (may have been injected at runtime)
+        # Direct env var (for custom providers not in Settings model)
         env_key = f"{provider.upper()}_API_KEY"
         env_val = os.environ.get(env_key, "")
         if env_val and env_val != "__placeholder__":
             return env_val
 
         return ""
+
+    def save_api_key(self, provider: str, value: str) -> None:
+        """Save an API key to secrets.env and inject into env."""
+        self._get_secrets_store().save_key(provider, value)
+        self.invalidate_settings_cache()
+
+    def delete_api_key(self, provider: str) -> None:
+        """Delete an API key from secrets.env and clear env."""
+        self._get_secrets_store().delete_key(provider)
+        self.invalidate_settings_cache()
 
     @property
     def display_tier(self) -> str:

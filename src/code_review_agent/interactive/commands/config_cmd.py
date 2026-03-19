@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from typing import TYPE_CHECKING
 
 import structlog
@@ -40,7 +39,7 @@ def _get_config_value(session: SessionState, key: str) -> object:
     """Get a config value, checking session overrides first.
 
     For API key fields, uses ``session.resolve_api_key_display()`` which
-    checks overrides, .env, database, and environment variables.
+    checks secrets.env, .env, and environment variables.
     """
     # Virtual llm_api_key: map to {provider}_api_key
     if key == "llm_api_key":
@@ -62,6 +61,10 @@ def cmd_config(args: list[str], session: SessionState) -> None:
         from code_review_agent.interactive.commands.config_edit import cmd_config_edit
 
         return cmd_config_edit(args[1:], session)
+    if args and args[0] == "keys":
+        from code_review_agent.interactive.commands.keys_panel import run_keys_panel
+
+        return run_keys_panel(session)
     if args and args[0] == "get":
         return cmd_config_get(args[1:], session)
     if args and args[0] == "set":
@@ -76,6 +79,10 @@ def cmd_config(args: list[str], session: SessionState) -> None:
         return cmd_config_validate(args[1:], session)
     if args and args[0] == "diff":
         return cmd_config_diff(args[1:], session)
+    if args and args[0] == "clean":
+        from code_review_agent.interactive.commands.clean_cmd import cmd_config_clean
+
+        return cmd_config_clean()
 
     # Show specific category
     if args:
@@ -141,7 +148,7 @@ def cmd_config_get(args: list[str], session: SessionState) -> None:
 
 
 def cmd_config_set(args: list[str], session: SessionState) -> None:
-    """Set a config value and persist to database immediately."""
+    """Set a config value and persist to config.yaml immediately."""
     if len(args) < 2:
         print_error(
             UserError(
@@ -164,11 +171,30 @@ def cmd_config_set(args: list[str], session: SessionState) -> None:
         )
         return
 
+    # API keys go directly to secrets.env (not config_overrides)
+    if key.endswith("_api_key") or key == "llm_api_key":
+        real_key = key
+        if key == "llm_api_key":
+            provider = session.effective_settings.llm_provider
+            real_key = f"{provider}_api_key"  # pragma: allowlist secret
+        try:
+            session.save_api_key(
+                real_key.removesuffix("_api_key"),
+                value,
+            )
+            console.print(f"  [green]{key}[/green] = **** [dim](saved to secrets.env)[/dim]")
+        except Exception as exc:
+            print_error(
+                classify_exception(exc, context="Saving API key"),
+                console=console,
+            )
+        return
+
     session.config_overrides[key] = value
     session.invalidate_settings_cache()
 
-    # Auto-save to DB immediately
-    saved = save_config_to_db(session)
+    # Auto-save to config.yaml immediately
+    saved = save_config_to_yaml(session)
     persist_label = "(saved)" if saved else "(session only)"
     console.print(f"  [green]{key}[/green] = {value} [dim]{persist_label}[/dim]")
 
@@ -205,44 +231,41 @@ def cmd_config_set(args: list[str], session: SessionState) -> None:
 
 
 def cmd_config_save(args: list[str], session: SessionState) -> None:
-    """Persist session config overrides to the database."""
+    """Persist session config overrides to config.yaml."""
     if not session.config_overrides:
         console.print("[dim]No session overrides to save.[/dim]")
         return
 
-    saved = save_config_to_db(session)
+    saved = save_config_to_yaml(session)
     if saved:
-        console.print(f"  [green]{saved} setting(s) saved to database[/green]")
+        console.print(f"  [green]{saved} setting(s) saved to config.yaml[/green]")
         for key, value in session.config_overrides.items():
             console.print(f"    {key} = {value}")
         console.print("[dim]  Settings persist across restarts.[/dim]")
     else:
         print_error(
             UserError(
-                detail="Failed to save config to database",
-                reason="The database write operation failed.",
-                solution="Check disk space and database path with 'config get history_db_path'.",
+                detail="Failed to save config",
+                reason="The config.yaml write operation failed.",
+                solution="Check disk space and permissions for ~/.cra/config.yaml.",
             ),
             console=console,
         )
 
 
-def save_config_to_db(session: SessionState) -> int:
-    """Write config overrides to the database.
+def save_config_to_yaml(session: SessionState) -> int:
+    """Write config overrides to config.yaml.
 
-    Skips health marks and API keys (those are managed separately).
+    Skips API keys (those are managed in secrets.env).
     Returns the number of settings saved.
     """
-    from code_review_agent.storage import ReviewStorage
-
     try:
-        settings = session.effective_settings
-        storage = ReviewStorage(settings.history_db_path)
+        store = session._get_config_store()
         count = 0
         for key, value in session.config_overrides.items():
-            if key.startswith("health:") or key.endswith("_api_key"):
+            if key.endswith("_api_key"):
                 continue
-            storage.save_config(key, str(value))
+            store.set_value(key, str(value))
             count += 1
         return count
     except Exception:
@@ -261,18 +284,11 @@ def cmd_config_reset(args: list[str], session: SessionState) -> None:
     session.config_overrides.clear()
     session.invalidate_settings_cache()
 
-    # Clear persisted overrides from database, preserving API keys and health marks
+    # Clear persisted overrides from config.yaml, preserving health and state
     try:
-        from code_review_agent.storage import ReviewStorage
-
-        storage = ReviewStorage(session.effective_settings.history_db_path)
-        all_config = storage.load_all_config_overrides()
-        for key in all_config:
-            if key.endswith("_api_key") or key.startswith("health:"):
-                continue
-            storage.delete_config(key)
-    except (OSError, sqlite3.Error) as exc:
-        logger.debug("failed to clear persisted config from database", error=str(exc))
+        session._get_config_store().clear_overrides()
+    except Exception as exc:
+        logger.debug("failed to clear persisted config from config.yaml", error=str(exc))
 
     console.print(f"  [green]Reset {count} override(s). Config reloaded from .env.[/green]")
     console.print("  [dim]API keys and provider health preserved.[/dim]")
@@ -281,7 +297,7 @@ def cmd_config_reset(args: list[str], session: SessionState) -> None:
 def _cmd_factory_reset(session: SessionState) -> None:
     """Full factory reset: clear all config, health marks, and review history.
 
-    Preserves API keys so providers remain accessible.
+    Preserves API keys (in secrets.env) so providers remain accessible.
     """
     from prompt_toolkit import prompt as pt_prompt
 
@@ -289,12 +305,12 @@ def _cmd_factory_reset(session: SessionState) -> None:
     console.print("  [bold red]Factory Reset[/bold red]")
     console.print()
     console.print("  [bold]Will clear:[/bold]")
-    console.print("    [red]x[/red] All config overrides")
+    console.print("    [red]x[/red] All config overrides (config.yaml)")
     console.print("    [red]x[/red] All health marks (not working status)")
     console.print("    [red]x[/red] All review history and findings")
     console.print()
     console.print("  [bold]Preserved:[/bold]")
-    console.print("    [green]>[/green] API keys for all providers")
+    console.print("    [green]>[/green] API keys for all providers (secrets.env)")
     console.print()
 
     try:
@@ -311,30 +327,23 @@ def _cmd_factory_reset(session: SessionState) -> None:
     session.invalidate_settings_cache()
 
     try:
+        # Clear config.yaml (overrides + health + state)
+        config_store = session._get_config_store()
+        config_store.save({})
+
+        # Clear review history from DB
         from code_review_agent.storage import ReviewStorage
 
         storage = ReviewStorage(session.effective_settings.history_db_path)
-
-        # Collect API keys to preserve
-        all_config = storage.load_all_config_overrides()
-        preserved_keys: dict[str, str] = {}
-        for key, value in all_config.items():
-            if key.endswith("_api_key"):
-                preserved_keys[key] = value
-
-        # Clear everything
-        storage.clear_all_config()
-
-        # Restore API keys
-        for key, value in preserved_keys.items():
-            storage.save_config(key, value)
-
-        # Clear review history
         storage.clear_review_history()
 
-        key_count = len(preserved_keys)
+        # Count preserved API keys
+        secrets_store = session._get_secrets_store()
+        key_count = len(secrets_store.load_all_keys())
+
         console.print(
-            f"  [green]Factory reset complete. {key_count} API key(s) preserved.[/green]"
+            f"  [green]Factory reset complete."
+            f" {key_count} API key(s) preserved in secrets.env.[/green]"
         )
     except Exception as exc:
         print_error(classify_exception(exc, context="Factory reset"), console=console)

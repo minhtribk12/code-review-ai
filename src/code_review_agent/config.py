@@ -91,7 +91,7 @@ class Settings(BaseSettings):
             msg = (
                 f"Unknown provider '{self.llm_provider}'. "
                 f"Available: {available}. "
-                f"Add custom providers with 'provider add' or edit ~/.cra/providers.json."
+                f"Add custom providers with 'provider add' or edit ~/.cra/providers.yaml."
             )
             raise ValueError(msg)
         return self

@@ -285,20 +285,12 @@ class ConfigEditor:
         self.values[key] = value
         self.error_message = ""
 
-        # Virtual llm_api_key: save directly to DB and env, not config_overrides
+        # Virtual llm_api_key: save directly to secrets.env, not config_overrides
         if key == _VIRTUAL_API_KEY:
             if value != original and value and value != "None":
-                import os
-
                 real_key = self._provider_api_key_field()
-                os.environ[real_key.upper()] = value
-                try:
-                    from code_review_agent.storage import ReviewStorage
-
-                    storage = ReviewStorage(self.session.effective_settings.history_db_path)
-                    storage.save_config(real_key, value)
-                except Exception:  # noqa: S110
-                    pass
+                provider = real_key.removesuffix("_api_key")
+                self.session.save_api_key(provider, value)
             self.changed_keys.add(key) if value != original else self.changed_keys.discard(key)
             self.has_changes = bool(self.changed_keys)
             self.session.invalidate_settings_cache()
@@ -865,13 +857,13 @@ def cmd_config_edit(args: list[str], session: SessionState) -> None:
             editor.multi_confirm()
         elif editor.mode == _EditMode.NAVIGATE:
             from code_review_agent.interactive.commands.config_cmd import (
-                save_config_to_db,
+                save_config_to_yaml,
             )
 
             if session.config_overrides:
-                saved = save_config_to_db(session)
+                saved = save_config_to_yaml(session)
                 if saved:
-                    editor.status_message = f"Saved {saved} setting(s) to database"
+                    editor.status_message = f"Saved {saved} setting(s) to config.yaml"
                     editor.has_changes = False
                 else:
                     editor.status_message = "! Failed to save"
@@ -967,24 +959,22 @@ def cmd_config_edit(args: list[str], session: SessionState) -> None:
         + ", ".join(sorted(editor.changed_keys))
     )
 
-    # Auto-save changed keys to DB; delete reverted keys from DB
-    from code_review_agent.interactive.commands.config_cmd import save_config_to_db
-    from code_review_agent.storage import ReviewStorage
+    # Auto-save changed keys to config.yaml; delete reverted keys
+    from code_review_agent.interactive.commands.config_cmd import save_config_to_yaml
 
-    saved = save_config_to_db(session)
+    saved = save_config_to_yaml(session)
 
-    # Remove keys that were reverted to original from the DB
+    # Remove keys that were reverted to original from config.yaml
     try:
-        settings = session.effective_settings
-        storage = ReviewStorage(settings.history_db_path)
+        store = session._get_config_store()
         for key in list(editor.original_values.keys()):
             if key not in editor.changed_keys and key not in session.config_overrides:
-                storage.delete_config(key)
+                store.delete(key)
     except Exception:  # noqa: S110
         pass
 
     if saved:
-        con.print(f"  [dim]{saved} setting(s) saved to database (persisted).[/dim]")
+        con.print(f"  [dim]{saved} setting(s) saved to config.yaml (persisted).[/dim]")
 
     _show_cost_warning(con, session)
 

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
+import yaml
 from prompt_toolkit import prompt as pt_prompt
 from rich.console import Console
 from rich.table import Table
@@ -83,18 +83,28 @@ def _confirm(label: str, *, default_yes: bool = True) -> bool:
 
 
 def _load_user_registry() -> dict[str, Any]:
-    """Load user providers.json or return empty structure."""
+    """Load user providers.yaml or return empty structure."""
     if _USER_REGISTRY_PATH.is_file():
-        raw = json.loads(_USER_REGISTRY_PATH.read_text())
+        raw = yaml.safe_load(_USER_REGISTRY_PATH.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return {}
         result: dict[str, Any] = raw.get("providers", {})
         return result
     return {}
 
 
 def _save_user_registry(providers: dict[str, Any]) -> None:
-    """Save providers dict to user providers.json."""
+    """Save providers dict to user providers.yaml."""
     _USER_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _USER_REGISTRY_PATH.write_text(json.dumps({"providers": providers}, indent=2) + "\n")
+    _USER_REGISTRY_PATH.write_text(
+        yaml.safe_dump(
+            {"providers": providers},
+            default_flow_style=False,
+            sort_keys=False,
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
 
 
 def cmd_provider(args: list[str], session: SessionState) -> None:
@@ -311,17 +321,9 @@ def _run_add_wizard(session: SessionState) -> None:
     _save_user_registry(user_providers)
     reload_registry()
 
-    # Save API key directly to DB (not in config_overrides — keys are secret)
+    # Save API key to secrets.env (not in config_overrides -- keys are secret)
     if api_key:
-        import os
-
-        from code_review_agent.storage import ReviewStorage
-
-        storage = ReviewStorage(session.effective_settings.history_db_path)
-        storage.save_config(f"{name}_api_key", api_key)
-        # Also set env var so _resolve_api_key can find it immediately
-        os.environ[f"{name.upper()}_API_KEY"] = api_key
-        session.invalidate_settings_cache()
+        session.save_api_key(name, api_key)
 
     console.print(
         f"\n  [{theme.success}]Provider '{name}' saved to {_USER_REGISTRY_PATH}[/{theme.success}]"

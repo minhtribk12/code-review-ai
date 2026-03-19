@@ -278,7 +278,7 @@ cra> provider add
 # or press 'a' in the provider browser
 ```
 
-Custom providers are stored in `~/.cra/providers.json` and merged with bundled providers on startup.
+Custom providers are stored in `~/.cra/providers.yaml` and merged with bundled providers on startup.
 
 ## Error Handling
 
