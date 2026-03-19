@@ -360,7 +360,6 @@ workflows, see the detailed guides:
 | [docs/configuration.md](docs/configuration.md) | All settings, provider URL resolution, secrets handling |
 | [docs/data-models.md](docs/data-models.md) | Pydantic models, StrEnums, LLM contracts |
 | [docs/custom-agents.md](docs/custom-agents.md) | YAML agent schema, examples, discovery, file patterns |
-| [interactive_tests/cli/README.md](interactive_tests/cli/README.md) | Mock servers and interactive test suite |
 
 ## Development
 
@@ -370,23 +369,13 @@ make fmt        # Auto-format code
 make lint       # Run ruff linter
 make typecheck  # Run mypy (strict mode)
 make test       # Run pytest with coverage
-make check      # All of the above
+make check      # lint + typecheck + test
 ```
 
 ### Test Suite
 
-696 unit tests covering models, config, LLM client, agents, agent loader,
+856 unit tests covering models, config, LLM client, agents, agent loader,
 CLI, report, orchestrator, deduplication, GitHub client, and the interactive TUI.
-
-### Interactive Tests
-
-Run against mock servers (no API keys needed):
-
-```bash
-bash interactive_tests/cli/run_all_tests.sh     # Phase 1: 16 scenarios
-bash interactive_tests/cli/run_phase2_tests.sh   # Phase 2: 22 scenarios
-bash interactive_tests/cli/run_phase3_tests.sh   # Phase 3: 48 scenarios
-```
 
 ## Project Structure
 
@@ -423,8 +412,7 @@ src/code_review_agent/
   storage.py             # SQLite review history
   token_budget.py        # Tiers, budgets, cost estimation
 
-tests/                   # 696 unit tests
-interactive_tests/cli/   # Mock servers + scenario tests
+tests/                   # 856 unit tests
 docs/                    # Architecture, configuration, models, custom agents
 ```
 
