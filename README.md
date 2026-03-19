@@ -75,9 +75,9 @@ cd code-review-ai
 make install  # requires uv
 ```
 
-### Get an API Key (free)
+### Get Your Keys
 
-You need an API key from at least one provider. Both offer free tiers with no credit card required:
+You need an LLM API key and a GitHub token to get started:
 
 **NVIDIA (recommended)** -- powers the default model, [Nemotron 3 Super 120B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b), a 120B MoE model with only 12B active parameters and a 1M token context window:
 
@@ -92,6 +92,18 @@ You need an API key from at least one provider. Both offer free tiers with no cr
 2. Sign in with Google/GitHub
 3. Click **"Create Key"**
 4. Copy the key (starts with `sk-or-`)
+
+**GitHub Token** -- required for PR commands (`pr list`, `pr review`, `pr create`, etc.):
+
+1. Go to [github.com/settings/tokens](https://github.com/settings/tokens)
+2. Click **"Generate new token"** (classic) with `repo` scope
+3. Copy the token and set it in your shell:
+
+```bash
+export GITHUB_TOKEN=ghp_your-token-here
+```
+
+Or add `GITHUB_TOKEN=ghp_your-token-here` to your `.env` file (see below).
 
 ### Configure
 
@@ -121,6 +133,7 @@ NVIDIA_API_KEY=nvapi-your-key-here
 ```
 
 The `.env` file is loaded automatically on startup. See [docs/configuration.md](docs/configuration.md) for all settings.
+
 
 ### Run
 
