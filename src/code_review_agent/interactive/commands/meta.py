@@ -84,7 +84,8 @@ COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
         ("config get <key>", "Show a single config value"),
         ("config set <key> <value>", "Set config for this session"),
         ("config save", "Persist session config to database"),
-        ("config reset", "Reload config from .env"),
+        ("config reset", "Reload from .env (preserves API keys)"),
+        ("config factory-reset", "Full reset (clears history, keeps keys)"),
         ("config validate", "Check config for errors"),
     ],
     "Provider": [

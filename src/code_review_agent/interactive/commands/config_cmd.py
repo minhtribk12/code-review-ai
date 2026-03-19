@@ -117,6 +117,8 @@ def cmd_config(args: list[str], session: SessionState) -> None:
         return cmd_config_save(args[1:], session)
     if args and args[0] == "reset":
         return cmd_config_reset(args[1:], session)
+    if args and args[0] == "factory-reset":
+        return _cmd_factory_reset(session)
     if args and args[0] == "validate":
         return cmd_config_validate(args[1:], session)
     if args and args[0] == "diff":
@@ -259,21 +261,95 @@ def save_config_to_db(session: SessionState) -> int:
 
 
 def cmd_config_reset(args: list[str], session: SessionState) -> None:
-    """Reload config from .env, discard all overrides (session + database)."""
+    """Reload config from .env, discard overrides (preserves API keys).
+
+    Use ``config factory-reset`` to also clear health marks and review history.
+    """
+    if args and args[0] == "factory-reset":
+        return _cmd_factory_reset(session)
+
     count = len(session.config_overrides)
     session.config_overrides.clear()
     session.invalidate_settings_cache()
 
-    # Also clear persisted overrides from database
+    # Clear persisted overrides from database, preserving API keys and health marks
     try:
         from code_review_agent.storage import ReviewStorage
 
         storage = ReviewStorage(session.effective_settings.history_db_path)
-        storage.clear_all_config()
+        all_config = storage.load_all_config_overrides()
+        for key in all_config:
+            if key.endswith("_api_key") or key.startswith("health:"):
+                continue
+            storage.delete_config(key)
     except Exception:  # noqa: S110
         pass
 
     console.print(f"  [green]Reset {count} override(s). Config reloaded from .env.[/green]")
+    console.print("  [dim]API keys and provider health preserved.[/dim]")
+
+
+def _cmd_factory_reset(session: SessionState) -> None:
+    """Full factory reset: clear all config, health marks, and review history.
+
+    Preserves API keys so providers remain accessible.
+    """
+    from prompt_toolkit import prompt as pt_prompt
+
+    console.print()
+    console.print("  [bold red]Factory Reset[/bold red]")
+    console.print("  This will clear:")
+    console.print("    - All config overrides")
+    console.print("    - All health marks (not working status)")
+    console.print("    - All review history and findings")
+    console.print()
+    console.print("  [green]Preserved:[/green] API keys for all providers")
+    console.print()
+
+    try:
+        answer = pt_prompt("  Type 'reset' to confirm: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        console.print("  [dim]Cancelled.[/dim]")
+        return
+
+    if answer != "reset":
+        console.print("  [dim]Cancelled.[/dim]")
+        return
+
+    session.config_overrides.clear()
+    session.invalidate_settings_cache()
+
+    try:
+        from code_review_agent.storage import ReviewStorage
+
+        storage = ReviewStorage(session.effective_settings.history_db_path)
+
+        # Collect API keys to preserve
+        all_config = storage.load_all_config_overrides()
+        preserved_keys: dict[str, str] = {}
+        for key, value in all_config.items():
+            if key.endswith("_api_key"):
+                preserved_keys[key] = value
+
+        # Clear everything
+        storage.clear_all_config()
+
+        # Restore API keys
+        for key, value in preserved_keys.items():
+            storage.save_config(key, value)
+
+        # Clear review history
+        with storage._get_connection() as conn:
+            conn.execute("DELETE FROM findings")
+            conn.execute("DELETE FROM agent_results")
+            conn.execute("DELETE FROM reviews")
+
+        key_count = len(preserved_keys)
+        console.print(
+            f"  [green]Factory reset complete. {key_count} API key(s) preserved.[/green]"
+        )
+    except Exception as exc:
+        console.print(f"  [red]Factory reset failed: {exc}[/red]")
 
 
 def cmd_config_validate(args: list[str], session: SessionState) -> None:

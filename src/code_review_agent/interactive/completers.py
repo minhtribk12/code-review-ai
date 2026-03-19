@@ -114,6 +114,7 @@ def build_static_completer() -> _ReplCompleter:
                 "set": None,
                 "save": None,
                 "reset": None,
+                "factory-reset": None,
                 "validate": None,
                 "diff": None,
                 "llm": None,
