@@ -62,6 +62,10 @@ def cmd_config(args: list[str], session: SessionState) -> None:
         from code_review_agent.interactive.commands.config_edit import cmd_config_edit
 
         return cmd_config_edit(args[1:], session)
+    if args and args[0] == "keys":
+        from code_review_agent.interactive.commands.keys_panel import run_keys_panel
+
+        return run_keys_panel(session)
     if args and args[0] == "get":
         return cmd_config_get(args[1:], session)
     if args and args[0] == "set":
@@ -162,6 +166,25 @@ def cmd_config_set(args: list[str], session: SessionState) -> None:
             ),
             console=console,
         )
+        return
+
+    # API keys go directly to DB (not config_overrides)
+    if key.endswith("_api_key") or key == "llm_api_key":
+        real_key = key
+        if key == "llm_api_key":
+            provider = session.effective_settings.llm_provider
+            real_key = f"{provider}_api_key"  # pragma: allowlist secret
+        try:
+            session.save_api_key_to_db(
+                real_key.removesuffix("_api_key"),
+                value,
+            )
+            console.print(f"  [green]{key}[/green] = **** [dim](saved to database)[/dim]")
+        except Exception as exc:
+            print_error(
+                classify_exception(exc, context="Saving API key"),
+                console=console,
+            )
         return
 
     session.config_overrides[key] = value

@@ -86,6 +86,7 @@ COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
     "Config": [
         ("config", "Show all configuration (grouped, secrets masked)"),
         ("config edit", "Interactive config editor (full-screen)"),
+        ("config keys", "API key manager (view, sync DB/.env, delete)"),
         ("config get <key>", "Show a single config value"),
         ("config set <key> <value>", "Set config for this session"),
         ("config save", "Persist session config to database"),
