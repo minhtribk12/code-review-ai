@@ -63,3 +63,6 @@ interactive_tests/
 
 # Test artifacts (MagicMock file creation side effects)
 MagicMock/
+
+# Video/marketing scripts (local only)
+docs/video-scripts/
