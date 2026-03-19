@@ -20,5 +20,5 @@ If you discover a security vulnerability, please report it responsibly:
 - **API keys** are stored in `~/.cra/secrets.env` with file-system permissions only
 - **No secrets** are logged, committed, or included in error messages
 - **Prompt injection defense** is built into the review pipeline (random delimiters, instruction anchoring)
-- **All user input** is validated at API boundaries via Pydantic models
+- **All user input and configuration** is validated using Pydantic models before use
 - **No telemetry** -- the tool does not phone home or collect usage data

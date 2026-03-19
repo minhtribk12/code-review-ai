@@ -8,7 +8,7 @@ Thank you for your interest in contributing! This guide covers the process for s
 git clone https://github.com/minhtribk12/code-review-ai.git
 cd code-review-ai
 make install   # requires uv
-make check     # run fmt + lint + typecheck + tests
+make check     # run lint + typecheck + tests
 ```
 
 ## Development Workflow
@@ -16,16 +16,14 @@ make check     # run fmt + lint + typecheck + tests
 1. **Fork** the repository and clone your fork
 2. **Create a branch** from `main`: `git checkout -b feat/your-feature`
 3. **Make changes** -- follow the conventions below
-4. **Run checks**: `make check` (format, lint, typecheck, tests)
+4. **Run checks**: `make check` (lint, typecheck, tests)
 5. **Commit** using [Conventional Commits](#commit-messages)
 6. **Push** and open a Pull Request against `main`
 
 ## Branch Protection
 
 `main` is protected:
-- PRs require at least 1 approving review
 - Status checks (`test`, `lint`) must pass
-- Stale reviews are dismissed on new pushes
 - All conversations must be resolved before merge
 - Linear history required (no merge commits)
 - Force pushes and deletions are blocked
@@ -59,7 +57,7 @@ Body required for `feat`/`fix`/`refactor` -- explain **why**, not just what.
 
 ```bash
 make test           # run pytest with coverage
-make test-fast      # skip coverage
+make fmt            # auto-format with ruff
 ```
 
 - Every new feature and bugfix must include tests
