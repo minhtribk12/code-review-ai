@@ -18,6 +18,8 @@ from prompt_toolkit.layout.layout import Layout
 from rich.console import Console
 from rich.table import Table
 
+from code_review_agent.error_guidance import classify_exception
+from code_review_agent.errors import UserError, print_error
 from code_review_agent.github_client import list_user_repos
 from code_review_agent.interactive import git_ops
 from code_review_agent.theme import theme
@@ -140,15 +142,21 @@ def cmd_repo(args: list[str], session: SessionState) -> None:
 
     handler = handlers.get(sub)
     if handler is None:
-        console.print(f"[red]Unknown repo subcommand: {sub}[/red]")
+        print_error(
+            UserError(
+                detail=f"Unknown repo subcommand: {sub}",
+                solution="Available: list, select, current, clear",
+            ),
+            console=console,
+        )
         return
 
     try:
         handler(sub_args, session)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(classify_exception(exc, context="Repo command"), console=console)
     except Exception as exc:
-        console.print(f"[red]GitHub API error: {exc}[/red]")
+        print_error(classify_exception(exc, context="GitHub API"), console=console)
 
 
 def _repo_list(args: list[str], session: SessionState) -> None:
@@ -158,7 +166,14 @@ def _repo_list(args: list[str], session: SessionState) -> None:
         try:
             limit = int(args[1])
         except ValueError:
-            console.print(f"[red]Invalid limit: {args[1]}[/red]")
+            print_error(
+                UserError(
+                    detail=f"Invalid limit: {args[1]}",
+                    reason="Expected an integer value.",
+                    solution="Usage: repo list --limit 50",
+                ),
+                console=console,
+            )
             return
 
     console.print("  Fetching repositories...")
@@ -225,7 +240,14 @@ def _repo_select(args: list[str], session: SessionState) -> None:
     if args:
         repo_ref = args[0]
         if "/" not in repo_ref:
-            console.print(f"[red]Invalid format: '{repo_ref}'. Use owner/repo.[/red]")
+            print_error(
+                UserError(
+                    detail=f"Invalid repo format: '{repo_ref}'",
+                    reason="Repository reference must be in owner/repo format.",
+                    solution="Example: repo select octocat/Hello-World",
+                ),
+                console=console,
+            )
             return
         local_repos = _collect_local_repos()
         local_names = {r["full_name"] for r in local_repos}

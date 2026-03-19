@@ -30,36 +30,52 @@ def render_report_rich(report: ReviewReport) -> None:
     failed = _failed_agents(report)
 
     # Header panel.
-    header_lines: list[str] = [
-        f"Reviewed at: {report.reviewed_at.strftime('%Y-%m-%d %H:%M:%S UTC')}",
-        f"Risk level: {report.risk_level.upper()}",
-    ]
+    header_lines: list[str] = []
     if report.pr_url is not None:
-        header_lines.insert(0, f"PR: {report.pr_url}")
+        header_lines.append(f"[bold]PR:[/bold]          {report.pr_url}")
+    header_lines.append(
+        f"[bold]Reviewed at:[/bold] {report.reviewed_at.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+    )
+
+    risk_color = _SEVERITY_COLORS.get(report.risk_level, "white")
+    header_lines.append(
+        f"[bold]Risk level:[/bold]  [{risk_color}]{report.risk_level.upper()}[/{risk_color}]"
+    )
 
     totals = report.total_findings
-    counts_str = " | ".join(f"{sev}: {totals[sev]}" for sev in _SEVERITY_ORDER)
-    header_lines.append(f"Findings: {counts_str}")
+    counts_parts = []
+    for sev in _SEVERITY_ORDER:
+        count = totals[sev]
+        if count > 0:
+            color = _SEVERITY_COLORS.get(sev, "white")
+            counts_parts.append(f"[{color}]{sev}: {count}[/{color}]")
+        else:
+            counts_parts.append(f"[dim]{sev}: {count}[/dim]")
+    header_lines.append(f"[bold]Findings:[/bold]    {' | '.join(counts_parts)}")
 
     if failed:
         total_agents = len(report.agent_results)
         header_lines.append(
-            f"WARNING: {len(failed)} of {total_agents} agents failed. Review is incomplete."
+            f"[bold yellow]Warnings:[/bold yellow]    "
+            f"{len(failed)} of {total_agents} agents failed. "
+            f"Review is incomplete."
         )
 
     if report.token_usage is not None:
         usage = report.token_usage
         token_line = (
-            f"Tokens: {usage.prompt_tokens:,} prompt + "
+            f"[bold]Tokens:[/bold]      "
+            f"{usage.prompt_tokens:,} prompt + "
             f"{usage.completion_tokens:,} completion = "
-            f"{usage.total_tokens:,} total ({usage.llm_calls} calls)"
+            f"{usage.total_tokens:,} total "
+            f"({usage.llm_calls} calls)"
         )
         if usage.estimated_cost_usd is not None:
-            token_line += f" (~${usage.estimated_cost_usd:.4f})"
+            token_line += f" [dim](~${usage.estimated_cost_usd:.4f})[/dim]"
         header_lines.append(token_line)
 
     for warning in report.fetch_warnings:
-        header_lines.append(f"WARNING: {warning}")
+        header_lines.append(f"[bold yellow]Warning:[/bold yellow]     {warning}")
 
     console.print(
         Panel(
@@ -75,16 +91,20 @@ def render_report_rich(report: ReviewReport) -> None:
     # Per-agent results.
     for result in report.agent_results:
         if result.status == AgentStatus.FAILED:
-            console.print(f"[bold red]{result.agent_name.upper()} Agent (FAILED)[/bold red]")
-            error_msg = result.error_message or "Unknown error"
-            console.print(f"  [red]Error: {error_msg}[/red]\n")
-        else:
             console.print(
-                f"[bold]{result.agent_name.upper()} Agent[/bold] "
-                f"({len(result.findings)} findings, "
-                f"{result.execution_time_seconds:.1f}s)"
+                f"[bold red]!! {result.agent_name.upper()} Agent[/bold red]  [red]FAILED[/red]"
             )
-            console.print(f"  {result.summary}\n")
+            error_msg = result.error_message or "Unknown error"
+            console.print(f"   [red]{error_msg}[/red]\n")
+        else:
+            finding_count = len(result.findings)
+            count_style = "green" if finding_count == 0 else "yellow"
+            console.print(
+                f"[bold]>> {result.agent_name.upper()} Agent[/bold]  "
+                f"[{count_style}]{finding_count} findings[/{count_style}]"
+                f"  [dim]{result.execution_time_seconds:.1f}s[/dim]"
+            )
+            console.print(f"   {result.summary}\n")
 
     # Findings table grouped by severity.
     all_findings = [

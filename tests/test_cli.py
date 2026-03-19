@@ -339,7 +339,7 @@ class TestReviewCommandValidation:
     def test_no_args_exits_with_error(self) -> None:
         result = runner.invoke(app, ["review"])
         assert result.exit_code == 1
-        assert "provide either --pr or --diff" in result.output
+        assert "no input provided" in result.output.lower()
 
     def test_both_pr_and_diff_exits_with_error(self, tmp_path: Path) -> None:
         diff_file = tmp_path / "test.patch"
@@ -347,7 +347,7 @@ class TestReviewCommandValidation:
 
         result = runner.invoke(app, ["review", "--pr", "owner/repo#1", "--diff", str(diff_file)])
         assert result.exit_code == 1
-        assert "only one of" in result.output
+        assert "conflicting inputs" in result.output.lower()
 
 
 class TestReviewCommandWithDiff:
@@ -475,7 +475,9 @@ class TestVersionCommand:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "code-review-ai" in result.output
-        assert "0.1.5" in result.output
+        from code_review_agent import __version__
+
+        assert __version__ in result.output
 
 
 # ---------------------------------------------------------------------------

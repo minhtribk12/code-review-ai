@@ -39,10 +39,12 @@ def prompt_cancel_choice(console: Console) -> CancelChoice:
     Defaults to ABORT on invalid input, KeyboardInterrupt, or EOF.
     """
     console.print()
-    console.print("[bold]Review in progress. What would you like to do?[/bold]")
-    console.print("  [bold][1][/bold] Abort - discard everything")
-    console.print("  [bold][2][/bold] Finish with partial results")
-    console.print("  [bold][3][/bold] Continue waiting")
+    console.print("[bold]Review in progress.[/bold] What would you like to do?")
+    console.print()
+    console.print("  [bold red][1][/bold red] Abort    -- discard everything")
+    console.print("  [bold yellow][2][/bold yellow] Finish   -- synthesize partial results")
+    console.print("  [bold green][3][/bold green] Continue -- keep waiting")
+    console.print()
     try:
         answer = input("> ").strip()
     except (KeyboardInterrupt, EOFError):

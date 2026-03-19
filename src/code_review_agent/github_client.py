@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any  # GitHub API responses are dynamic JSON dicts
 
 import httpx
 import structlog
@@ -213,16 +213,11 @@ def fetch_pr_diff(
     Auth errors (401/403) are always propagated.
     """
     base_url = f"{_github_api_base()}/repos/{owner}/{repo}/pulls/{pr_number}"
-    headers: dict[str, str] = {
-        "Accept": "application/vnd.github.v3+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    if token is not None:
-        headers["Authorization"] = f"Bearer {token}"
+    headers = _make_github_headers(token)
 
     rate_limit = GitHubRateLimitState(warn_threshold=rate_limit_warn_threshold)
 
-    logger.info(
+    logger.debug(
         "fetching pr metadata",
         owner=owner,
         repo=repo,
@@ -289,7 +284,7 @@ def fetch_pr_diff(
     if not diff_files and not files_data:
         warnings.append("No files could be fetched from the PR.")
 
-    logger.info(
+    logger.debug(
         "fetched pr diff",
         file_count=len(diff_files),
         skipped_no_patch=skipped,
@@ -440,7 +435,7 @@ def _deduplicate_files(files: list[dict[str, Any]], warnings: list[str]) -> list
 
     removed_count = len(files) - len(seen)
     if removed_count > 0:
-        logger.info(
+        logger.debug(
             "deduplicated pr files by filename",
             original=len(files),
             deduplicated=len(seen),
@@ -844,7 +839,11 @@ def submit_pr_review_with_comments(
                 if comments_resp.status_code == 200:
                     comment_ids = [c["id"] for c in comments_resp.json() if "id" in c]
             except (httpx.HTTPError, KeyError, ValueError):
-                pass
+                logger.warning(
+                    "failed to fetch review comment IDs",
+                    review_id=review.get("id"),
+                    exc_info=True,
+                )
 
     return {
         "id": review["id"],

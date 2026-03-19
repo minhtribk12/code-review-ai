@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any  # JSON dicts from provider registry files have dynamic shape
 
 import structlog
 
@@ -132,21 +132,26 @@ def _load_registry() -> dict[str, ProviderInfo]:
         result[key] = _parse_provider(data)
 
     # 2. User overrides (optional)
+    # NOTE: This runs at import time (before structlog is configured).
+    # Logging here would leak debug messages to the terminal, so we
+    # guard with structlog.is_configured() before logging.
     if _USER_REGISTRY_PATH.is_file():
         try:
             user_raw = _load_json(_USER_REGISTRY_PATH)
             result = _merge_providers(result, user_raw)
-            logger.debug(
-                "loaded user provider overrides",
-                path=str(_USER_REGISTRY_PATH),
-                providers=list(user_raw.keys()),
-            )
+            if structlog.is_configured():
+                logger.debug(
+                    "loaded user provider overrides",
+                    path=str(_USER_REGISTRY_PATH),
+                    providers=list(user_raw.keys()),
+                )
         except Exception:
-            logger.warning(
-                "failed to load user provider registry, using bundled defaults only",
-                path=str(_USER_REGISTRY_PATH),
-                exc_info=True,
-            )
+            if structlog.is_configured():
+                logger.debug(
+                    "failed to load user provider registry",
+                    path=str(_USER_REGISTRY_PATH),
+                    exc_info=True,
+                )
 
     return result
 

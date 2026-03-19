@@ -119,6 +119,7 @@ class LLMClient:
         )
 
         last_error: Exception | None = None
+        raw_content: str = ""
 
         for attempt in range(_MAX_PARSE_RETRIES + 1):
             try:
@@ -126,7 +127,7 @@ class LLMClient:
             except LLMEmptyResponseError as err:
                 last_error = err
                 if attempt < _MAX_PARSE_RETRIES:
-                    logger.warning(
+                    logger.debug(
                         "llm returned empty response, will retry",
                         attempt=attempt + 1,
                         max_attempts=_MAX_PARSE_RETRIES + 1,
@@ -161,7 +162,7 @@ class LLMClient:
 
             # Layer 3: retry the API call (next iteration of the loop)
             if attempt < _MAX_PARSE_RETRIES:
-                logger.warning(
+                logger.debug(
                     "llm response failed to parse, will retry API call",
                     attempt=attempt + 1,
                     max_attempts=_MAX_PARSE_RETRIES + 1,
@@ -220,7 +221,7 @@ class LLMClient:
         if not raw_content or not raw_content.strip():
             reasoning = getattr(message, "reasoning_content", None)
             if reasoning and reasoning.strip():
-                logger.warning(
+                logger.debug(
                     "llm returned empty content but has reasoning_content, "
                     "try increasing LLM_MAX_TOKENS",
                     finish_reason=response.choices[0].finish_reason,
@@ -235,10 +236,10 @@ class LLMClient:
                 self._total_prompt_tokens += usage.prompt_tokens
                 self._total_completion_tokens += usage.completion_tokens
             else:
-                logger.warning("llm response missing usage data, token tracking may be inaccurate")
+                logger.debug("llm response missing usage data, token tracking may be inaccurate")
 
         if usage is not None:
-            logger.info(
+            logger.debug(
                 "llm request completed",
                 model=self._model,
                 prompt_tokens=usage.prompt_tokens,

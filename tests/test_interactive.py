@@ -26,6 +26,30 @@ from code_review_agent.interactive.session import PRCache, SessionState
 _PW = "code_review_agent.interactive.commands.pr_write"
 
 
+def _printed_text(mock_console: MagicMock) -> str:
+    """Extract all printed text from a mock console, including Rich Panel bodies.
+
+    Handles both plain string arguments and Rich Panel objects passed to
+    console.print(). Returns a single lowercase string for assertion matching.
+    """
+    from io import StringIO
+
+    from rich.console import Console as RichConsole
+
+    parts: list[str] = []
+    for call in mock_console.print.call_args_list:
+        for arg in call.args:
+            if isinstance(arg, Panel):
+                # Render the panel's body to plain text
+                buf = StringIO()
+                temp = RichConsole(file=buf, width=200, no_color=True)
+                temp.print(arg)
+                parts.append(buf.getvalue())
+            else:
+                parts.append(str(arg))
+    return " ".join(parts).lower()
+
+
 @pytest.fixture
 def session() -> SessionState:
     """Create a test SessionState with mock settings."""
@@ -65,7 +89,7 @@ class TestCommandDispatch:
         with patch("code_review_agent.interactive.repl.console") as mock_console:
             _dispatch("foobar", session)
         mock_console.print.assert_called_once()
-        assert "Unknown command" in str(mock_console.print.call_args)
+        assert "unknown command" in _printed_text(mock_console)
 
     def test_empty_input_ignored(self, session: SessionState) -> None:
         with patch("code_review_agent.interactive.repl.console") as mock_console:
@@ -185,7 +209,9 @@ class TestMetaCommands:
     def test_version(self, session: SessionState) -> None:
         with patch("code_review_agent.interactive.commands.meta.console") as mock_con:
             cmd_version([], session)
-        assert "0.1.5" in str(mock_con.print.call_args)
+        from code_review_agent import __version__
+
+        assert __version__ in str(mock_con.print.call_args)
 
 
 class TestSessionState:
@@ -220,7 +246,7 @@ class TestGitOps:
 
         branch = current_branch()
         assert isinstance(branch, str)
-        assert len(branch) > 0
+        # May be empty on detached HEAD (e.g., CI checkout)
 
     def test_status_short(self) -> None:
         from code_review_agent.interactive.git_ops import status_short
@@ -442,7 +468,7 @@ class TestPrCreate:
         ):
             mock_info.return_value = ("acme", "app", None)
             pr_create(["--title", "test"], session)
-        assert "GITHUB_TOKEN" in str(mock_con.print.call_args)
+        assert "github_token" in _printed_text(mock_con)
 
     def test_same_branch_blocked(self, session_with_token: SessionState) -> None:
         from code_review_agent.interactive.commands.pr_write import pr_create
@@ -455,7 +481,7 @@ class TestPrCreate:
             mock_info.return_value = ("acme", "app", "ghp_token")
             mock_git.current_branch.return_value = "main"
             pr_create(["--title", "test"], session_with_token)
-        assert "same as base" in str(mock_con.print.call_args).lower()
+        assert "same as base" in _printed_text(mock_con)
 
     def test_title_required(self, session_with_token: SessionState) -> None:
         from code_review_agent.interactive.commands.pr_write import pr_create
@@ -468,7 +494,9 @@ class TestPrCreate:
             mock_info.return_value = ("acme", "app", "ghp_token")
             mock_git.current_branch.return_value = "feat/x"
             pr_create([], session_with_token)
-        assert "title required" in str(mock_con.print.call_args).lower()
+        printed = _printed_text(mock_con)
+        assert "title" in printed
+        assert "required" in printed
 
     def test_dry_run_does_not_create(self, session_with_token: SessionState) -> None:
         from code_review_agent.interactive.commands.pr_write import pr_create
@@ -516,7 +544,7 @@ class TestPrCreate:
             mock_git.current_branch.return_value = "feat/x"
             mock_git.log_oneline_commits_since.return_value = []
             pr_create(["--fill"], session_with_token)
-        assert "no commits" in str(mock_con.print.call_args).lower()
+        assert "no commits" in _printed_text(mock_con)
 
     def test_push_on_no_upstream(self, session_with_token: SessionState) -> None:
         from code_review_agent.interactive.commands.pr_write import pr_create
@@ -552,7 +580,7 @@ class TestPrCreate:
             mock_git.has_upstream.return_value = True
             mock_create.side_effect = GitHubAuthError("403")
             pr_create(["--title", "test PR"], session_with_token)
-        assert "permission denied" in str(mock_con.print.call_args_list).lower()
+        assert "permission denied" in _printed_text(mock_con)
 
     def test_cache_invalidated_after_create(self, session_with_token: SessionState) -> None:
         from code_review_agent.interactive.commands.pr_write import pr_create
@@ -583,7 +611,7 @@ class TestPrMerge:
 
         with patch(f"{_PW}.console") as mock_con:
             pr_merge([], session_with_token)
-        assert "usage" in str(mock_con.print.call_args).lower()
+        assert "usage" in _printed_text(mock_con)
 
     def test_invalid_strategy_blocked(self, session_with_token: SessionState) -> None:
         from code_review_agent.interactive.commands.pr_write import pr_merge
@@ -594,7 +622,7 @@ class TestPrMerge:
         ):
             mock_info.return_value = ("acme", "app", "ghp_token")
             pr_merge(["42", "--strategy", "fast-forward"], session_with_token)
-        assert "invalid merge strategy" in str(mock_con.print.call_args).lower()
+        assert "invalid merge strategy" in _printed_text(mock_con)
 
     def test_dry_run_shows_preflight(self, session_with_token: SessionState) -> None:
         from code_review_agent.interactive.commands.pr_write import pr_merge
@@ -669,7 +697,7 @@ class TestPrMerge:
             mock_reviews.return_value = [{"user": "r", "state": "APPROVED", "submitted_at": ""}]
             mock_merge.side_effect = GitHubAuthError("403")
             pr_merge(["42"], session_with_token)
-        assert "permission denied" in str(mock_con.print.call_args_list).lower()
+        assert "permission denied" in _printed_text(mock_con)
 
 
 class TestPrApprove:
@@ -680,7 +708,7 @@ class TestPrApprove:
 
         with patch(f"{_PW}.console") as mock_con:
             pr_approve([], session_with_token)
-        assert "usage" in str(mock_con.print.call_args).lower()
+        assert "usage" in _printed_text(mock_con)
 
     def test_dry_run_does_not_submit(self, session_with_token: SessionState) -> None:
         from code_review_agent.interactive.commands.pr_write import pr_approve
@@ -726,7 +754,7 @@ class TestPrRequestChanges:
         ):
             mock_info.return_value = ("acme", "app", "ghp_token")
             pr_request_changes(["42"], session_with_token)
-        assert "mandatory" in str(mock_con.print.call_args).lower()
+        assert "mandatory" in _printed_text(mock_con)
 
     def test_dry_run_does_not_submit(self, session_with_token: SessionState) -> None:
         from code_review_agent.interactive.commands.pr_write import pr_request_changes
@@ -1113,7 +1141,7 @@ class TestRepoCommands:
 
         with patch("code_review_agent.interactive.commands.repo_cmd.console") as mock_con:
             _repo_select(["invalid"], session_with_token)
-        assert "invalid format" in str(mock_con.print.call_args).lower()
+        assert "invalid" in _printed_text(mock_con)
         assert session_with_token.active_repo is None
 
     def test_repo_clear(self, session_with_token: SessionState) -> None:
@@ -1728,8 +1756,7 @@ class TestPrReviewErrorHandling:
         with patch("code_review_agent.interactive.commands.pr_read.console") as mock_con:
             _pr_review([], session_with_token)
 
-        output = str(mock_con.print.call_args).lower()
-        assert "usage" in output
+        assert "usage" in _printed_text(mock_con)
 
 
 # ---------------------------------------------------------------------------

@@ -145,7 +145,7 @@ class Orchestrator:
         selected_names = agent_names or default_agents_for_tier(self._settings.token_tier)
         agents = self._build_agents(selected_names, review_input)
 
-        logger.info(
+        logger.debug(
             "running agents",
             selected=[a.name for a in agents],
             total_registered=len(AGENT_REGISTRY),
@@ -158,7 +158,7 @@ class Orchestrator:
 
         for round_num in range(1, max_rounds + 1):
             if self._aborted.is_set():
-                logger.info("review aborted, skipping remaining rounds")
+                logger.debug("review aborted, skipping remaining rounds")
                 break
 
             previous = all_findings if round_num > 1 else None
@@ -198,7 +198,7 @@ class Orchestrator:
 
             all_findings.extend(new_findings)
 
-            logger.info(
+            logger.debug(
                 "deepening round complete",
                 round=round_num,
                 new_findings=len(new_findings),
@@ -214,7 +214,7 @@ class Orchestrator:
 
             # Convergence: stop if no new findings this round
             if round_num > 1 and len(new_findings) == 0:
-                logger.info(
+                logger.debug(
                     "deepening converged, no new findings",
                     round=round_num,
                 )
@@ -230,7 +230,7 @@ class Orchestrator:
 
         if self._aborted.is_set() or len(successful_results) <= 1:
             if self._aborted.is_set():
-                logger.info("review aborted, skipping synthesis")
+                logger.debug("review aborted, skipping synthesis")
             report = self._build_report_without_synthesis(
                 review_input=review_input,
                 agent_results=all_agent_results,
@@ -258,11 +258,12 @@ class Orchestrator:
                     validation_result,
                 )
                 self._emit(ReviewEvent.VALIDATION_COMPLETED, "validation")
-                logger.info(
+                logger.debug(
                     "validation complete",
                     false_positives_removed=validation_result.false_positive_count,
                 )
             except Exception:
+                self._emit(ReviewEvent.VALIDATION_COMPLETED, "validation")
                 logger.exception("validation failed, returning unfiltered results")
 
         validated_risk = self._validate_risk_level(
@@ -382,7 +383,7 @@ class Orchestrator:
         for name in agent_names:
             agent_cls = AGENT_REGISTRY.get(name)
             if agent_cls is None:
-                logger.warning(
+                logger.debug(
                     "unknown agent name, skipping",
                     agent=name,
                     available=list(AGENT_REGISTRY.keys()),
@@ -390,7 +391,7 @@ class Orchestrator:
                 continue
             file_patterns: list[str] | None = getattr(agent_cls, "_file_patterns", None)
             if not matches_diff_files(file_patterns, filenames):
-                logger.info(
+                logger.debug(
                     "skipping agent, no matching files",
                     agent=name,
                     patterns=file_patterns,
@@ -415,7 +416,7 @@ class Orchestrator:
             result = successful_results[0]
             overall_summary = result.summary
             max_severity = _get_max_severity(list(result.findings))
-            logger.info(
+            logger.debug(
                 "skipping synthesis, single agent result",
                 agent=result.agent_name,
                 risk_level=max_severity,
@@ -423,7 +424,7 @@ class Orchestrator:
         else:
             overall_summary = "No agents completed successfully."
             max_severity = Severity.LOW
-            logger.warning("skipping synthesis, no successful agent results")
+            logger.debug("skipping synthesis, no successful agent results")
 
         return ReviewReport(
             pr_url=review_input.pr_url,
@@ -493,7 +494,7 @@ class Orchestrator:
                     )
                 )
 
-        logger.info(
+        logger.debug(
             "truncation complete",
             full_files=len(included_full),
             truncated_files=len(included_summary),
@@ -739,7 +740,7 @@ class Orchestrator:
 
             all_validated.extend(resolved)
 
-            logger.info(
+            logger.debug(
                 "validation round complete",
                 round=round_num,
                 confirmed=sum(1 for vf in resolved if vf.verdict == ValidationVerdict.CONFIRMED),
@@ -852,7 +853,7 @@ class Orchestrator:
         # Rule 1: no findings = LOW
         if not all_findings:
             if proposed_risk != Severity.LOW:
-                logger.warning(
+                logger.debug(
                     "overriding risk level, no findings",
                     proposed=proposed_risk.value,
                     validated=Severity.LOW.value,
@@ -872,7 +873,7 @@ class Orchestrator:
 
         # Rule 3: override
         allowed_risk = _SEVERITY_ORDER[allowed_index]
-        logger.warning(
+        logger.debug(
             "overriding hallucinated risk level",
             proposed=proposed_risk.value,
             max_finding_severity=max_severity.value,

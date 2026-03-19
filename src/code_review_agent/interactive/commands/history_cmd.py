@@ -8,6 +8,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from code_review_agent.error_guidance import classify_exception
+from code_review_agent.errors import UserError, print_error
 from code_review_agent.storage import ReviewStorage
 from code_review_agent.theme import SEVERITY_STYLES
 
@@ -66,18 +68,23 @@ def cmd_history(args: list[str], session: SessionState) -> None:
             pass
 
         console.print(
-            f"[red]Unknown history subcommand: {sub}[/red]\n"
-            "  list [--repo R] [--days N] [--limit N]  List past reviews\n"
-            "  show <id>                                Show full report\n"
-            "  trends [--repo R] [--days N]             Aggregated trends\n"
-            "  export [--repo R] [--format json]         Export data"
+            f"[red]Unknown history subcommand:[/red] [bold]{sub}[/bold]\n"
+            "\n"
+            "  [bold cyan]list[/bold cyan]   [dim][--repo R] [--days N]"
+            " [--limit N][/dim]  List past reviews\n"
+            "  [bold cyan]show[/bold cyan]   [dim]<id>[/dim]"
+            "                              Show full report\n"
+            "  [bold cyan]trends[/bold cyan] [dim][--repo R] [--days N][/dim]"
+            "             Aggregated trends\n"
+            "  [bold cyan]export[/bold cyan] [dim][--repo R]"
+            " [--format json][/dim]         Export data"
         )
         return
 
     try:
         handler(sub_args, session)
     except Exception as exc:
-        console.print(f"[red]History error: {exc}[/red]")
+        print_error(classify_exception(exc, context="History"), console=console)
 
 
 def _parse_flag(args: list[str], flag: str) -> str | None:
@@ -139,39 +146,69 @@ def _history_list(args: list[str], session: SessionState) -> None:
 def _history_show(args: list[str], session: SessionState) -> None:
     """Show full details for a specific review."""
     if not args:
-        console.print("[red]Usage: history show <id>[/red]")
+        print_error(
+            UserError(
+                detail="Missing review ID",
+                solution="Usage: history show <id>",
+            ),
+            console=console,
+        )
         return
 
     try:
         review_id = int(args[0])
     except ValueError:
-        console.print(f"[red]Invalid review ID: {args[0]}[/red]")
+        print_error(
+            UserError(
+                detail=f"Invalid review ID: {args[0]}",
+                reason="Review ID must be an integer.",
+                solution="Use 'history list' to see available review IDs.",
+            ),
+            console=console,
+        )
         return
 
     storage = _get_storage(session)
     review = storage.get_review(review_id)
 
     if review is None:
-        console.print(f"[red]Review #{review_id} not found.[/red]")
+        print_error(
+            UserError(
+                detail=f"Review #{review_id} not found",
+                reason="No review with this ID exists in the history database.",
+                solution="Use 'history list' to see available reviews.",
+            ),
+            console=console,
+        )
         return
+
+    risk = str(review["risk_level"])
+    risk_style = SEVERITY_STYLES.get(risk, "")
+    risk_display = f"[{risk_style}]{risk}[/{risk_style}]" if risk_style else risk
 
     lines = [
         f"[bold]Review #{review['id']}[/bold]",
-        f"  Date:     {review['reviewed_at']}",
-        f"  Repo:     {review.get('repo') or 'local'}",
-        f"  PR:       #{review['pr_number']}" if review.get("pr_number") else "",
-        f"  Risk:     {review['risk_level']}",
-        f"  Findings: {review['total_findings']}",
-        f"    Critical: {review['critical_count']}  "
-        f"High: {review['high_count']}  "
-        f"Medium: {review['medium_count']}  "
-        f"Low: {review['low_count']}",
-        f"  Tokens:   {_fmt_tokens(review['total_tokens'])}",
-        f"  Cost:     {_fmt_cost(review.get('estimated_cost_usd'))}",
-        f"  Agents:   {review.get('agents_used', '')}",
+        "",
+        f"  [bold]Date:[/bold]      {review['reviewed_at']}",
+        f"  [bold]Repo:[/bold]      {review.get('repo') or 'local'}",
     ]
+    if review.get("pr_number"):
+        lines.append(f"  [bold]PR:[/bold]        #{review['pr_number']}")
+    lines.extend(
+        [
+            f"  [bold]Risk:[/bold]      {risk_display}",
+            f"  [bold]Findings:[/bold]  {review['total_findings']}",
+            f"              [dim]Critical:[/dim] {review['critical_count']}  "
+            f"[dim]High:[/dim] {review['high_count']}  "
+            f"[dim]Medium:[/dim] {review['medium_count']}  "
+            f"[dim]Low:[/dim] {review['low_count']}",
+            f"  [bold]Tokens:[/bold]    {_fmt_tokens(review['total_tokens'])}",
+            f"  [bold]Cost:[/bold]      {_fmt_cost(review.get('estimated_cost_usd'))}",
+            f"  [bold]Agents:[/bold]    {review.get('agents_used', '')}",
+        ]
+    )
     if review.get("pr_url"):
-        lines.append(f"  URL:      {review['pr_url']}")
+        lines.append(f"  [bold]URL:[/bold]       {review['pr_url']}")
 
     # Add summary
     summary = review.get("overall_summary", "")

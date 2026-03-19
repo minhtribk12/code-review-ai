@@ -18,6 +18,7 @@ from pydantic import SecretStr
 
 from code_review_agent.agents import AGENT_REGISTRY
 from code_review_agent.config import Settings
+from code_review_agent.interactive.config_categories import CONFIG_CATEGORIES
 from code_review_agent.providers import get_provider
 from code_review_agent.theme import theme
 
@@ -61,90 +62,8 @@ def _get_model_choices(session_or_overrides: dict[str, str], settings: Settings)
         return []
 
 
-# Config keys grouped by category.
-_CATEGORIES: list[tuple[str, list[str]]] = [
-    (
-        "LLM",
-        [
-            "llm_provider",
-            "llm_model",
-            "llm_base_url",
-            "llm_temperature",
-            "llm_top_p",
-            "llm_max_tokens",
-            "llm_api_key",
-            "request_timeout_seconds",
-            "test_connection_on_start",
-        ],
-    ),
-    (
-        "Token Budget",
-        [
-            "token_tier",
-            "max_prompt_tokens",
-            "max_tokens_per_review",
-            "llm_input_price_per_m",
-            "llm_output_price_per_m",
-            "rate_limit_rpm",
-        ],
-    ),
-    (
-        "Review",
-        [
-            "dedup_strategy",
-            "max_review_seconds",
-            "max_concurrent_agents",
-            "default_agents",
-        ],
-    ),
-    (
-        "Iterative Review",
-        [
-            "max_deepening_rounds",
-            "is_validation_enabled",
-            "max_validation_rounds",
-        ],
-    ),
-    (
-        "GitHub",
-        [
-            "github_token",
-            "max_pr_files",
-            "github_rate_limit_warn_threshold",
-            "pr_stale_days",
-        ],
-    ),
-    (
-        "Custom Agents",
-        [
-            "custom_agents_dir",
-        ],
-    ),
-    (
-        "History & Usage",
-        [
-            "history_db_path",
-            "auto_save_history",
-            "usage_window",
-        ],
-    ),
-    (
-        "Interactive",
-        [
-            "interactive_history_file",
-            "interactive_prompt",
-            "interactive_vi_mode",
-            "interactive_autocomplete_cache_ttl",
-            "watch_debounce_seconds",
-        ],
-    ),
-    (
-        "Logging",
-        [
-            "log_level",
-        ],
-    ),
-]
+# Alias for local readability -- actual data lives in config_categories.py.
+_CATEGORIES = CONFIG_CATEGORIES
 
 
 # ---------------------------------------------------------------------------
@@ -200,10 +119,15 @@ def _is_secret_field(key: str) -> bool:
 def _format_display_value(key: str, value: str) -> str:
     """Format a value for display, masking secrets."""
     if _is_secret_field(key) and value and value != "None":
-        if len(value) <= 8:
-            return "****"
-        return f"{value[:4]}****{value[-4:]}"
+        return _mask_secret_str(value)
     return value
+
+
+def _mask_secret_str(raw: str) -> str:
+    """Mask a secret string for display (shared logic with config_cmd._mask_secret)."""
+    if len(raw) <= 8:
+        return "****"
+    return f"{raw[:4]}****{raw[-4:]}"
 
 
 def _validate_field(key: str, raw_value: str) -> tuple[bool, str]:
@@ -235,7 +159,9 @@ def _validate_field(key: str, raw_value: str) -> tuple[bool, str]:
         if info is not None and info.metadata:
             for m in info.metadata:
                 if hasattr(m, "ge") and parsed < m.ge:
-                    return False, f"Must be >= {m.ge}, got: {raw_value}"
+                    return False, f"Must be >= {m.ge}, got: {parsed}"
+                if hasattr(m, "le") and parsed > m.le:
+                    return False, f"Must be <= {m.le}, got: {parsed}"
         return True, ""
 
     if field_type is float:
@@ -247,9 +173,9 @@ def _validate_field(key: str, raw_value: str) -> tuple[bool, str]:
         if info is not None and info.metadata:
             for m in info.metadata:
                 if hasattr(m, "ge") and parsed_f < m.ge:
-                    return False, f"Must be >= {m.ge}, got: {raw_value}"
+                    return False, f"Must be >= {m.ge}, got: {parsed_f}"
                 if hasattr(m, "le") and parsed_f > m.le:
-                    return False, f"Must be <= {m.le}, got: {raw_value}"
+                    return False, f"Must be <= {m.le}, got: {parsed_f}"
         return True, ""
 
     choices = _get_enum_choices(field_type)

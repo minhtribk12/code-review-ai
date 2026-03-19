@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 
@@ -131,7 +132,7 @@ class CharBasedEstimator:
 
     def estimate(self, text: str) -> int:
         """Return estimated token count for the given text."""
-        return -(-len(text) // self._chars_per_token)
+        return math.ceil(len(text) / self._chars_per_token)
 
 
 def resolve_prompt_budget(settings: Settings) -> int:

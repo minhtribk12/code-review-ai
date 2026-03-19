@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.panel import Panel
 
+from code_review_agent.error_guidance import classify_exception
+from code_review_agent.errors import UserError, print_error
 from code_review_agent.github_client import (
     GitHubAuthError,
     create_pr,
@@ -43,7 +45,14 @@ def pr_create(args: list[str], session: SessionState) -> None:
     """Create a pull request from the current branch."""
     owner, repo, token = _get_repo_info(session)
     if token is None:
-        console.print("[red]GITHUB_TOKEN required for pr create.[/red]")
+        print_error(
+            UserError(
+                detail="GITHUB_TOKEN required for pr create",
+                reason="Creating PRs requires GitHub API authentication.",
+                solution="Set GITHUB_TOKEN in your .env file. The token needs 'repo' scope.",
+            ),
+            console=console,
+        )
         return
 
     is_dry_run = _has_flag(args, "--dry-run")
@@ -56,7 +65,16 @@ def pr_create(args: list[str], session: SessionState) -> None:
     body = _parse_flag(args, "--body") or ""
 
     if head == base:
-        console.print(f"[red]Current branch '{head}' is the same as base '{base}'.[/red]")
+        print_error(
+            UserError(
+                detail=f"Current branch '{head}' is the same as base '{base}'",
+                reason="A PR requires different head and base branches.",
+                solution=(
+                    "Switch to a feature branch first, or use --base to specify a different base."
+                ),
+            ),
+            console=console,
+        )
         return
 
     # --fill: auto-fill title/body from commits since base
@@ -74,7 +92,13 @@ def pr_create(args: list[str], session: SessionState) -> None:
             body = "\n".join(f"- {c}" for c in commits)
 
     if title is None:
-        console.print("[red]Title required. Use --title or --fill to auto-generate.[/red]")
+        print_error(
+            UserError(
+                detail="PR title is required",
+                solution="Use --title 'My title' or --fill to auto-generate from commit messages.",
+            ),
+            console=console,
+        )
         return
 
     # Preview
@@ -109,7 +133,7 @@ def pr_create(args: list[str], session: SessionState) -> None:
             git_ops.push_branch()
             console.print(f"  [green]Pushed {head} to origin.[/green]")
         except git_ops.GitError as exc:
-            console.print(f"[red]Push failed: {exc}[/red]")
+            print_error(classify_exception(exc, context="Git push"), console=console)
             return
 
     try:
@@ -124,9 +148,13 @@ def pr_create(args: list[str], session: SessionState) -> None:
             draft=is_draft,
         )
     except GitHubAuthError:
-        console.print(
-            "[red]Permission denied. Your token may lack 'repo' scope "
-            "or you don't have push access to this repository.[/red]"
+        print_error(
+            UserError(
+                detail="Permission denied creating PR",
+                reason="Your token may lack 'repo' scope or you don't have push access.",
+                solution="Check your GITHUB_TOKEN permissions at github.com/settings/tokens.",
+            ),
+            console=console,
         )
         return
 
@@ -137,14 +165,25 @@ def pr_create(args: list[str], session: SessionState) -> None:
 def pr_merge(args: list[str], session: SessionState) -> None:
     """Merge a pull request with pre-flight checks."""
     if not args:
-        console.print(
-            "[red]Usage: pr merge <number> [--strategy merge|squash|rebase] [--dry-run][/red]"
+        print_error(
+            UserError(
+                detail="Missing PR number",
+                solution="Usage: pr merge <number> [--strategy merge|squash|rebase] [--dry-run]",
+            ),
+            console=console,
         )
         return
 
     owner, repo, token = _get_repo_info(session)
     if token is None:
-        console.print("[red]GITHUB_TOKEN required for pr merge.[/red]")
+        print_error(
+            UserError(
+                detail="GITHUB_TOKEN required for pr merge",
+                reason="Merging PRs requires GitHub API authentication.",
+                solution="Set GITHUB_TOKEN in your .env file. The token needs 'repo' scope.",
+            ),
+            console=console,
+        )
         return
 
     pr_number = _parse_pr_number(args)
@@ -152,8 +191,13 @@ def pr_merge(args: list[str], session: SessionState) -> None:
     strategy = _parse_flag(args, "--strategy") or "squash"
 
     if strategy not in ("merge", "squash", "rebase"):
-        console.print(
-            f"[red]Invalid merge strategy: {strategy}. Use merge, squash, or rebase.[/red]"
+        print_error(
+            UserError(
+                detail=f"Invalid merge strategy: {strategy}",
+                reason="GitHub supports only 'merge', 'squash', or 'rebase'.",
+                solution="Usage: pr merge <number> --strategy squash",
+            ),
+            console=console,
         )
         return
 
@@ -215,7 +259,16 @@ def pr_merge(args: list[str], session: SessionState) -> None:
             merge_method=strategy,
         )
     except GitHubAuthError:
-        console.print("[red]Permission denied. You need write access to merge PRs.[/red]")
+        print_error(
+            UserError(
+                detail="Permission denied merging PR",
+                reason="Your token lacks write access to this repository.",
+                solution=(
+                    "Check your GITHUB_TOKEN permissions. You need 'repo' scope with write access."
+                ),
+            ),
+            console=console,
+        )
         return
 
     session.pr_cache.invalidate()
@@ -225,18 +278,40 @@ def pr_merge(args: list[str], session: SessionState) -> None:
             f"  [green]Merged PR #{pr_number} ({strategy}). SHA: {result['sha'][:8]}[/green]"
         )
     else:
-        console.print(f"  [red]Merge failed: {result['message']}[/red]")
+        print_error(
+            UserError(
+                detail=f"Merge failed: {result['message']}",
+                reason="GitHub rejected the merge request.",
+                solution=(
+                    "Check for merge conflicts, branch protection rules, or required CI checks."
+                ),
+            ),
+            console=console,
+        )
 
 
 def pr_approve(args: list[str], session: SessionState) -> None:
     """Submit an APPROVE review on a pull request."""
     if not args:
-        console.print("[red]Usage: pr approve <number> [-m comment] [--dry-run][/red]")
+        print_error(
+            UserError(
+                detail="Missing PR number",
+                solution="Usage: pr approve <number> [-m comment] [--dry-run]",
+            ),
+            console=console,
+        )
         return
 
     owner, repo, token = _get_repo_info(session)
     if token is None:
-        console.print("[red]GITHUB_TOKEN required for pr approve.[/red]")
+        print_error(
+            UserError(
+                detail="GITHUB_TOKEN required for pr approve",
+                reason="Approving PRs requires GitHub API authentication.",
+                solution="Set GITHUB_TOKEN in your .env file. The token needs 'repo' scope.",
+            ),
+            console=console,
+        )
         return
 
     pr_number = _parse_pr_number(args)
@@ -269,9 +344,17 @@ def pr_approve(args: list[str], session: SessionState) -> None:
             body=comment,
         )
     except GitHubAuthError:
-        console.print(
-            "[red]Permission denied. You may not have access to review this PR, "
-            "or you cannot approve your own PR.[/red]"
+        print_error(
+            UserError(
+                detail="Permission denied",
+                reason=(
+                    "You may not have access to review this PR, or you cannot approve your own PR."
+                ),
+                solution=(
+                    "Check your GITHUB_TOKEN permissions and ensure you're not the PR author."
+                ),
+            ),
+            console=console,
         )
         return
 
@@ -282,12 +365,25 @@ def pr_approve(args: list[str], session: SessionState) -> None:
 def pr_request_changes(args: list[str], session: SessionState) -> None:
     """Submit a REQUEST_CHANGES review on a pull request."""
     if not args:
-        console.print('[red]Usage: pr request-changes <number> -m "comment" [--dry-run][/red]')
+        print_error(
+            UserError(
+                detail="Missing PR number",
+                solution='Usage: pr request-changes <number> -m "comment" [--dry-run]',
+            ),
+            console=console,
+        )
         return
 
     owner, repo, token = _get_repo_info(session)
     if token is None:
-        console.print("[red]GITHUB_TOKEN required for pr request-changes.[/red]")
+        print_error(
+            UserError(
+                detail="GITHUB_TOKEN required for pr request-changes",
+                reason="Requesting changes requires GitHub API authentication.",
+                solution="Set GITHUB_TOKEN in your .env file. The token needs 'repo' scope.",
+            ),
+            console=console,
+        )
         return
 
     pr_number = _parse_pr_number(args)
@@ -295,7 +391,13 @@ def pr_request_changes(args: list[str], session: SessionState) -> None:
     comment = _parse_flag(args, "-m")
 
     if not comment:
-        console.print('[red]Comment is mandatory for request-changes. Use -m "comment".[/red]')
+        print_error(
+            UserError(
+                detail="Comment is mandatory for request-changes",
+                solution='Usage: pr request-changes <number> -m "reason for changes"',
+            ),
+            console=console,
+        )
         return
 
     detail = get_pr_detail(owner=owner, repo=repo, pr_number=pr_number, token=token)
@@ -323,7 +425,14 @@ def pr_request_changes(args: list[str], session: SessionState) -> None:
             body=comment,
         )
     except GitHubAuthError:
-        console.print("[red]Permission denied. You may not have access to review this PR.[/red]")
+        print_error(
+            UserError(
+                detail="Permission denied",
+                reason="You may not have access to review this PR.",
+                solution="Check your GITHUB_TOKEN permissions.",
+            ),
+            console=console,
+        )
         return
 
     session.pr_cache.invalidate()

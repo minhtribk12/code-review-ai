@@ -8,14 +8,19 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.table import Table
 
-from code_review_agent.agents import AGENT_REGISTRY, ALL_AGENT_NAMES, CUSTOM_AGENT_NAMES
+from code_review_agent.agents import (
+    AGENT_REGISTRY,
+    ALL_AGENT_NAMES,
+    CUSTOM_AGENT_NAMES,
+    DB_AGENT_NAMES,
+)
 
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
 
 console = Console()
 
-_VERSION = "0.1.5"
+_VERSION = __import__("code_review_agent").__version__
 
 # Command registry: (name, description) grouped by category.
 COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
@@ -106,7 +111,8 @@ COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
     ],
     "Meta": [
         ("help [command|group]", "Show help"),
-        ("agents", "List available review agents"),
+        ("agents", "Interactive agent browser (view, edit, create, delete)"),
+        ("agents list", "List available review agents (table view)"),
         ("Ctrl+A", "Quick agent selector (persisted to database)"),
         ("Ctrl+P", "Quick provider selector (persisted to database)"),
         ("Ctrl+O", "Quick repo selector (interactive picker)"),
@@ -157,18 +163,45 @@ def _print_group(name: str, commands: list[tuple[str, str]]) -> None:
 
 
 def cmd_agents(args: list[str], session: SessionState) -> None:
-    """List available review agents."""
+    """Launch agent browser or list agents."""
+    if args and args[0] in ("list", "ls"):
+        return _agents_table()
+
+    if not args:
+        from code_review_agent.interactive.commands.agent_browser import run_agent_browser
+
+        return run_agent_browser(session)
+
+    from code_review_agent.errors import UserError, print_error
+
+    print_error(
+        UserError(
+            detail=f"Unknown agents argument: {args[0]}",
+            solution="Usage: agents [list]. Run 'agents' for the interactive browser.",
+        ),
+        console=console,
+    )
+
+
+def _agents_table() -> None:
+    """Print agents as a Rich table (non-interactive)."""
     table = Table(title="Available Agents", show_lines=False)
     table.add_column("Name", style="bold")
     table.add_column("Type", style="dim")
     table.add_column("Pri", justify="right")
     table.add_column("Description")
     for name in ALL_AGENT_NAMES:
+        is_db = name in DB_AGENT_NAMES
         is_custom = name in CUSTOM_AGENT_NAMES
         agent_cls = AGENT_REGISTRY.get(name)
-        label = "[custom]" if is_custom else "[built-in]"
+        if is_db:
+            label = "[db]"
+        elif is_custom:
+            label = "[custom]"
+        else:
+            label = "[built-in]"
         priority = str(getattr(agent_cls, "priority", "?"))
-        description = getattr(agent_cls, "_custom_description", "") if is_custom else ""
+        description = getattr(agent_cls, "_custom_description", "") if is_custom or is_db else ""
         if not description:
             description = f"Specialized {name} reviewer"
         table.add_row(name, label, priority, description)

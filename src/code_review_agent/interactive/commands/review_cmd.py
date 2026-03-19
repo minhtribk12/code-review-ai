@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 
 from code_review_agent.cancel_prompt import run_with_cancel_support
+from code_review_agent.error_guidance import classify_exception
+from code_review_agent.errors import UserError, print_error
 from code_review_agent.interactive import git_ops
 from code_review_agent.llm_client import LLMClient
 from code_review_agent.main import _parse_unified_diff
@@ -109,9 +111,16 @@ def _run_review_on_input(
 
     if background:
         if session.background_review is not None and session.background_review.is_running:
-            console.print(
-                "[red]A review is already running. "
-                "Wait for it to finish or Ctrl+C to cancel.[/red]"
+            print_error(
+                UserError(
+                    detail="A review is already running",
+                    reason="Only one background review can run at a time.",
+                    solution=(
+                        "Wait for the current review to finish, "
+                        "or press Ctrl+C for cancel options."
+                    ),
+                ),
+                console=console,
             )
             return
 
@@ -182,7 +191,7 @@ def _run_review_on_input(
     except KeyboardInterrupt:
         console.print("[bold]Review cancelled.[/bold]")
     except Exception as exc:
-        console.print(f"[red]Review failed: {exc}[/red]")
+        print_error(classify_exception(exc, context="Review"), console=console)
 
 
 def _build_review_label(positional: list[str]) -> str:
@@ -239,7 +248,7 @@ def _resolve_diff(positional: list[str]) -> str | None:
     try:
         return git_ops.diff(file_path=target)
     except git_ops.GitError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(classify_exception(exc, context="Git diff"), console=console)
         return None
 
 

@@ -11,20 +11,41 @@ cra interactive
 ```
 
 ```
-  code-review-ai v0.1.0
-  Tab autocomplete | Ctrl+A agents | Ctrl+P provider | Ctrl+O repo | Ctrl+L graph | Ctrl+D exit
+  Code Review AI v0.1.6
+  Multi-agent code review powered by LLM.
+  Analyzes security, performance, style, and test coverage.
+
+  ────────────────────────────────────────────────────────────────────────
+  Quick start:
+
+    review                    Review working tree changes
+    review --diff <file>      Review a local diff or patch file
+    repo select <owner/repo>  Set the active GitHub repository
+    pr list                   List open pull requests
+    pr review <number>        Review a PR (fetches diff from GitHub)
+
+  Tools:
+
+    findings                  Browse, triage, and post findings
+    config edit               Open the interactive config editor
+    help                      Show all available commands
+
+  ────────────────────────────────────────────────────────────────────────
+  Tab autocomplete  Ctrl+A agents  Ctrl+P provider  Ctrl+O repo  Ctrl+L graph  Ctrl+D exit
 
 cra> _
-------------------------------------------------------------------------
+────────────────────────────────────────────────────────────────────────
  Branch: main | Repo: acme/app:local | Reviews: 0 | Tokens: 0 | Tier: free
 ```
 
 **Features:**
-- Tab completion for all commands and sub-commands
-- Persistent command history (saved to `~/.cra_history`)
-- Status toolbar showing branch, repo, review count, tokens, tier, and cost
-- Vi keybinding mode (set `INTERACTIVE_VI_MODE=true`)
-- Shell escape with `!` prefix
+- **Tab completion** for all commands and sub-commands
+- **Persistent command history** (saved to `~/.cra_history`)
+- **Status toolbar** showing branch, repo, review count, tokens, tier, and cost
+- **Keyboard shortcuts** for quick access to agents, providers, repos, and git graph
+- **Background reviews** -- prompt stays active while review runs
+- **Vi keybinding mode** (set `INTERACTIVE_VI_MODE=true`)
+- **Shell escape** with `!` prefix
 
 ### First Launch
 
@@ -69,6 +90,39 @@ Once at least one provider is configured, the panel shows:
 | `Tab` | Autocomplete commands and arguments |
 | `Ctrl+D` | Exit the REPL |
 | `!<cmd>` | Run a shell command |
+
+### Structured Error Messages
+
+All errors display a consistent three-part structure:
+
+```
++--- Error ------------------------------------------------+
+| LLM API authentication failed                            |
+|                                                          |
+|   Reason: The API key is invalid, expired, or not set.   |
+|                                                          |
+|   Fix:    Check your API key with 'config get            |
+|           llm_api_key'. Set it with 'config set          |
+|           llm_api_key <key>' or in your .env file.       |
++----------------------------------------------------------+
+```
+
+- **Detail** (red) -- what happened
+- **Reason** (dim) -- why it happened
+- **Fix** (highlighted) -- actionable steps to resolve it
+
+### Connection Testing
+
+On startup (and after changing LLM provider/model), a quick connection
+test verifies the LLM is reachable:
+
+```
+  OK LLM connection: Connected to nvidia/nemotron-3-super-120b-a12b
+```
+
+If the test fails, the provider or model is marked as `(not working)` and
+you are offered the option to remove or switch. Connection health is
+persisted in the database and shown in the provider browser.
 
 ---
 
@@ -220,10 +274,25 @@ cra> review staged --agents security --format json
 3. If neither, auto-stages all changed files, reviews the staged diff, then
    unstages -- so you always get a review without manual staging
 
+**Background review:** In interactive mode, reviews run in the background.
+The prompt stays active so you can run read-only commands (`status`, `diff`,
+`log`, `config`, etc.) while the review runs. Write commands are queued
+and executed after the review completes.
+
+**Progress display:** The status toolbar shows live review progress:
+
+```
+  security         >> running..   3.2s
+  performance      OK done        2.1s
+  style               waiting
+  test_coverage    >> running.    1.8s
+```
+
 **After review:**
 - Results are auto-saved to SQLite history
-- Token usage is tracked in the session
-- `session.last_review_report` is set (used by `findings` command)
+- Token usage is tracked in the session and toolbar
+- `findings` command opens the navigator for the latest review
+- Queued commands are offered for execution
 
 ---
 
@@ -496,12 +565,14 @@ Full factory reset with confirmation. Clears all config overrides, health marks,
 cra> config factory-reset
 
   Factory Reset
-  This will clear:
-    - All config overrides
-    - All health marks (not working status)
-    - All review history and findings
 
-  Preserved: API keys for all providers
+  Will clear:
+    x All config overrides
+    x All health marks (not working status)
+    x All review history and findings
+
+  Preserved:
+    > API keys for all providers
 
   Type 'reset' to confirm:
 ```

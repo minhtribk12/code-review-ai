@@ -199,7 +199,7 @@ class SessionState:
             for key, raw_val in all_db.items():
                 if key.endswith("_api_key") and key not in SettingsCls.model_fields and raw_val:
                     os.environ[key.upper()] = raw_val
-        except Exception:
+        except (OSError, Exception):
             logger.debug("failed to inject custom API keys from DB", exc_info=True)
 
     @property
@@ -243,7 +243,7 @@ class SessionState:
                     adapter = TypeAdapter(hint)
                     validated_updates[key] = adapter.validate_python(raw_val)
                 except Exception:
-                    logger.warning(
+                    logger.debug(
                         "skipping invalid config override",
                         key=key,
                         value=raw_val,
@@ -261,7 +261,7 @@ class SessionState:
             self._effective_settings_cache = rebuilt
             return rebuilt
         except Exception as exc:
-            logger.warning(
+            logger.debug(
                 "failed to apply config overrides",
                 error=str(exc),
             )

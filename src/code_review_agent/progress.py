@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from typing import Protocol
 
@@ -67,6 +68,7 @@ class ProgressDisplay:
 
         self._agent_names = agent_names
         self._console = Console()
+        self._lock = threading.Lock()
         self._states: dict[str, tuple[str, str, float | None]] = {}
         self._start_times: dict[str, float] = {}
         self._frame = 0
@@ -97,12 +99,13 @@ class ProgressDisplay:
         """Mark the review as cancelled."""
         self._cancelled = True
         # Mark all running agents as cancelled
-        for name in list(self._states):
-            state, _color, elapsed = self._states[name]
-            if state == "running":
-                started = self._start_times.get(name)
-                cancel_elapsed = time.monotonic() - started if started else elapsed
-                self._states[name] = ("cancelled", "magenta", cancel_elapsed)
+        with self._lock:
+            for name in list(self._states):
+                state, _color, elapsed = self._states[name]
+                if state == "running":
+                    started = self._start_times.get(name)
+                    cancel_elapsed = time.monotonic() - started if started else elapsed
+                    self._states[name] = ("cancelled", "magenta", cancel_elapsed)
 
     def start(self) -> None:
         """Start the live display with auto-refresh."""
@@ -151,33 +154,39 @@ class ProgressDisplay:
 
     def __call__(self, event: ReviewEvent, agent_name: str, elapsed: float | None = None) -> None:
         """Handle a review event and update the display."""
-        if event == ReviewEvent.AGENT_STARTED:
-            self._states[agent_name] = ("running", "blue", None)
-            self._start_times[agent_name] = time.monotonic()
-        elif event == ReviewEvent.AGENT_COMPLETED:
-            self._states[agent_name] = ("done", "green", elapsed)
-            self._start_times.pop(agent_name, None)
-        elif event == ReviewEvent.AGENT_FAILED:
-            self._states[agent_name] = ("failed", "red", elapsed)
-            self._start_times.pop(agent_name, None)
-        elif event == ReviewEvent.SYNTHESIS_STARTED:
-            self._states["synthesis"] = ("running", "blue", None)
-            self._start_times["synthesis"] = time.monotonic()
-        elif event == ReviewEvent.SYNTHESIS_COMPLETED:
-            self._states["synthesis"] = ("done", "green", elapsed)
-            self._start_times.pop("synthesis", None)
-        elif event == ReviewEvent.VALIDATION_STARTED:
-            self._states["validation"] = ("running", "blue", None)
-            self._start_times["validation"] = time.monotonic()
-        elif event == ReviewEvent.VALIDATION_COMPLETED:
-            self._states["validation"] = ("done", "green", elapsed)
-            self._start_times.pop("validation", None)
+        with self._lock:
+            if event == ReviewEvent.AGENT_STARTED:
+                self._states[agent_name] = ("running", "blue", None)
+                self._start_times[agent_name] = time.monotonic()
+            elif event == ReviewEvent.AGENT_COMPLETED:
+                self._states[agent_name] = ("done", "green", elapsed)
+                self._start_times.pop(agent_name, None)
+            elif event == ReviewEvent.AGENT_FAILED:
+                self._states[agent_name] = ("failed", "red", elapsed)
+                self._start_times.pop(agent_name, None)
+            elif event == ReviewEvent.SYNTHESIS_STARTED:
+                self._states["synthesis"] = ("running", "blue", None)
+                self._start_times["synthesis"] = time.monotonic()
+            elif event == ReviewEvent.SYNTHESIS_COMPLETED:
+                self._states["synthesis"] = ("done", "green", elapsed)
+                self._start_times.pop("synthesis", None)
+            elif event == ReviewEvent.VALIDATION_STARTED:
+                self._states["validation"] = ("running", "blue", None)
+                self._start_times["validation"] = time.monotonic()
+            elif event == ReviewEvent.VALIDATION_COMPLETED:
+                self._states["validation"] = ("done", "green", elapsed)
+                self._start_times.pop("validation", None)
 
         self._live.update(self._build_table())
 
     def _build_table(self) -> Table:
         """Build the current state table for the live display."""
         self._frame += 1
+
+        # Snapshot state under lock to avoid races with the callback thread
+        with self._lock:
+            states_snapshot = dict(self._states)
+            start_times_snapshot = dict(self._start_times)
 
         table = Table(
             show_header=False,
@@ -190,11 +199,11 @@ class ProgressDisplay:
         table.add_column("Time", width=10, justify="right")
 
         for name in self._agent_names:
-            self._add_row(table, name)
+            self._add_row(table, name, states_snapshot, start_times_snapshot)
 
         for extra in ("synthesis", "validation"):
-            if extra in self._states:
-                self._add_row(table, extra)
+            if extra in states_snapshot:
+                self._add_row(table, extra, states_snapshot, start_times_snapshot)
 
         # Usage stats row
         usage = self._get_cached_usage()
@@ -212,7 +221,7 @@ class ProgressDisplay:
             )
 
         # Show cancel hint if any agent is still running
-        has_running = any(s[0] == "running" for s in self._states.values())
+        has_running = any(s[0] == "running" for s in states_snapshot.values())
         if has_running and not self._cancelled:
             table.add_row("", "[dim]Press Ctrl+C for options[/dim]", "")
 
@@ -238,13 +247,21 @@ class ProgressDisplay:
         except Exception:
             return None
 
-    def _add_row(self, table: Table, name: str) -> None:
+    def _add_row(
+        self,
+        table: Table,
+        name: str,
+        states: dict[str, tuple[str, str, float | None]] | None = None,
+        start_times: dict[str, float] | None = None,
+    ) -> None:
         """Add a single agent row to the table."""
-        state, color, elapsed = self._states.get(name, ("waiting", "dim", None))
+        src = states if states is not None else self._states
+        starts = start_times if start_times is not None else self._start_times
+        state, color, elapsed = src.get(name, ("waiting", "dim", None))
         status_text = self._format_status(state, color)
 
         if state == "running":
-            started = self._start_times.get(name)
+            started = starts.get(name)
             if started is not None:
                 running_secs = time.monotonic() - started
                 time_text = f"[{color}]{running_secs:.1f}s[/{color}]"
@@ -258,17 +275,17 @@ class ProgressDisplay:
         table.add_row(f"  {name}", status_text, time_text)
 
     def _format_status(self, state: str, color: str) -> str:
-        """Format a status string with animated dots for running state."""
+        """Format a status string with icons and animated dots."""
         if state == "running":
             dots = "." * ((self._frame % 3) + 1)
-            return f"[{color}]running{dots:<3}[/{color}]"
+            return f"[{color}]>> running{dots:<3}[/{color}]"
         if state == "done":
-            return f"[{color}]done[/{color}]"
+            return f"[{color}]OK done[/{color}]"
         if state == "failed":
-            return f"[{color}]failed[/{color}]"
+            return f"[{color}]!! failed[/{color}]"
         if state == "cancelled":
-            return f"[{color}]cancelled[/{color}]"
-        return f"[{color}]waiting[/{color}]"
+            return f"[{color}]-- cancelled[/{color}]"
+        return f"[{color}]   waiting[/{color}]"
 
 
 def is_interactive() -> bool:

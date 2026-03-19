@@ -107,7 +107,7 @@ def _load_yaml_agents(directory: Path) -> dict[str, type[BaseAgent]]:
         try:
             spec = _parse_yaml_file(yaml_file)
         except Exception:
-            logger.warning(
+            logger.debug(
                 "skipping invalid agent YAML",
                 file=str(yaml_file),
             )
@@ -124,7 +124,7 @@ def _load_yaml_agents(directory: Path) -> dict[str, type[BaseAgent]]:
         try:
             agent_cls = _create_agent_class(spec)
         except Exception:
-            logger.warning(
+            logger.debug(
                 "failed to create agent class from YAML",
                 agent=spec.name,
                 file=str(yaml_file),
@@ -132,7 +132,7 @@ def _load_yaml_agents(directory: Path) -> dict[str, type[BaseAgent]]:
             continue
 
         agents[spec.name] = agent_cls
-        logger.info(
+        logger.debug(
             "loaded custom agent",
             agent=spec.name,
             file=str(yaml_file),
@@ -166,7 +166,7 @@ def _create_agent_class(spec: CustomAgentSpec) -> type[BaseAgent]:
     is_override = spec.name in BaseAgent._registered_names
     if is_override:
         BaseAgent._registered_names.discard(spec.name)
-        logger.warning(
+        logger.debug(
             "overriding existing agent",
             agent=spec.name,
         )

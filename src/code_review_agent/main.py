@@ -7,6 +7,8 @@ import typer
 
 from code_review_agent.agents import AGENT_REGISTRY, register_custom_agents
 from code_review_agent.config import Settings
+from code_review_agent.error_guidance import classify_exception
+from code_review_agent.errors import UserError, print_error_cli
 from code_review_agent.github_client import fetch_pr_diff, parse_pr_reference
 from code_review_agent.llm_client import LLMClient
 from code_review_agent.models import DiffFile, DiffStatus, OutputFormat, ReviewInput
@@ -22,7 +24,7 @@ app = typer.Typer(
     help="Multi-agent code review powered by Nemotron 3 Super",
 )
 
-_VERSION = "0.1.5"
+_VERSION = __import__("code_review_agent").__version__
 
 
 def _version_callback(value: bool) -> None:
@@ -150,10 +152,25 @@ def review(
 ) -> None:
     """Run multi-agent code review on a GitHub PR or local diff."""
     if pr is None and diff is None:
-        typer.echo("Error: provide either --pr or --diff", err=True)
+        print_error_cli(
+            UserError(
+                detail="No input provided",
+                reason="Neither --pr nor --diff was specified.",
+                solution=(
+                    "Provide --pr <owner/repo#N> for a GitHub PR, "
+                    "or --diff <path> for a local diff file."
+                ),
+            )
+        )
         raise typer.Exit(code=1)
     if pr is not None and diff is not None:
-        typer.echo("Error: provide only one of --pr or --diff, not both", err=True)
+        print_error_cli(
+            UserError(
+                detail="Conflicting inputs",
+                reason="Both --pr and --diff were specified.",
+                solution="Provide only one: --pr for GitHub PRs, or --diff for local diffs.",
+            )
+        )
         raise typer.Exit(code=1)
 
     # JSON mode auto-suppresses progress (stdout is for JSON)
@@ -212,9 +229,9 @@ def review(
             _launch_findings_navigator(report=report, settings=settings)
 
     except Exception as exc:
-        logger.error("review failed", error=str(exc))
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        logger.error("review failed", error=str(exc), exc_info=True)
+        print_error_cli(classify_exception(exc, context="Review failed"))
+        raise typer.Exit(code=1) from exc
 
 
 @app.command()
@@ -237,13 +254,22 @@ def findings(
     except SystemExit:
         raise
     except Exception as exc:
-        typer.echo(f"Error loading settings: {exc}", err=True)
+        print_error_cli(classify_exception(exc, context="Loading settings"))
         raise typer.Exit(code=1) from None
 
     storage = ReviewStorage(settings.history_db_path)
     db_rows = storage.load_findings_for_review(review_id)
     if not db_rows:
-        typer.echo(f"Error: review #{review_id} not found or has no findings", err=True)
+        print_error_cli(
+            UserError(
+                detail=f"Review #{review_id} not found or has no findings",
+                reason="The review ID does not exist in the history database.",
+                solution=(
+                    "Run a review first, then use its ID. "
+                    "Check 'history list' for available reviews."
+                ),
+            )
+        )
         raise typer.Exit(code=1)
 
     rows = _rows_from_db(db_rows)
@@ -266,7 +292,7 @@ def interactive() -> None:
     except SystemExit:
         raise
     except Exception as exc:
-        typer.echo(f"Error loading settings: {exc}", err=True)
+        print_error_cli(classify_exception(exc, context="Loading settings"))
         raise typer.Exit(code=1) from None
 
     run_repl(settings=settings)
@@ -320,9 +346,14 @@ def _parse_agent_names(agents_arg: str | None) -> list[str] | None:
     available = list(AGENT_REGISTRY.keys())
     invalid = [n for n in names if n not in AGENT_REGISTRY]
     if invalid:
-        typer.echo(
-            f"Error: unknown agent(s): {', '.join(invalid)}. Available: {', '.join(available)}",
-            err=True,
+        print_error_cli(
+            UserError(
+                detail=f"Unknown agent(s): {', '.join(invalid)}",
+                reason="These agents are not registered in the agent registry.",
+                solution=(
+                    f"Available agents: {', '.join(available)}. Use 'agents list' for details."
+                ),
+            )
         )
         raise typer.Exit(code=1)
 

@@ -16,6 +16,8 @@ from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
+from code_review_agent.error_guidance import classify_exception
+from code_review_agent.errors import UserError, print_error
 from code_review_agent.interactive.commands.config_cmd import cmd_config
 from code_review_agent.interactive.commands.findings_cmd import cmd_findings
 from code_review_agent.interactive.commands.git_read import (
@@ -86,7 +88,7 @@ _COMMANDS: dict[str, CommandHandler] = {
     "clear": cmd_clear,
 }
 
-_VERSION = "0.1.5"
+_VERSION = __import__("code_review_agent").__version__
 
 
 def _get_toolbar(session: SessionState) -> HTML:
@@ -201,37 +203,55 @@ def _format_token_count(count: int) -> str:
 
 def _print_welcome() -> None:
     """Print a friendly welcome banner with getting-started guidance."""
+    term_width = shutil.get_terminal_size((80, 24)).columns
+    rule = "\u2500" * min(term_width, 72)
+
     console.print()
     console.print(f"  [bold]Code Review AI[/bold] v{_VERSION}")
-    console.print("  Multi-agent code review powered by LLM. I can review your code")
-    console.print("  for security, performance, style, and test coverage issues.")
+    console.print(
+        "  Multi-agent code review powered by LLM.\n"
+        "  Analyzes [bold]security[/bold], [bold]performance[/bold],"
+        " [bold]style[/bold], and [bold]test coverage[/bold]."
+    )
     console.print()
-    console.print("  [bold]Getting started:[/bold]")
+    console.print(f"  [dim]{rule}[/dim]")
+    console.print("  [bold]Quick start:[/bold]")
     console.print()
     console.print(
-        "    [bold cyan]review --diff <file>[/bold cyan]       Review a local diff or patch file"
+        "    [bold cyan]review[/bold cyan]                    Review working tree changes"
+    )
+    console.print(
+        "    [bold cyan]review --diff <file>[/bold cyan]      Review a local diff or patch file"
     )
     console.print(
         "    [bold cyan]repo select <owner/repo>[/bold cyan]  Set the active GitHub repository"
     )
-    console.print("    [bold cyan]pr list[/bold cyan]                  List open pull requests")
+    console.print("    [bold cyan]pr list[/bold cyan]                   List open pull requests")
     console.print(
-        "    [bold cyan]pr review <number>[/bold cyan]"
-        "        Review a PR (fetches diff from GitHub)"
-    )
-    console.print(
-        "    [bold cyan]findings[/bold cyan]                 Browse, triage, and post findings"
-    )
-    console.print(
-        "    [bold cyan]config edit[/bold cyan]              Open the interactive config editor"
-    )
-    console.print(
-        "    [bold cyan]help[/bold cyan]                     Show all available commands"
+        "    [bold cyan]pr review <number>[/bold cyan]        "
+        "Review a PR (fetches diff from GitHub)"
     )
     console.print()
+    console.print("  [bold]Tools:[/bold]")
+    console.print()
     console.print(
-        "  [dim]Tab autocomplete | Ctrl+A agents | Ctrl+P provider"
-        " | Ctrl+O repo | Ctrl+L graph | Ctrl+D exit[/dim]"
+        "    [bold cyan]findings[/bold cyan]                  Browse, triage, and post findings"
+    )
+    console.print(
+        "    [bold cyan]config edit[/bold cyan]               Open the interactive config editor"
+    )
+    console.print(
+        "    [bold cyan]help[/bold cyan]                      Show all available commands"
+    )
+    console.print()
+    console.print(f"  [dim]{rule}[/dim]")
+    console.print(
+        "  [dim]Tab[/dim] autocomplete  "
+        "[dim]Ctrl+A[/dim] agents  "
+        "[dim]Ctrl+P[/dim] provider  "
+        "[dim]Ctrl+O[/dim] repo  "
+        "[dim]Ctrl+L[/dim] graph  "
+        "[dim]Ctrl+D[/dim] exit"
     )
     console.print()
 
@@ -277,12 +297,12 @@ def run_connection_test(
     is_ok, message, failure_kind = test_llm_connection(settings)
 
     if is_ok:
-        console.print(f"\r  [green]LLM connection OK:[/green] {message}        ")
+        console.print(f"\r  [green]OK[/green] LLM connection: {message}        ")
         _set_health_mark(session, "model", model, is_healthy=True)
         _set_health_mark(session, "provider", provider, is_healthy=True)
         return True
 
-    console.print(f"\r  [red]LLM connection FAILED:[/red] {message}        ")
+    console.print(f"\r  [red]!![/red] LLM connection failed: {message}        ")
 
     if failure_kind == FailureKind.MODEL:
         _set_health_mark(session, "model", model, is_healthy=False)
@@ -335,9 +355,9 @@ def _revert_llm_config(
     console.print("  [dim]Re-testing previous config...[/dim]", end="")
     is_ok, message, _ = test_llm_connection(settings)
     if is_ok:
-        console.print(f"\r  [green]Previous config OK:[/green] {message}        ")
+        console.print(f"\r  [green]OK[/green] Previous config: {message}        ")
     else:
-        console.print(f"\r  [red]Previous config also failed:[/red] {message}        ")
+        console.print(f"\r  [red]!![/red] Previous config also failed: {message}        ")
 
 
 def _set_health_mark(session: SessionState, kind: str, name: str, *, is_healthy: bool) -> None:
@@ -584,14 +604,14 @@ def _confirm_exit(session: SessionState) -> bool:
 
     # Has session state worth saving -- offer save option
     console.print()
-    console.print("[bold]You have unsaved session state.[/bold]")
+    console.print("[bold]Unsaved session state:[/bold]")
     if has_repo:
-        console.print(f"  [dim]repo = {session.active_repo}[/dim]")
+        console.print(f"  [dim]repo[/dim] = {session.active_repo}")
     for key, value in session.config_overrides.items():
-        console.print(f"  [dim]{key} = {value}[/dim]")
+        console.print(f"  [dim]{key}[/dim] = {value}")
     console.print()
-    console.print("  [bold][1][/bold] Save and exit (default)")
-    console.print("  [bold][2][/bold] Exit without saving")
+    console.print("  [bold green][1][/bold green] Save and exit  [dim](default)[/dim]")
+    console.print("  [bold yellow][2][/bold yellow] Exit without saving")
     console.print("  [bold][3][/bold] Cancel")
     try:
         answer = input("> ").strip()
@@ -639,7 +659,17 @@ def _process_completed_review(
     session.background_review = None
 
     if error is not None:
-        console.print(f"[red]Review failed: {error}[/red]")
+        print_error(
+            UserError(
+                detail=f"Review failed: {error}",
+                reason="The background review encountered an error.",
+                solution=(
+                    "Check your LLM provider connection with "
+                    "'config validate'. Retry with 'review'."
+                ),
+            ),
+            console=console,
+        )
     elif report is not None:
         session.reviews_completed += 1
         session.last_review_report = report
@@ -662,10 +692,10 @@ def _process_completed_review(
         console.print()
         console.print(f"[bold]{len(queued)} queued command(s):[/bold]")
         for cmd in queued:
-            console.print(f"  [dim]{cmd}[/dim]")
+            console.print(f"  [bold cyan]>[/bold cyan] {cmd}")
         console.print()
-        console.print("  [bold][1][/bold] Run queued commands (default)")
-        console.print("  [bold][2][/bold] Discard queue")
+        console.print("  [bold green][1][/bold green] Run queued commands  [dim](default)[/dim]")
+        console.print("  [bold yellow][2][/bold yellow] Discard queue")
         try:
             answer = input("> ").strip()
         except (KeyboardInterrupt, EOFError):
@@ -677,7 +707,11 @@ def _process_completed_review(
                 try:
                     _dispatch(cmd, session)
                 except Exception as exc:
-                    console.print(f"[red]Command failed: {exc}[/red]")
+                    err = classify_exception(
+                        exc,
+                        context=f"Queued command '{cmd}'",
+                    )
+                    print_error(err, console=console)
         else:
             console.print("[dim]Queue discarded.[/dim]")
         session.command_queue.clear()
@@ -782,8 +816,7 @@ def _run_repl_loop(settings: Settings) -> None:
         session.invalidate_settings_cache()
     except Exception as exc:
         logger.debug("failed to rebuild settings after key setup", exc_info=True)
-        console.print(f"  [red]Failed to load configuration: {exc}[/red]")
-        console.print("  [dim]Check your .env file for errors.[/dim]")
+        print_error(classify_exception(exc, context="Loading configuration"), console=console)
 
     _print_welcome()
     _run_startup_connection_test(session)
@@ -794,7 +827,11 @@ def _run_repl_loop(settings: Settings) -> None:
         except KeyboardInterrupt:
             pass
         except Exception as exc:
-            console.print(f"[red]Error processing review result: {exc}[/red]")
+            err = classify_exception(
+                exc,
+                context="Processing review result",
+            )
+            print_error(err, console=console)
             logger.debug("_process_completed_review failed", exc_info=True)
 
         try:
@@ -897,7 +934,14 @@ def _dispatch(text: str, session: SessionState) -> None:
     try:
         tokens = shlex.split(text)
     except ValueError as exc:
-        console.print(f"[red]Parse error: {exc}[/red]")
+        print_error(
+            UserError(
+                detail=f"Parse error: {exc}",
+                reason="Invalid command syntax (unmatched quotes or special characters).",
+                solution="Check for unmatched quotes. Use 'help' to see command syntax.",
+            ),
+            console=console,
+        )
         return
 
     if not tokens:
@@ -915,14 +959,17 @@ def _dispatch(text: str, session: SessionState) -> None:
 
     handler = _COMMANDS.get(command)
     if handler is None:
-        console.print(
-            f"[red]Unknown command: {command}[/red]. "
-            "Type [bold cyan]help[/bold cyan] for available commands."
+        print_error(
+            UserError(
+                detail=f"Unknown command: {command}",
+                solution="Type 'help' for available commands.",
+            ),
+            console=console,
         )
         return
 
     try:
         handler(args, session)
     except Exception as exc:
-        console.print(f"[red]Error: {exc}[/red]")
+        print_error(classify_exception(exc, context=command), console=console)
         logger.debug("command failed", command=command, error=str(exc), exc_info=True)

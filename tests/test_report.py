@@ -248,7 +248,7 @@ class TestFailedAgentsRich:
     def test_header_shows_warning(self) -> None:
         report = _make_report_with_failed_agent()
         output = _capture_rich(report)
-        assert "WARNING" in output
+        assert "Warnings" in output or "Warning" in output
         assert "1 of 2 agents failed" in output
 
     def test_failed_agent_shows_error(self) -> None:

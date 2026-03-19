@@ -60,3 +60,6 @@ plan/
 
 # Interactive tests (local only, not for repo)
 interactive_tests/
+
+# Test artifacts (MagicMock file creation side effects)
+MagicMock/

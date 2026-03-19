@@ -9,6 +9,8 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
+from code_review_agent.error_guidance import classify_exception
+from code_review_agent.errors import UserError, print_error
 from code_review_agent.github_client import (
     fetch_pr_diff,
     get_pr_checks,
@@ -77,10 +79,14 @@ def cmd_pr(args: list[str], session: SessionState) -> None:
     """PR command router for read, write, and workflow operations."""
     if not args:
         console.print(
-            "[red]Usage: pr <subcommand> [args][/red]\n"
-            "  Read:     list, show, diff, checks, checkout, review\n"
-            "  Write:    create, merge, approve, request-changes\n"
-            "  Workflow: mine, assigned, stale, ready, conflicts, summary, unresolved"
+            "[bold]Usage:[/bold] pr <subcommand> [args]\n"
+            "\n"
+            "  [bold cyan]Read:[/bold cyan]      list, show, diff, checks,\n"
+            "             checkout, review\n"
+            "  [bold cyan]Write:[/bold cyan]     create, merge, approve,\n"
+            "             request-changes\n"
+            "  [bold cyan]Workflow:[/bold cyan]  mine, assigned, stale, ready,\n"
+            "             conflicts, summary, unresolved"
         )
         return
 
@@ -130,21 +136,25 @@ def cmd_pr(args: list[str], session: SessionState) -> None:
     handler = handlers.get(sub)
     if handler is None:
         console.print(
-            f"[red]Unknown pr subcommand: {sub}[/red]\n"
-            "  Read:     list, show, diff, checks, checkout, review\n"
-            "  Write:    create, merge, approve, request-changes\n"
-            "  Workflow: mine, assigned, stale, ready, conflicts, summary, unresolved"
+            f"[red]Unknown pr subcommand:[/red] [bold]{sub}[/bold]\n"
+            "\n"
+            "  [bold cyan]Read:[/bold cyan]      list, show, diff, checks,\n"
+            "             checkout, review\n"
+            "  [bold cyan]Write:[/bold cyan]     create, merge, approve,\n"
+            "             request-changes\n"
+            "  [bold cyan]Workflow:[/bold cyan]  mine, assigned, stale, ready,\n"
+            "             conflicts, summary, unresolved"
         )
         return
 
     try:
         handler(sub_args, session)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(classify_exception(exc, context="PR command"), console=console)
     except KeyboardInterrupt:
         console.print("\n[dim]Interrupted.[/dim]")
     except Exception as exc:
-        console.print(f"[red]GitHub API error: {exc}[/red]")
+        print_error(classify_exception(exc, context="GitHub API"), console=console)
 
 
 def _pr_list(args: list[str], session: SessionState) -> None:
@@ -184,7 +194,13 @@ def _pr_list(args: list[str], session: SessionState) -> None:
 def _pr_show(args: list[str], session: SessionState) -> None:
     """Show PR details."""
     if not args:
-        console.print("[red]Usage: pr show <number>[/red]")
+        print_error(
+            UserError(
+                detail="Missing PR number",
+                solution="Usage: pr show <number>",
+            ),
+            console=console,
+        )
         return
 
     owner, repo, token = _get_repo_info(session)
@@ -192,20 +208,27 @@ def _pr_show(args: list[str], session: SessionState) -> None:
 
     detail = get_pr_detail(owner=owner, repo=repo, pr_number=pr_number, token=token)
 
+    state = detail["state"]
+    state_color = "green" if state == "open" else "red" if state == "closed" else "magenta"
+
     lines = [
         f"[bold]#{detail['number']}[/bold] {detail['title']}",
-        f"Author: {detail['author']}  |  State: {detail['state']}",
-        f"Branch: {detail['head_branch']} -> {detail['base_branch']}",
-        f"Changed: {detail['changed_files']} files "
-        f"(+{detail['additions']}/-{detail['deletions']})",
+        "",
+        f"  [bold]Author:[/bold]   {detail['author']}",
+        f"  [bold]State:[/bold]    [{state_color}]{state}[/{state_color}]",
+        f"  [bold]Branch:[/bold]   {detail['head_branch']} -> {detail['base_branch']}",
+        f"  [bold]Changed:[/bold]  {detail['changed_files']} files "
+        f"([green]+{detail['additions']}[/green]/"
+        f"[red]-{detail['deletions']}[/red])",
     ]
     if detail["labels"]:
-        lines.append(f"Labels: {', '.join(detail['labels'])}")
+        labels = ", ".join(f"[cyan]{lb}[/cyan]" for lb in detail["labels"])
+        lines.append(f"  [bold]Labels:[/bold]   {labels}")
     if detail["reviewers"]:
-        lines.append(f"Reviewers: {', '.join(detail['reviewers'])}")
+        lines.append(f"  [bold]Reviewers:[/bold] {', '.join(detail['reviewers'])}")
     if detail["body"]:
         lines.append("")
-        lines.append(detail["body"][:500])
+        lines.append(f"  {detail['body'][:500]}")
 
     console.print(Panel("\n".join(lines), title="Pull Request", border_style="blue"))
 
@@ -213,7 +236,13 @@ def _pr_show(args: list[str], session: SessionState) -> None:
 def _pr_diff(args: list[str], session: SessionState) -> None:
     """Show PR diff with syntax highlighting."""
     if not args:
-        console.print("[red]Usage: pr diff <number>[/red]")
+        print_error(
+            UserError(
+                detail="Missing PR number",
+                solution="Usage: pr diff <number>",
+            ),
+            console=console,
+        )
         return
 
     owner, repo, token = _get_repo_info(session)
@@ -234,7 +263,13 @@ def _pr_diff(args: list[str], session: SessionState) -> None:
 def _pr_checks(args: list[str], session: SessionState) -> None:
     """Show CI/CD check status for a PR."""
     if not args:
-        console.print("[red]Usage: pr checks <number>[/red]")
+        print_error(
+            UserError(
+                detail="Missing PR number",
+                solution="Usage: pr checks <number>",
+            ),
+            console=console,
+        )
         return
 
     owner, repo, token = _get_repo_info(session)
@@ -271,7 +306,13 @@ def _pr_checks(args: list[str], session: SessionState) -> None:
 def _pr_checkout(args: list[str], session: SessionState) -> None:
     """Check out a PR branch locally."""
     if not args:
-        console.print("[red]Usage: pr checkout <number>[/red]")
+        print_error(
+            UserError(
+                detail="Missing PR number",
+                solution="Usage: pr checkout <number>",
+            ),
+            console=console,
+        )
         return
 
     owner, repo, token = _get_repo_info(session)
@@ -292,7 +333,17 @@ def _pr_checkout(args: list[str], session: SessionState) -> None:
                 f"  [green]Fetched and switched to PR #{pr_number} branch: {branch_name}[/green]"
             )
         except git_ops.GitError as exc:
-            console.print(f"[red]Failed to checkout PR branch: {exc}[/red]")
+            print_error(
+                UserError(
+                    detail=f"Failed to checkout PR branch: {exc}",
+                    reason="The branch could not be fetched or checked out locally.",
+                    solution=(
+                        "Ensure you have network access and the "
+                        "PR branch exists. Check 'git remote -v'."
+                    ),
+                ),
+                console=console,
+            )
 
 
 def _pr_review(args: list[str], session: SessionState) -> None:
@@ -302,7 +353,13 @@ def _pr_review(args: list[str], session: SessionState) -> None:
     No local git operations are performed -- the working tree is untouched.
     """
     if not args:
-        console.print("[red]Usage: pr review <number> [--agents <list>][/red]")
+        print_error(
+            UserError(
+                detail="Missing PR number",
+                solution="Usage: pr review <number> [--agents <list>]",
+            ),
+            console=console,
+        )
         return
 
     owner, repo, token = _get_repo_info(session)

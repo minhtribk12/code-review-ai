@@ -13,7 +13,7 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
 
@@ -24,7 +24,7 @@ logger = structlog.get_logger(__name__)
 
 _DEFAULT_DB_PATH = "~/.cra/reviews.db"
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS reviews (
@@ -102,6 +102,17 @@ CREATE TABLE IF NOT EXISTS finding_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS custom_agents (
+    name TEXT PRIMARY KEY,
+    system_prompt TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    priority INTEGER NOT NULL DEFAULT 100,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    file_patterns TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 _CREATE_INDEXES = """
@@ -167,7 +178,7 @@ class ReviewStorage:
         if "agent_results" not in tables:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(reviews)").fetchall()}
             if "prompt_tokens" not in columns:
-                logger.info("migrating review storage from v1 to v2")
+                logger.debug("migrating review storage from v1 to v2")
                 for statement in _MIGRATE_V1_TO_V2.strip().split(";"):
                     statement = statement.strip()
                     if statement:
@@ -237,7 +248,7 @@ class ReviewStorage:
                 self._migrate_review_findings(conn, dict(review))
                 migrated_count += 1
             except Exception as exc:
-                logger.warning(
+                logger.debug(
                     "skipping review during v3->v4 migration",
                     review_id=review["id"],
                     error=str(exc),
@@ -246,7 +257,7 @@ class ReviewStorage:
         conn.execute("DROP TABLE IF EXISTS finding_triage")
 
         if migrated_count:
-            logger.info(
+            logger.debug(
                 "migrated findings from v3 to v4",
                 reviews_migrated=migrated_count,
             )
@@ -369,13 +380,14 @@ class ReviewStorage:
                         idx += 1
                 backfilled += 1
             except Exception:
-                logger.debug(
+                logger.warning(
                     "failed to backfill findings for review",
                     review_id=review["id"],
+                    exc_info=True,
                 )
 
         if backfilled:
-            logger.info("backfilled findings from report_json", count=backfilled)
+            logger.debug("backfilled findings from report_json", count=backfilled)
 
     # -- Save --
 
@@ -889,32 +901,121 @@ class ReviewStorage:
         with self._get_connection() as conn:
             conn.execute("DELETE FROM finding_settings WHERE key LIKE 'config:%'")
 
+    # Pre-built queries for each allowed field -- avoids dynamic SQL field interpolation.
+    _DISTINCT_QUERIES: ClassVar[dict[str, str]] = {
+        "severity": (
+            "SELECT DISTINCT severity FROM findings WHERE severity IS NOT NULL ORDER BY severity"
+        ),
+        "agent_name": (
+            "SELECT DISTINCT agent_name FROM findings WHERE agent_name IS NOT NULL "
+            "ORDER BY agent_name"
+        ),
+        "category": (
+            "SELECT DISTINCT category FROM findings WHERE category IS NOT NULL ORDER BY category"
+        ),
+        "repo": "SELECT DISTINCT repo FROM findings WHERE repo IS NOT NULL ORDER BY repo",
+        "file_path": (
+            "SELECT DISTINCT file_path FROM findings WHERE file_path IS NOT NULL "
+            "ORDER BY file_path"
+        ),
+        "triage_action": (
+            "SELECT DISTINCT triage_action FROM findings WHERE triage_action IS NOT NULL "
+            "ORDER BY triage_action"
+        ),
+    }
+
     def get_distinct_finding_values(self, field: str) -> list[str]:
         """Get distinct values for a finding field, for autocomplete.
 
-        Only allows whitelisted field names to prevent SQL injection.
+        Only allows whitelisted field names via pre-built query map.
         """
-        allowed = {
-            "severity",
-            "agent_name",
-            "category",
-            "repo",
-            "file_path",
-            "triage_action",
-        }
-        if field not in allowed:
+        query = self._DISTINCT_QUERIES.get(field)
+        if query is None:
             return []
         with self._get_connection() as conn:
-            rows = conn.execute(
-                f"SELECT DISTINCT {field} FROM findings "  # noqa: S608
-                f"WHERE {field} IS NOT NULL ORDER BY {field}",
-            ).fetchall()
+            rows = conn.execute(query).fetchall()
         return [str(row[0]) for row in rows]
 
     def delete_finding(self, finding_id: int) -> None:
         """Delete a finding by its primary key."""
         with self._get_connection() as conn:
             conn.execute("DELETE FROM findings WHERE id = ?", (finding_id,))
+
+    # -- Custom agents ---------------------------------------------------------
+
+    def save_agent(
+        self,
+        *,
+        name: str,
+        system_prompt: str,
+        description: str = "",
+        priority: int = 100,
+        enabled: bool = True,
+        file_patterns: list[str] | None = None,
+    ) -> None:
+        """Save or update a custom agent definition."""
+        patterns_json = json.dumps(file_patterns) if file_patterns is not None else None
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO custom_agents (
+                    name, system_prompt, description, priority, enabled,
+                    file_patterns, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(name) DO UPDATE SET
+                    system_prompt = excluded.system_prompt,
+                    description = excluded.description,
+                    priority = excluded.priority,
+                    enabled = excluded.enabled,
+                    file_patterns = excluded.file_patterns,
+                    updated_at = datetime('now')
+                """,
+                (name, system_prompt, description, priority, int(enabled), patterns_json),
+            )
+
+    def load_agent(self, name: str) -> dict[str, Any] | None:
+        """Load a single custom agent by name."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM custom_agents WHERE name = ?",
+                (name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._deserialize_agent_row(dict(row))
+
+    def load_all_agents(self) -> list[dict[str, Any]]:
+        """Load all custom agents, ordered by priority then name."""
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT * FROM custom_agents ORDER BY priority, name").fetchall()
+        return [self._deserialize_agent_row(dict(row)) for row in rows]
+
+    def delete_agent(self, name: str) -> bool:
+        """Delete a custom agent. Returns True if a row was deleted."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM custom_agents WHERE name = ?",
+                (name,),
+            )
+        return cursor.rowcount > 0
+
+    @staticmethod
+    def _deserialize_agent_row(row: dict[str, Any]) -> dict[str, Any]:
+        """Deserialize file_patterns JSON and enabled bool from a DB row."""
+        patterns = row.get("file_patterns")
+        if patterns is not None:
+            row["file_patterns"] = json.loads(patterns)
+        row["enabled"] = bool(row.get("enabled", 1))
+        return row
+
+    # -- Review history --------------------------------------------------------
+
+    def clear_review_history(self) -> None:
+        """Delete all reviews, agent results, and findings."""
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM findings")
+            conn.execute("DELETE FROM agent_results")
+            conn.execute("DELETE FROM reviews")
 
     @property
     def db_path(self) -> Path:

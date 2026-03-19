@@ -101,7 +101,7 @@ def deduplicate_agent_results(
     dedup_count = len(removed)
 
     if dedup_count > 0:
-        logger.info(
+        logger.debug(
             "deduplicated findings across agents",
             strategy=strategy.value,
             original=original_count,

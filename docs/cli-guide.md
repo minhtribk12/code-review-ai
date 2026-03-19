@@ -4,6 +4,17 @@ The CLI provides one-shot commands for code review, findings navigation, and
 launching the interactive REPL. Designed for scripting, CI/CD pipelines, and
 quick terminal use.
 
+## Key Highlights
+
+- **Multi-agent analysis** -- security, performance, style, and test coverage
+  run in parallel
+- **Structured error reporting** -- every error shows what happened, why,
+  and how to fix it
+- **Rich terminal output** -- color-coded severity levels, progress
+  indicators with live timers, and formatted tables
+- **CI/CD ready** -- JSON output mode, quiet flag, and meaningful exit codes
+- **Cost tracking** -- token usage and estimated cost in every report
+
 ## Installation and Setup
 
 ```bash
@@ -18,7 +29,7 @@ Two entry points are available:
 
 ```bash
 uv run code-review-ai <command>   # full name
-uv run cra <command>                 # short alias
+uv run cra <command>              # short alias
 ```
 
 ## Commands
@@ -29,9 +40,9 @@ The primary command. Accepts a local diff file or a GitHub PR reference,
 dispatches agents in parallel, and outputs a structured report.
 
 ```bash
-cra review --diff <path>              # review a local .patch file
-cra review --pr owner/repo#123        # review a GitHub PR by shorthand
-cra review --pr https://github.com/owner/repo/pull/123  # review by URL
+cra review --diff <path>       # review a local .patch file
+cra review --pr owner/repo#123 # review a GitHub PR by shorthand
+cra review --pr <full-url>     # review by full GitHub PR URL
 ```
 
 **Flags:**
@@ -73,6 +84,37 @@ cra review --diff changes.patch --agents security,django_security
 |------|---------|
 | 0 | Review completed successfully |
 | 1 | Error (bad input, missing config, review failure) |
+
+**Progress display:**
+
+During review, a live progress table shows each agent's status:
+
+```
+  security         >> running..   3.2s
+  performance      OK done        2.1s
+  style               waiting
+  test_coverage    !! failed      1.5s
+
+                   Press Ctrl+C for options
+```
+
+- `>>` **running** with animated dots and live elapsed timer
+- `OK` **done** in green with final time
+- `!!` **failed** in red with elapsed time
+- `--` **cancelled** if aborted mid-review
+
+**Ctrl+C** during a review gives three options:
+1. **Abort** -- discard everything
+2. **Finish** -- synthesize partial results from completed agents
+3. **Continue** -- resume waiting
+
+**Report output:**
+
+The Rich report includes:
+- **Header panel** with risk level (color-coded), finding counts
+  per severity, token usage, and cost
+- **Per-agent summaries** with finding counts and execution time
+- **Findings table** sorted by severity with file locations
 
 ### `findings` -- Navigate Saved Review Findings
 
@@ -237,6 +279,41 @@ cra> provider add
 ```
 
 Custom providers are stored in `~/.cra/providers.json` and merged with bundled providers on startup.
+
+## Error Handling
+
+All errors are displayed with a structured format that helps you
+quickly understand and resolve issues:
+
+**Interactive mode (Rich panel):**
+
+```
++--- Error ------------------------------------------------+
+| GitHub API authentication failed                         |
+|                                                          |
+|   Reason: Your token is missing, expired, or lacks       |
+|           the required permissions.                      |
+|                                                          |
+|   Fix:    Set GITHUB_TOKEN in your .env file or          |
+|           environment. Ensure it has 'repo' scope for    |
+|           private repos.                                 |
++----------------------------------------------------------+
+```
+
+**CLI mode (plain text):**
+
+```
+Error: GitHub API authentication failed
+Reason: Your token is missing, expired, or lacks the required permissions.
+Fix: Set GITHUB_TOKEN in your .env file or environment.
+```
+
+The error system covers:
+- **GitHub API errors** -- auth, rate limits, not found, permissions
+- **LLM provider errors** -- auth, model not found, timeout, rate limits
+- **Configuration errors** -- missing keys, validation failures
+- **Git errors** -- working tree issues, branch conflicts
+- **File errors** -- not found, permissions
 
 ## Environment Variables
 

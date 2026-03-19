@@ -2,86 +2,37 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING
 
+import structlog
 from pydantic import SecretStr
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from code_review_agent.error_guidance import classify_exception
+from code_review_agent.errors import UserError, print_error
+from code_review_agent.interactive.config_categories import CONFIG_CATEGORIES_DICT
 from code_review_agent.theme import theme
+
+logger = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
 
 console = Console()
 
-# Config keys grouped by category for display.
-_CONFIG_CATEGORIES: dict[str, list[str]] = {
-    "LLM": [
-        "llm_provider",
-        "llm_model",
-        "llm_base_url",
-        "llm_temperature",
-        "llm_top_p",
-        "llm_max_tokens",
-        "llm_api_key",
-        "request_timeout_seconds",
-        "test_connection_on_start",
-    ],
-    "Token Budget": [
-        "token_tier",
-        "max_prompt_tokens",
-        "max_tokens_per_review",
-        "llm_input_price_per_m",
-        "llm_output_price_per_m",
-        "rate_limit_rpm",
-    ],
-    "Review": [
-        "dedup_strategy",
-        "max_review_seconds",
-        "max_concurrent_agents",
-        "default_agents",
-    ],
-    "Iterative Review": [
-        "max_deepening_rounds",
-        "is_validation_enabled",
-        "max_validation_rounds",
-    ],
-    "GitHub": [
-        "github_token",
-        "max_pr_files",
-        "github_rate_limit_warn_threshold",
-        "pr_stale_days",
-    ],
-    "Custom Agents": [
-        "custom_agents_dir",
-    ],
-    "History & Usage": [
-        "history_db_path",
-        "auto_save_history",
-        "usage_window",
-    ],
-    "Interactive": [
-        "interactive_history_file",
-        "interactive_prompt",
-        "interactive_vi_mode",
-        "interactive_autocomplete_cache_ttl",
-        "watch_debounce_seconds",
-    ],
-    "Logging": [
-        "log_level",
-    ],
-}
+# Alias for backwards compatibility and local readability.
+_CONFIG_CATEGORIES = CONFIG_CATEGORIES_DICT
 
 
 def _mask_secret(value: object) -> str:
     """Mask secret values for display."""
     if isinstance(value, SecretStr):
-        raw = value.get_secret_value()
-        if len(raw) <= 8:
-            return "****"
-        return f"{raw[:4]}****{raw[-4:]}"
+        from code_review_agent.interactive.commands.config_edit import _mask_secret_str
+
+        return _mask_secret_str(value.get_secret_value())
     return str(value) if value is not None else "[dim]not set[/dim]"
 
 
@@ -131,8 +82,13 @@ def cmd_config(args: list[str], session: SessionState) -> None:
             if cat_name.upper().startswith(category):
                 _print_category(cat_name, keys, session)
                 return
-        console.print(f"[red]Unknown category: {args[0]}[/red]")
-        console.print(f"Available: {', '.join(_CONFIG_CATEGORIES)}")
+        print_error(
+            UserError(
+                detail=f"Unknown category: {args[0]}",
+                solution=f"Available categories: {', '.join(_CONFIG_CATEGORIES)}",
+            ),
+            console=console,
+        )
         return
 
     # Show all categories
@@ -160,12 +116,24 @@ def _print_category(name: str, keys: list[str], session: SessionState) -> None:
 def cmd_config_get(args: list[str], session: SessionState) -> None:
     """Show a single config value."""
     if not args:
-        console.print("[red]Usage: config get <key>[/red]")
+        print_error(
+            UserError(
+                detail="Missing argument",
+                solution="Usage: config get <key>. Use 'config' to see all keys.",
+            ),
+            console=console,
+        )
         return
     key = args[0]
     value = _get_config_value(session, key)
     if value is None and not hasattr(session.settings, key):
-        console.print(f"[red]Unknown config key: {key}[/red]")
+        print_error(
+            UserError(
+                detail=f"Unknown config key: {key}",
+                solution="Use 'config' to see all available settings.",
+            ),
+            console=console,
+        )
         return
     console.print(f"  {key} = {_mask_secret(value)}")
 
@@ -173,13 +141,25 @@ def cmd_config_get(args: list[str], session: SessionState) -> None:
 def cmd_config_set(args: list[str], session: SessionState) -> None:
     """Set a config value and persist to database immediately."""
     if len(args) < 2:
-        console.print("[red]Usage: config set <key> <value>[/red]")
+        print_error(
+            UserError(
+                detail="Missing argument",
+                solution="Usage: config set <key> <value>. Use 'config' to see all keys.",
+            ),
+            console=console,
+        )
         return
     key = args[0]
     value = " ".join(args[1:])
 
     if not hasattr(session.settings, key):
-        console.print(f"[red]Unknown config key: {key}[/red]")
+        print_error(
+            UserError(
+                detail=f"Unknown config key: {key}",
+                solution="Use 'config' to see all available settings.",
+            ),
+            console=console,
+        )
         return
 
     session.config_overrides[key] = value
@@ -235,7 +215,14 @@ def cmd_config_save(args: list[str], session: SessionState) -> None:
             console.print(f"    {key} = {value}")
         console.print("[dim]  Settings persist across restarts.[/dim]")
     else:
-        console.print(f"[{theme.error}]Failed to save config[/{theme.error}]")
+        print_error(
+            UserError(
+                detail="Failed to save config to database",
+                reason="The database write operation failed.",
+                solution="Check disk space and database path with 'config get history_db_path'.",
+            ),
+            console=console,
+        )
 
 
 def save_config_to_db(session: SessionState) -> int:
@@ -282,8 +269,8 @@ def cmd_config_reset(args: list[str], session: SessionState) -> None:
             if key.endswith("_api_key") or key.startswith("health:"):
                 continue
             storage.delete_config(key)
-    except Exception:  # noqa: S110
-        pass
+    except (OSError, sqlite3.Error) as exc:
+        logger.debug("failed to clear persisted config from database", error=str(exc))
 
     console.print(f"  [green]Reset {count} override(s). Config reloaded from .env.[/green]")
     console.print("  [dim]API keys and provider health preserved.[/dim]")
@@ -298,12 +285,14 @@ def _cmd_factory_reset(session: SessionState) -> None:
 
     console.print()
     console.print("  [bold red]Factory Reset[/bold red]")
-    console.print("  This will clear:")
-    console.print("    - All config overrides")
-    console.print("    - All health marks (not working status)")
-    console.print("    - All review history and findings")
     console.print()
-    console.print("  [green]Preserved:[/green] API keys for all providers")
+    console.print("  [bold]Will clear:[/bold]")
+    console.print("    [red]x[/red] All config overrides")
+    console.print("    [red]x[/red] All health marks (not working status)")
+    console.print("    [red]x[/red] All review history and findings")
+    console.print()
+    console.print("  [bold]Preserved:[/bold]")
+    console.print("    [green]>[/green] API keys for all providers")
     console.print()
 
     try:
@@ -339,17 +328,14 @@ def _cmd_factory_reset(session: SessionState) -> None:
             storage.save_config(key, value)
 
         # Clear review history
-        with storage._get_connection() as conn:
-            conn.execute("DELETE FROM findings")
-            conn.execute("DELETE FROM agent_results")
-            conn.execute("DELETE FROM reviews")
+        storage.clear_review_history()
 
         key_count = len(preserved_keys)
         console.print(
             f"  [green]Factory reset complete. {key_count} API key(s) preserved.[/green]"
         )
     except Exception as exc:
-        console.print(f"  [red]Factory reset failed: {exc}[/red]")
+        print_error(classify_exception(exc, context="Factory reset"), console=console)
 
 
 def cmd_config_validate(args: list[str], session: SessionState) -> None:
@@ -360,7 +346,7 @@ def cmd_config_validate(args: list[str], session: SessionState) -> None:
         Settings()
         console.print("[green]Config is valid.[/green]")
     except Exception as exc:
-        console.print(f"[red]Config validation error: {exc}[/red]")
+        print_error(classify_exception(exc, context="Config validation"), console=console)
 
 
 def cmd_config_diff(args: list[str], session: SessionState) -> None:

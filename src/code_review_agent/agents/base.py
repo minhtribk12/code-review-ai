@@ -126,7 +126,7 @@ class BaseAgent(ABC):
         # Guard: no code to review -> empty result (prevents hallucinated findings)
         if not review_input.diff_files:
             elapsed = time.monotonic() - start
-            logger.info(
+            logger.debug(
                 "agent review skipped, no diff files",
                 agent=self.name,
                 elapsed_seconds=round(elapsed, 2),
@@ -143,7 +143,7 @@ class BaseAgent(ABC):
             previous_findings=previous_findings,
         )
 
-        logger.info("agent review started", agent=self.name)
+        logger.debug("agent review started", agent=self.name)
 
         hardened_system_prompt = self.system_prompt + SECURITY_RULES
 
@@ -154,7 +154,7 @@ class BaseAgent(ABC):
         )
 
         elapsed = time.monotonic() - start
-        logger.info(
+        logger.debug(
             "agent review completed",
             agent=self.name,
             finding_count=len(response.findings),
@@ -171,7 +171,7 @@ class BaseAgent(ABC):
     def _make_failed_result(self, *, start: float, error: str) -> AgentResult:
         """Build a failed AgentResult with consistent timing and logging."""
         elapsed = time.monotonic() - start
-        logger.warning(
+        logger.debug(
             "agent review failed",
             agent=self.name,
             finding_count=0,

@@ -97,7 +97,7 @@ class SlidingWindowRateLimiter:
 
         with self._lock:
             if inferred_rpm < self._max_requests:
-                logger.info(
+                logger.debug(
                     "adapting rate limit from provider feedback",
                     previous_rpm=self._max_requests,
                     new_rpm=inferred_rpm,
