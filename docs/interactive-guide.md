@@ -331,16 +331,19 @@ cra> findings 42             # navigate findings from saved review #42
 
 | Key | Action |
 |-----|--------|
-| Up/Down | Navigate findings list |
-| Enter/Space | Toggle detail panel |
+| Up/Down, j/k | Navigate findings list |
+| Left/Right, h/l | Scroll table or cycle filter dimension |
+| Enter | Open detail view (or select filter suggestion) |
 | `f` | Open filter modal (severity, agent checkboxes) |
 | `s` | Sort forward (reverse current, then next column) |
 | `S` | Sort backward (reverse current, then previous column) |
-| `m` | Mark/unmark finding as false positive |
-| `i` | Ignore/unignore finding |
-| `p` | Stage/unstage finding for PR posting |
-| `P` (Shift+P) | Submit all staged findings as PR review comments |
-| `D` | Delete posted PR review comments |
+| `m` | Mark/unmark finding as solved |
+| `F` | Mark/unmark finding as false positive |
+| `I` | Mark/unmark finding as ignored |
+| `p` | Post finding as PR review comment (with confirmation) |
+| `P` | Unpost (delete) a previously posted PR comment (with confirmation) |
+| `d` | Delete finding permanently (with confirmation) |
+| `c` | Copy finding to clipboard |
 | `?` | Show help overlay |
 | `q` / Escape | Quit back to REPL |
 
@@ -356,10 +359,11 @@ Press `f` to open:
 
 Findings can be posted as inline code review comments on the associated PR:
 
-1. Press `p` on individual findings to stage them (shows `[PR]` indicator)
-2. Press `P` to submit all staged findings as a batch
+1. Open a finding's detail view (Enter)
+2. Press `p` to post it as a PR comment (confirmation required)
 3. Findings with `file_path` + `line_number` become inline comments on the diff
 4. Findings without location are included in the review body
+5. Press `P` to unpost (delete) a previously posted comment
 
 **Requirements:**
 - The review must be from a PR (not a local diff)
@@ -370,9 +374,9 @@ Findings can be posted as inline code review comments on the associated PR:
 
 | Action | Key | Indicator | Effect |
 |--------|-----|-----------|--------|
-| False positive | `m` | `[FP]` | Dims the row, marks as false positive |
-| Ignore | `i` | `[IGN]` | Dims the row, marks as ignored |
-| Stage for PR | `p` | `[PR]` | Queues for batch posting |
+| Solved | `m` | `[SOLVED]` | Marks finding as solved |
+| False positive | `F` | `[FP]` | Dims the row, marks as false positive |
+| Ignore | `I` | `[IGN]` | Dims the row, marks as ignored |
 
 Triage state is persisted to the SQLite database (`~/.cra/reviews.db`),
 so actions survive across sessions. Second press toggles the action off.
@@ -914,8 +918,8 @@ cra> repo select acme/app            # set active repo
 cra> pr list                         # find the PR
 cra> pr review 42                    # run code review
 cra> findings                        # open navigator
-  p  (stage critical findings)
-  P  (post all staged as PR comments)
+  p  (post finding as PR comment)
+  P  (unpost a previously posted comment)
 cra> pr approve 42 -m "LGTM, minor issues noted inline"
 ```
 

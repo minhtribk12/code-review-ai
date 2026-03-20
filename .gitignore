@@ -64,5 +64,6 @@ interactive_tests/
 # Test artifacts (MagicMock file creation side effects)
 MagicMock/
 
-# Video/marketing scripts (local only)
+# Video/marketing assets (local only)
 docs/video-scripts/
+*.mp4
