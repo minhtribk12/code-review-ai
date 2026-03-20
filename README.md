@@ -230,9 +230,9 @@ findings                        # navigate last review
 findings 42                     # navigate saved review #42
 ```
 
-Key bindings: Up/Down navigate, `f` filter, `s`/`S` sort forward/backward, `m` mark false positive,
-`p` stage for PR posting, `P` submit staged to PR, `q` quit. Triage state
-(false positive, ignored) is persisted to SQLite across sessions.
+Key bindings: Up/Down navigate, `f` filter, `s`/`S` sort forward/backward, `m` solved, `F` false positive,
+`I` ignored, `p` post to PR, `P` unpost from PR, `d` delete, `c` copy, `q` quit. Triage state
+(solved, false positive, ignored) is persisted to SQLite across sessions.
 
 ### Other Commands
 
@@ -389,7 +389,7 @@ make check      # lint + typecheck + test
 
 ### Test Suite
 
-856 unit tests covering models, config, LLM client, agents, agent loader,
+650+ unit tests covering models, config, LLM client, agents, agent loader,
 CLI, report, orchestrator, deduplication, GitHub client, and the interactive TUI.
 
 ## Project Structure
@@ -427,7 +427,7 @@ src/code_review_agent/
   storage.py             # SQLite review history
   token_budget.py        # Tiers, budgets, cost estimation
 
-tests/                   # 856 unit tests
+tests/                   # 650+ unit tests
 docs/                    # Architecture, configuration, models, custom agents
 ```
 
