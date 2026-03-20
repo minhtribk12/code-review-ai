@@ -14,6 +14,8 @@ Multiple specialized agents (security, performance, style, test coverage) review
 pip install code-review-ai && cra interactive
 ```
 
+https://github.com/user-attachments/assets/f5d4ba44-d5e1-4e80-ad07-6dbdf2c66026
+
 ### Why Code Review AI?
 
 - **Free to run** -- works out of the box with NVIDIA and OpenRouter free-tier models
