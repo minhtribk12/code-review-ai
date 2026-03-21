@@ -11,7 +11,8 @@
 Multiple specialized agents (security, performance, style, test coverage) review your code in parallel, deduplicate findings across agents, and synthesize everything into one structured report -- all from a rich interactive TUI or a single CLI command.
 
 ```bash
-pip install code-review-ai && cra interactive
+pipx install code-review-ai && cra interactive
+# also works with: pip install code-review-ai
 ```
 
 https://github.com/user-attachments/assets/ab246961-d592-4974-bc7f-070fd88034c9
