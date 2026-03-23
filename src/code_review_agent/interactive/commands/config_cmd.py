@@ -50,7 +50,13 @@ def _get_config_value(session: SessionState, key: str) -> object:
 
     if key in session.config_overrides:
         return session.config_overrides[key]
-    return getattr(session.settings, key, None)
+
+    raw = getattr(session.settings, key, None)
+    # For llm_base_url, resolve from provider registry so users see the
+    # actual URL that will be used instead of "not set".
+    if raw is None and key == "llm_base_url":
+        return session.settings.resolved_llm_base_url
+    return raw
 
 
 def cmd_config(args: list[str], session: SessionState) -> None:
