@@ -264,7 +264,12 @@ class ConfigEditor:
                     if isinstance(raw, SecretStr):
                         self.values[key] = raw.get_secret_value()
                     elif raw is None:
-                        self.values[key] = "None"
+                        # For llm_base_url, resolve from provider registry
+                        # so users see the actual URL that will be used.
+                        if key == "llm_base_url":
+                            self.values[key] = self.session.settings.resolved_llm_base_url
+                        else:
+                            self.values[key] = "None"
                     else:
                         self.values[key] = str(raw)
 
