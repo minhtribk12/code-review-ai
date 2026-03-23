@@ -1260,14 +1260,20 @@ class TestGitOpsRepoHelpers:
 
 
 @pytest.fixture
-def real_session(monkeypatch: pytest.MonkeyPatch) -> SessionState:
-    """Session with real Settings (not MagicMock) for effective_settings tests."""
+def real_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SessionState:
+    """Session with real Settings (not MagicMock) for effective_settings tests.
+
+    Uses an isolated ConfigStore backed by a temp directory so tests never
+    write to the real ``~/.cra/config.yaml``.
+    """
     monkeypatch.setenv("NVIDIA_API_KEY", "sk-test-fake-key")  # pragma: allowlist secret
     monkeypatch.setenv("LLM_PROVIDER", "nvidia")
     from code_review_agent.config import Settings
+    from code_review_agent.config_store import ConfigStore
 
     settings = Settings()
-    return SessionState(settings=settings)
+    config_store = ConfigStore(path=tmp_path / "config.yaml")
+    return SessionState(settings=settings, config_store=config_store)
 
 
 class TestEffectiveSettings:

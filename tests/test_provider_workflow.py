@@ -37,9 +37,15 @@ def real_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
-def real_session(real_settings: Settings) -> SessionState:
-    """SessionState with real Settings for integration tests."""
-    return SessionState(settings=real_settings)
+def real_session(real_settings: Settings, tmp_path: Path) -> SessionState:
+    """SessionState with real Settings for integration tests.
+
+    Uses an isolated ConfigStore so tests never write to ``~/.cra/config.yaml``.
+    """
+    from code_review_agent.config_store import ConfigStore
+
+    config_store = ConfigStore(path=tmp_path / "config.yaml")
+    return SessionState(settings=real_settings, config_store=config_store)
 
 
 @pytest.fixture
