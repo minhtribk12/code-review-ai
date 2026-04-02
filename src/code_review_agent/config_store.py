@@ -35,8 +35,9 @@ class ConfigStore:
     - ``health:``: provider/model health marks
     """
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, project_path: Path | None = None) -> None:
         self.path = path or _DEFAULT_CONFIG_PATH
+        self.project_path = project_path
 
     # -- Low-level I/O --------------------------------------------------------
 
@@ -103,11 +104,37 @@ class ConfigStore:
             self.save(data)
 
     def load_all_overrides(self) -> dict[str, str]:
-        """Return all config override key-value pairs (excludes state/health)."""
+        """Return all config override key-value pairs (excludes state/health).
+
+        If a project_path is set, project values override user values.
+        """
         data = self.load()
-        return {
+        result = {
             k: str(v) for k, v in data.items() if k not in _RESERVED_SECTIONS and v is not None
         }
+        # Merge project overrides on top (project wins)
+        for k, v in self.load_project_overrides().items():
+            result[k] = v
+        return result
+
+    def load_project_overrides(self) -> dict[str, str]:
+        """Return overrides from the project-level config only."""
+        if self.project_path is None or not self.project_path.is_file():
+            return {}
+        try:
+            raw = yaml.safe_load(self.project_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return {}
+            return {
+                k: str(v) for k, v in raw.items() if k not in _RESERVED_SECTIONS and v is not None
+            }
+        except Exception:
+            logger.debug(
+                "failed to read project config",
+                path=str(self.project_path),
+                exc_info=True,
+            )
+            return {}
 
     def clear_overrides(self) -> None:
         """Remove all config override keys, preserve state and health."""

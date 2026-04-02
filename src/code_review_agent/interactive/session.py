@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from code_review_agent.config import Settings
     from code_review_agent.config_store import ConfigStore, SecretsStore
     from code_review_agent.interactive.background import BackgroundReview
@@ -187,6 +190,11 @@ class SessionState:
         repr=False,
         compare=False,
     )
+    _config_listeners: list[Callable[[], None]] = field(
+        default_factory=list,
+        repr=False,
+        compare=False,
+    )
 
     def _get_secrets_store(self) -> SecretsStore:
         """Return the secrets store, creating a default if not set."""
@@ -284,8 +292,22 @@ class SessionState:
             return self.settings
 
     def invalidate_settings_cache(self) -> None:
-        """Clear the effective settings cache (call after modifying overrides)."""
+        """Clear the effective settings cache and notify listeners."""
         self._effective_settings_cache = None
+        for listener in self._config_listeners:
+            try:
+                listener()
+            except Exception:
+                logger.debug("config listener raised an exception", exc_info=True)
+
+    def add_config_listener(self, callback: Callable[[], None]) -> None:
+        """Register a callback to be called when config changes."""
+        self._config_listeners.append(callback)
+
+    def remove_config_listener(self, callback: Callable[[], None]) -> None:
+        """Remove a previously registered config listener."""
+        with contextlib.suppress(ValueError):
+            self._config_listeners.remove(callback)
 
     def resolve_api_key_display(self, provider: str | None = None) -> str:
         """Resolve the API key value for display.
