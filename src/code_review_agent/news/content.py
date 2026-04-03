@@ -105,10 +105,10 @@ def _process_element(element: object, lines: list[str], depth: int) -> None:
         lang = ""
         code_tag = element.find("code")
         if code_tag and code_tag.get("class"):
-            classes = code_tag.get("class", [])
+            classes = code_tag.get("class") or []
             for cls in classes:
-                if cls.startswith("language-"):
-                    lang = cls[9:]
+                if str(cls).startswith("language-"):
+                    lang = str(cls)[9:]
                     break
         lines.append("")
         lines.append(f"```{lang}")
@@ -142,14 +142,14 @@ def _process_element(element: object, lines: list[str], depth: int) -> None:
 
     # Images
     if tag_name == "img":
-        alt = element.get("alt", "image")
+        alt = str(element.get("alt", "image"))
         lines.append(f"  [image: {alt}]")
         return
 
     # Links
     if tag_name == "a":
         text = element.get_text(strip=True)
-        href = element.get("href", "")
+        href = str(element.get("href", ""))
         if text and href and not href.startswith("#"):
             lines.append(f"{text} [{href}]")
         elif text:

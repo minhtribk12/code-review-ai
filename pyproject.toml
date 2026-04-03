@@ -115,6 +115,10 @@ module = ["textual.*", "yaml.*", "feedparser.*", "bs4.*", "lxml.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = ["code_review_agent.news.content"]
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
 module = [
     "code_review_agent.interactive.tui_app",
     "code_review_agent.interactive.tabs.*",
