@@ -44,7 +44,7 @@ class TestFormatArticlesForLLM:
     def test_includes_url(self) -> None:
         articles = [_make_article(1)]
         text = format_articles_for_llm(articles)
-        assert "url:https://example.com/1" in text
+        assert "url: https://example.com/1" in text
 
     def test_includes_tags(self) -> None:
         articles = [_make_article(1)]

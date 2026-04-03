@@ -231,17 +231,19 @@ def _render_detail(article: Article, tw: int) -> _Lines:
 
     lines.append(("", "\n"))
 
-    # Summary or content preview
+    # Summary (LLM-curated intelligence brief)
     text = article.content_text or article.summary
     if text:
         wrap_width = max(40, tw - 10)
-        for line in text.splitlines()[:8]:
+        lines.append(("", "\n"))
+        for line in text.splitlines()[:12]:
             for wrapped in textwrap.wrap(line, width=wrap_width) or [""]:
                 lines.append(("", f"   {wrapped}\n"))
 
-    # Citation
+    # Citations and further reading
     lines.append(("", "\n"))
-    lines.append((_STYLE_ACCENT, f"   [link] {article.url}\n"))
+    lines.append((_STYLE_ACCENT, f"   Source: {article.url}\n"))
+    lines.append((_STYLE_MUTED, "   [o] open in browser | [s] save | [n] next\n"))
 
     return lines
 
