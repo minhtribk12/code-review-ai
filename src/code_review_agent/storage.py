@@ -824,6 +824,26 @@ class ReviewStorage:
                 (triage_action, finding_id),
             )
 
+    def query_dismissed_patterns(self, *, min_count: int = 2) -> list[dict[str, Any]]:
+        """Return finding patterns dismissed >= min_count times.
+
+        Groups by title + agent_name + triage_action to find patterns
+        that have been repeatedly marked as FALSE_POSITIVE or IGNORED.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT title, agent_name, triage_action, COUNT(*) as dismiss_count
+                FROM findings
+                WHERE triage_action IN ('false_positive', 'ignored')
+                GROUP BY title, agent_name, triage_action
+                HAVING COUNT(*) >= ?
+                ORDER BY dismiss_count DESC
+                """,
+                (min_count,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def update_finding_posted(
         self,
         finding_id: int,
