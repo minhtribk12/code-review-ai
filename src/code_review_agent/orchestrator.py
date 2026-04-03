@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -37,6 +37,8 @@ from code_review_agent.token_budget import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from code_review_agent.agents.base import BaseAgent
     from code_review_agent.config import Settings
     from code_review_agent.llm_client import LLMClient
@@ -577,7 +579,27 @@ class Orchestrator:
         Agents that don't complete within ``max_review_seconds`` are marked
         as failed with a timeout error.
         """
-        results: list[AgentResult] = []
+        return list(
+            self._run_agents_streaming(
+                agents=agents,
+                review_input=review_input,
+                previous_findings=previous_findings,
+            )
+        )
+
+    def _run_agents_streaming(
+        self,
+        *,
+        agents: list[BaseAgent],
+        review_input: ReviewInput,
+        previous_findings: list[Finding] | None = None,
+    ) -> Generator[AgentResult, None, None]:
+        """Run agents concurrently, yielding results as each completes.
+
+        This generator enables real-time progress: callers can process
+        each agent's findings as soon as they arrive instead of waiting
+        for all agents to finish.
+        """
         max_workers = min(self._settings.max_concurrent_agents, len(agents))
         timeout = self._settings.max_review_seconds
 
@@ -595,8 +617,21 @@ class Orchestrator:
 
             # Poll with short intervals so Ctrl+C and cancel() are responsive
             elapsed = 0.0
+            completed: set[Future[AgentResult]] = set()
             while elapsed < timeout:
                 done, not_done = wait(future_to_agent, timeout=0.5)
+                # Yield newly completed results
+                for future in done - completed:
+                    completed.add(future)
+                    agent = future_to_agent[future]
+                    try:
+                        yield future.result()
+                    except Exception:
+                        logger.exception(
+                            "agent crashed, continuing with partial results",
+                            agent=agent.name,
+                        )
+                        self._emit(ReviewEvent.AGENT_FAILED, agent.name)
                 if not not_done:
                     break
                 if self._cancelled.is_set():
@@ -605,20 +640,11 @@ class Orchestrator:
                     break
                 elapsed += 0.5
 
-            # Collect completed results
-            for future in done:
-                agent = future_to_agent[future]
-                try:
-                    results.append(future.result())
-                except Exception:
-                    logger.exception(
-                        "agent crashed, continuing with partial results",
-                        agent=agent.name,
-                    )
-                    self._emit(ReviewEvent.AGENT_FAILED, agent.name)
-
             # Mark timed-out/cancelled agents as failed
-            for future in not_done:
+            all_done = {f for f in future_to_agent if f.done()}
+            for future in future_to_agent:
+                if future in all_done:
+                    continue
                 agent = future_to_agent[future]
                 future.cancel()
                 logger.warning(
@@ -627,23 +653,17 @@ class Orchestrator:
                     timeout_seconds=timeout,
                 )
                 self._emit(ReviewEvent.AGENT_FAILED, agent.name, float(timeout))
-                results.append(
-                    AgentResult(
-                        agent_name=agent.name,
-                        findings=[],
-                        summary="",
-                        execution_time_seconds=float(timeout),
-                        status=AgentStatus.FAILED,
-                        error_message=f"Review timed out after {timeout}s",
-                    )
+                yield AgentResult(
+                    agent_name=agent.name,
+                    findings=[],
+                    summary="",
+                    execution_time_seconds=float(timeout),
+                    status=AgentStatus.FAILED,
+                    error_message=f"Review timed out after {timeout}s",
                 )
         finally:
-            # Don't wait for in-flight HTTP requests on cancel/abort --
-            # shutdown(wait=False) lets daemon threads die on their own.
             is_cancelled = self._cancelled.is_set()
             executor.shutdown(wait=not is_cancelled, cancel_futures=is_cancelled)
-
-        return results
 
     def _synthesize(self, *, agent_results: list[AgentResult]) -> SynthesisResponse:
         """Use the LLM to produce an overall summary and risk level."""
