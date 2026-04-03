@@ -76,7 +76,7 @@ def html_to_terminal_text(html: str) -> str:
 
 def _process_element(element: object, lines: list[str], depth: int) -> None:
     """Recursively process an HTML element into text lines."""
-    from bs4 import NavigableString, Tag
+    from bs4 import NavigableString, Tag  # type: ignore[attr-defined]
 
     if isinstance(element, NavigableString):
         text = str(element).strip()
@@ -105,7 +105,7 @@ def _process_element(element: object, lines: list[str], depth: int) -> None:
         lang = ""
         code_tag = element.find("code")
         if code_tag and code_tag.get("class"):
-            classes = code_tag.get("class") or []
+            classes: list[str] = list(code_tag.get("class") or [])
             for cls in classes:
                 if str(cls).startswith("language-"):
                     lang = str(cls)[9:]
