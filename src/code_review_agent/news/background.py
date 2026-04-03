@@ -37,6 +37,9 @@ class BackgroundNewsFetch:
         self._done = threading.Event()
         self._lock = threading.Lock()
         self._phase = "fetching"
+        self._feeds_done = 0
+        self._feeds_total = 0
+        self._current_feed = ""
         self._article_count = 0
         self._curated_count = 0
         self._error: str | None = None
@@ -58,8 +61,14 @@ class BackgroundNewsFetch:
         from code_review_agent.news.storage import ArticleStore
 
         try:
-            # Phase 1: Fetch from RSS
-            articles = fetch_news(self.domain)
+            # Phase 1: Fetch from RSS feeds with progress tracking
+            def _on_feed_progress(done: int, total: int, feed_name: str) -> None:
+                with self._lock:
+                    self._feeds_done = done
+                    self._feeds_total = total
+                    self._current_feed = feed_name
+
+            articles = fetch_news(self.domain, on_progress=_on_feed_progress)
             with self._lock:
                 self._article_count = len(articles)
                 if not articles:
@@ -155,6 +164,9 @@ class BackgroundNewsFetch:
         """Return a status string for the REPL toolbar."""
         with self._lock:
             phase = self._phase
+            feeds_done = self._feeds_done
+            feeds_total = self._feeds_total
+            current_feed = self._current_feed
             count = self._article_count
             curated = self._curated_count
             error = self._error
@@ -169,9 +181,19 @@ class BackgroundNewsFetch:
         if phase == "failed":
             return f"News: failed - {error}"
         if phase == "saving":
-            return f"{spinner} News: saving {count} articles..."
+            return f"{spinner} News: saving {count} articles... {elapsed_str}"
         if phase == "curating":
-            return f"{spinner} News: curating {count} articles with LLM... {elapsed_str}"
+            return (
+                f"{spinner} News: curating {count} articles with LLM... "
+                f"[{feeds_done}/{feeds_total} feeds] {elapsed_str}"
+            )
+        # Fetching phase: show feed progress
+        if feeds_total > 0:
+            return (
+                f"{spinner} News: fetching {self.domain} "
+                f"[{feeds_done}/{feeds_total} feeds, {count} articles] "
+                f"{current_feed} {elapsed_str}"
+            )
         return f"{spinner} News: fetching {self.domain}... {elapsed_str}"
 
     def _interrupt_prompt(self) -> None:

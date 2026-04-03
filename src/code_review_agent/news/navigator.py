@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from prompt_toolkit import Application
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout.containers import HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
@@ -230,17 +231,19 @@ def _render_detail(article: Article, tw: int) -> _Lines:
 
     lines.append(("", "\n"))
 
-    # Summary or content preview
+    # Summary (LLM-curated intelligence brief)
     text = article.content_text or article.summary
     if text:
         wrap_width = max(40, tw - 10)
-        for line in text.splitlines()[:8]:
+        lines.append(("", "\n"))
+        for line in text.splitlines()[:12]:
             for wrapped in textwrap.wrap(line, width=wrap_width) or [""]:
                 lines.append(("", f"   {wrapped}\n"))
 
-    # Citation
+    # Citations and further reading
     lines.append(("", "\n"))
-    lines.append((_STYLE_ACCENT, f"   [link] {article.url}\n"))
+    lines.append((_STYLE_ACCENT, f"   Source: {article.url}\n"))
+    lines.append((_STYLE_MUTED, "   [o] open in browser | [s] save | [n] next\n"))
 
     return lines
 
@@ -281,13 +284,13 @@ def run_news_navigator(
         viewer.mark_read()
         viewer.move_down()
 
-    @kb.add("scroll-up")
+    @kb.add(Keys.ScrollUp)
     def on_scroll_up(_event: KeyPressEvent) -> None:
         viewer.move_up()
         viewer.move_up()
         viewer.move_up()
 
-    @kb.add("scroll-down")
+    @kb.add(Keys.ScrollDown)
     def on_scroll_down(_event: KeyPressEvent) -> None:
         viewer.move_down()
         viewer.move_down()
