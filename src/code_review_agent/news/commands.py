@@ -16,12 +16,10 @@ import structlog
 from rich.console import Console
 
 from code_review_agent.news.domains import list_domains, resolve_domain
-from code_review_agent.news.fetcher import fetch_news
 from code_review_agent.news.storage import ArticleStore
 
 if TYPE_CHECKING:
     from code_review_agent.interactive.session import SessionState
-    from code_review_agent.news.models import Article
 
 logger = structlog.get_logger(__name__)
 console = Console()
@@ -70,85 +68,44 @@ def cmd_read_news(args: list[str], session: SessionState) -> None:
 
 
 def _fetch_domain(domain_name: str, session: SessionState | None = None) -> None:
-    """Fetch articles from a domain, curate with LLM, and save."""
+    """Launch background news fetch + LLM curation.
+
+    Runs in a daemon thread so the REPL stays responsive.
+    Progress is shown in the toolbar status bar.
+    """
     configs = resolve_domain(domain_name)
     if not configs:
         console.print(f"  Unknown domain: {domain_name}")
         console.print("  Use 'news list' to see available domains.")
         return
 
-    console.print(f"  Fetching from {domain_name}...", end="")
-    articles = fetch_news(domain_name)
-    if not articles:
-        console.print(" no articles found.")
+    if session is None:
+        console.print("  Session required for background fetch.")
         return
 
-    console.print(f" {len(articles)} articles fetched.")
+    # Check if a fetch is already running
+    existing = getattr(session, "_news_fetch", None)
+    if existing is not None and existing.is_running:
+        console.print(f"  Already fetching {existing.domain}. Wait or use 'read-news'.")
+        return
 
-    # LLM curation: summarize and rank articles
-    curated_articles = _curate_with_llm(articles, domain_name, session)
+    from code_review_agent.news.background import BackgroundNewsFetch
 
-    store = ArticleStore(db_path=_DEFAULT_DB)
-    to_save = curated_articles if curated_articles else articles
-    count = store.save_articles(to_save)
-    unread = store.get_unread_count(domain_name)
-    console.print(f"  {count} articles saved ({unread} unread)")
+    bg = BackgroundNewsFetch(domain=domain_name, session=session)
 
+    # Store on session so toolbar can read status and completion can be detected
+    session._news_fetch = bg  # type: ignore[attr-defined]
 
-def _curate_with_llm(
-    articles: list[Article],
-    domain: str,
-    session: SessionState | None,
-) -> list[Article]:
-    """Use the LLM to curate and summarize articles.
+    # Wire up prompt app for toolbar refresh (same pattern as background review)
+    prompt_app = getattr(session, "_prompt_session", None)
+    if prompt_app is not None:
+        bg._prompt_app = prompt_app.app
 
-    Returns articles enriched with LLM-generated summaries.
-    Falls back to original articles on failure.
-    """
-    if session is None:
-        return articles
-
-    try:
-        from code_review_agent.llm_client import LLMClient
-        from code_review_agent.news.curator import curate_articles
-
-        settings = session.effective_settings
-        llm = LLMClient(settings)
-
-        console.print("  Curating with LLM...", end="")
-        response = curate_articles(articles, llm, domain)
-
-        if not response.curated_articles:
-            console.print(" no curation results.")
-            return articles
-
-        # Enrich original articles with LLM summaries
-        enriched: list[Article] = []
-        for curated in response.curated_articles:
-            idx = curated.article_index
-            if 0 <= idx < len(articles):
-                original = articles[idx]
-                enriched.append(
-                    original.model_copy(
-                        update={
-                            "summary": curated.summary,
-                            "tags": tuple(curated.tags[:5]),
-                            "score": max(original.score, curated.relevance_score),
-                        }
-                    )
-                )
-
-        if response.synthesis:
-            console.print(" done.")
-            console.print(f"  [bold]Summary:[/bold] {response.synthesis}")
-        else:
-            console.print(f" {len(enriched)} curated.")
-
-        return enriched if enriched else articles
-    except Exception:
-        logger.debug("LLM curation failed, using raw articles", exc_info=True)
-        console.print(" skipped (LLM unavailable).")
-        return articles
+    bg.start()
+    console.print(
+        f"  Fetching {domain_name} in background. "
+        f"Status shown in toolbar. Use 'read-news' when done."
+    )
 
 
 def _show_stats() -> None:

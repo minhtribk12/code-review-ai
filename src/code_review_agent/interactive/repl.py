@@ -168,9 +168,27 @@ def _get_toolbar(session: SessionState) -> HTML:
     except Exception:  # noqa: S110
         pass
 
+    # Live news fetch status line
+    news_line = ""
+    try:
+        news_bg = getattr(session, "_news_fetch", None)
+        if news_bg is not None:
+            raw = news_bg.format_status_line()
+            escaped = (
+                raw.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace('"', "&quot;")
+            )
+            suffix = " -- 'read-news' to browse" if news_bg.is_done else ""
+            news_line = f" {escaped}{suffix}\n"
+    except Exception:  # noqa: S110
+        pass
+
     return HTML(
         f'<style fg="ansigray">{separator}</style>\n'
         f"{review_line}"
+        f"{news_line}"
         f" <b>Branch:</b> {branch}"
         f"{repo_part}"
         f" | <b>Reviews:</b> {session.reviews_completed}"
