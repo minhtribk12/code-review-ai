@@ -136,9 +136,12 @@ def run_findings_app(
     def get_term_width() -> int:
         return shutil.get_terminal_size((120, 40)).columns
 
+    def _render_table_cached() -> list[tuple[str, str]]:
+        return render_table(viewer, get_term_width())
+
     # Controls
     header_control = FormattedTextControl(lambda: render_header(viewer))
-    table_control = FormattedTextControl(lambda: render_table(viewer, get_term_width()))
+    table_control = FormattedTextControl(_render_table_cached, focusable=True)
     footer_control = FormattedTextControl(lambda: render_footer(viewer))
     filter_control = FormattedTextControl(lambda: render_filter(viewer))
     help_control = FormattedTextControl(lambda: render_help(viewer))
@@ -204,6 +207,7 @@ def run_findings_app(
         layout=layout,
         key_bindings=kb,
         full_screen=True,
+        mouse_support=True,
         refresh_interval=0.1,
     )
     app.run()

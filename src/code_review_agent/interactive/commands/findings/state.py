@@ -96,6 +96,13 @@ class FindingsViewer:
         self.last_review_id: int | None = None
         self.last_comment_ids: list[int] = []
 
+        # Render cache: avoid rebuilding when nothing changed
+        self._render_generation: int = 0
+        self._last_render_generation: int = -1
+
+        # Filter suggestion cache: avoid querying DB on every keystroke
+        self._suggestion_cache: dict[str, list[str]] = {}
+
         # Load triage and posted state from row data (keyed by finding_db_id)
         for row in self.all_rows:
             if row.finding_db_id is None:
@@ -141,19 +148,40 @@ class FindingsViewer:
 
     # -- Navigation --------------------------------------------------------
 
+    def _mark_dirty(self) -> None:
+        """Bump render generation so the renderer knows to rebuild."""
+        self._render_generation += 1
+
+    def is_render_dirty(self) -> bool:
+        """Return True if state changed since last render, then mark clean."""
+        if self._render_generation != self._last_render_generation:
+            self._last_render_generation = self._render_generation
+            return True
+        return False
+
+    def move_cursor_to(self, row_index: int) -> None:
+        """Move cursor to a specific row index (for mouse click)."""
+        if self.visible_rows:
+            self.cursor = max(0, min(row_index, len(self.visible_rows) - 1))
+            self._mark_dirty()
+
     def move_up(self) -> None:
         if self.visible_rows and self.cursor > 0:
             self.cursor -= 1
+            self._mark_dirty()
 
     def move_down(self) -> None:
         if self.visible_rows and self.cursor < len(self.visible_rows) - 1:
             self.cursor += 1
+            self._mark_dirty()
 
     def scroll_left(self) -> None:
         self.h_offset = max(0, self.h_offset - 4)
+        self._mark_dirty()
 
     def scroll_right(self) -> None:
         self.h_offset = min(self._max_h_offset(), self.h_offset + 4)
+        self._mark_dirty()
 
     def _max_h_offset(self) -> int:
         import shutil
@@ -166,10 +194,12 @@ class FindingsViewer:
     def open_detail(self) -> None:
         self.mode = ViewerMode.DETAIL
         self.is_detail_open = True
+        self._mark_dirty()
 
     def close_detail(self) -> None:
         self.mode = ViewerMode.NAVIGATE
         self.is_detail_open = False
+        self._mark_dirty()
 
     # -- Sort --------------------------------------------------------------
 
@@ -343,7 +373,10 @@ class FindingsViewer:
     def get_filter_suggestions(self, field: str, prefix: str) -> list[str]:
         if self._storage is None:
             return []
-        values = self._storage.get_distinct_finding_values(field)
+        # Cache distinct values per field to avoid DB queries on every keystroke
+        if field not in self._suggestion_cache:
+            self._suggestion_cache[field] = self._storage.get_distinct_finding_values(field)
+        values = self._suggestion_cache[field]
         if not prefix:
             return values
         lower_prefix = prefix.lower()

@@ -244,6 +244,22 @@ def build_key_bindings(viewer: FindingsViewer) -> KeyBindings:
             viewer.filter_input = viewer.filter_input[:-1]
             viewer.update_filter_suggestions()
 
+    # -- Mouse scroll support --
+
+    @kb.add("scroll-up")
+    def on_scroll_up(_event: KeyPressEvent) -> None:
+        if viewer.mode in (ViewerMode.NAVIGATE, ViewerMode.DETAIL):
+            viewer.move_up()
+            viewer.move_up()
+            viewer.move_up()
+
+    @kb.add("scroll-down")
+    def on_scroll_down(_event: KeyPressEvent) -> None:
+        if viewer.mode in (ViewerMode.NAVIGATE, ViewerMode.DETAIL):
+            viewer.move_down()
+            viewer.move_down()
+            viewer.move_down()
+
     @kb.add("<any>")
     def on_any(event: KeyPressEvent) -> None:
         if viewer.mode == ViewerMode.HELP:
