@@ -235,6 +235,11 @@ class ConfigEditor:
         # Snapshot original values after build so we can detect real changes
         self.original_values = dict(self.values)
 
+        # Render cache: avoid rebuilding when nothing changed
+        self._render_generation: int = 0
+        self._cached_render: FormattedText | None = None
+        self._cached_generation: int = -1
+
     def _provider_api_key_field(self) -> str:
         """Return the actual config key for the current provider's API key."""
         provider = self.session.config_overrides.get(
@@ -336,6 +341,29 @@ class ConfigEditor:
             f"base_url -> {provider_info.base_url}"
         )
 
+    def _mark_dirty(self) -> None:
+        """Bump render generation so the renderer knows to rebuild."""
+        self._render_generation += 1
+
+    def move_cursor_to_row(self, target_y: int) -> None:
+        """Move cursor to a visible row by screen Y position (for mouse click)."""
+        if self.mode != _EditMode.NAVIGATE:
+            return
+        visible_start = max(0, self.cursor - 15)
+        visible_end = min(len(self.rows), visible_start + 35)
+        # Account for header lines (2 lines) + category headers
+        screen_row = 0
+        for i in range(visible_start, visible_end):
+            name, kind = self.rows[i]
+            if kind == "header":
+                screen_row += 2  # blank + header
+            else:
+                if screen_row == target_y and kind == "field":
+                    self.cursor = i
+                    self._mark_dirty()
+                    return
+                screen_row += 1
+
     # --- Navigation ---
 
     def move_up(self) -> None:
@@ -344,10 +372,12 @@ class ConfigEditor:
             while i >= 0:
                 if self.rows[i][1] == "field":
                     self.cursor = i
+                    self._mark_dirty()
                     return
                 i -= 1
         elif self.mode in (_EditMode.SELECT, _EditMode.MULTI_SELECT):
             self.selector_cursor = max(0, self.selector_cursor - 1)
+            self._mark_dirty()
 
     def move_down(self) -> None:
         if self.mode == _EditMode.NAVIGATE:
@@ -355,6 +385,7 @@ class ConfigEditor:
             while i < len(self.rows):
                 if self.rows[i][1] == "field":
                     self.cursor = i
+                    self._mark_dirty()
                     return
                 i += 1
         elif self.mode in (_EditMode.SELECT, _EditMode.MULTI_SELECT):
@@ -362,6 +393,7 @@ class ConfigEditor:
                 len(self.selector_choices) - 1,
                 self.selector_cursor + 1,
             )
+            self._mark_dirty()
 
     # --- Edit entry points ---
 
@@ -372,6 +404,7 @@ class ConfigEditor:
 
         field_type = _get_field_type(key)
         self.error_message = ""
+        self._mark_dirty()
 
         # Bool: toggle immediately
         if _is_bool_field(field_type):
@@ -540,20 +573,30 @@ class ConfigEditor:
         is_valid, err = _validate_field(key, raw)
         if not is_valid:
             self.error_message = err
+            self._mark_dirty()
             return
         self._apply_value(key, raw if raw not in ("", "None") else "None")
         self.mode = _EditMode.NAVIGATE
+        self._mark_dirty()
 
     def cancel_edit(self) -> None:
         self.mode = _EditMode.NAVIGATE
         self.error_message = ""
+        self._mark_dirty()
 
     # --- Rendering ---
 
     def render(self) -> FormattedText:
         if self.mode in (_EditMode.SELECT, _EditMode.MULTI_SELECT):
+            # Selector screens always re-render (small + transient)
             return self._render_selector()
-        return self._render_main()
+        # Cache main screen render when nothing changed
+        if self._cached_render is not None and self._cached_generation == self._render_generation:
+            return self._cached_render
+        result = self._render_main()
+        self._cached_render = result
+        self._cached_generation = self._render_generation
+        return result
 
     def _render_main(self) -> FormattedText:
         lines: list[tuple[str, str]] = []
@@ -940,6 +983,20 @@ def cmd_config_edit(args: list[str], session: SessionState) -> None:
             )
             editor.edit_cursor_pos += len(printable)
 
+    @kb.add("scroll-up")
+    def on_scroll_up(event: KeyPressEvent) -> None:
+        if editor.mode != _EditMode.TEXT:
+            editor.move_up()
+            editor.move_up()
+            editor.move_up()
+
+    @kb.add("scroll-down")
+    def on_scroll_down(event: KeyPressEvent) -> None:
+        if editor.mode != _EditMode.TEXT:
+            editor.move_down()
+            editor.move_down()
+            editor.move_down()
+
     control = FormattedTextControl(editor.render)
     window = Window(content=control, wrap_lines=True)
     layout = Layout(HSplit([window]))
@@ -948,6 +1005,7 @@ def cmd_config_edit(args: list[str], session: SessionState) -> None:
         layout=layout,
         key_bindings=kb,
         full_screen=True,
+        mouse_support=True,
         refresh_interval=0.1,
     )
     app.run()
