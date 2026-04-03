@@ -55,8 +55,14 @@ def _shutdown() -> None:
 
 
 def _reset_terminal() -> None:
-    """Reset terminal to a clean state. No exceptions allowed."""
+    """Reset terminal to a clean state. No exceptions allowed.
+
+    Only writes escape sequences when stdout is a real TTY to avoid
+    garbage output in redirected/piped scenarios.
+    """
     try:
+        if not sys.stdout.isatty():
+            return
         # Disable mouse tracking (SGR and X11 protocols)
         sys.stdout.write("\033[?1000l\033[?1006l")
         # Exit alt screen if active
