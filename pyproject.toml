@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-review-ai"
-version = "0.1.12"
+version = "0.1.13"
 description = "Multi-agent code review CLI powered by LLMs. Runs specialized agents in parallel to review GitHub PRs or local diffs."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -47,6 +47,9 @@ dependencies = [
     "prompt-toolkit>=3.0",
     "textual>=0.50",
     "pyyaml>=6.0",
+    "feedparser>=6.0",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
 ]
 
 [project.scripts]
@@ -100,6 +103,7 @@ ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S106", "RUF012"]
+"src/code_review_agent/news/domains.py" = ["E501"]
 "src/code_review_agent/main.py" = ["B008"]
 "src/code_review_agent/models.py" = ["TC003"]
 
@@ -107,8 +111,12 @@ ignore = ["S101"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["textual.*", "yaml.*"]
+module = ["textual.*", "yaml.*", "feedparser.*", "bs4.*", "lxml.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["code_review_agent.news.content"]
+warn_unused_ignores = false
 
 [[tool.mypy.overrides]]
 module = [

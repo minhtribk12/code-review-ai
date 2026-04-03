@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.13] - 2026-04-03
+
+### Added
+
+- **Terminal news reader**: integrated RSS/Atom reader with 40+ built-in domains across 10 categories (tech, AI, LLM, security, languages, DevOps, startups, open source, data, frontend, research).
+- **Article model**: frozen Pydantic model with priority (trending/recent/saved/read), age display, and score formatting.
+- **Article storage**: SQLite-backed store with upsert, domain filtering, read/saved tracking, content caching, per-domain stats, and 30-day auto-cleanup.
+- **RSS adapter**: generic feedparser-based adapter handling RSS 2.0 and Atom feeds with tag extraction and date parsing.
+- **Content fetcher**: fetch full article HTML on demand, convert to rich terminal text preserving headings, code blocks, lists, blockquotes, bold/italic, and link footnotes.
+- **Domain registry**: 40+ domains with meta-domains (e.g., `news tech` fetches hackernews + lobsters + techcrunch).
+- **REPL commands**: `news <domain>`, `news list`, `news stats`, `read-news`.
+
 ## [0.1.12] - 2026-04-03
 
 ### Added
