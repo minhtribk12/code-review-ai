@@ -767,6 +767,11 @@ def _run_repl_loop(settings: Settings) -> None:
 
     _load_active_repo(session)
 
+    # Register graceful shutdown to restore terminal on exit/crash
+    from code_review_agent.interactive.shutdown import register_shutdown
+
+    register_shutdown(session)
+
     completer = build_static_completer()
 
     prompt_str = settings.interactive_prompt
