@@ -111,6 +111,13 @@ COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
     "Usage": [
         ("usage", "Show session usage summary (tokens, cost, calls)"),
     ],
+    "News": [
+        ("news <domain>", "Fetch latest articles (e.g., news hackernews)"),
+        ("news list", "List all available domains (40+ built-in)"),
+        ("news stats", "Show per-domain read/saved/unread counts"),
+        ("news add <name> <url>", "Add a custom RSS feed"),
+        ("read-news [--domain D]", "Browse cached articles"),
+    ],
     "Meta": [
         ("help [command|group]", "Show help"),
         ("agents", "Interactive agent browser (view, edit, create, delete)"),

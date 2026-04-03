@@ -18,6 +18,7 @@ _VERSION = __import__("code_review_agent").__version__
 
 _MORE_COMMANDS: list[tuple[str, str]] = [
     ("agents", "List available review agents"),
+    ("news", "Terminal news reader (40+ tech domains)"),
     ("version", "Show version info"),
     ("history", "View past reviews (opens REPL)"),
     ("watch", "Start file watcher (opens REPL)"),
