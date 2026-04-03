@@ -50,6 +50,7 @@ from code_review_agent.interactive.commands.usage_cmd import cmd_usage
 from code_review_agent.interactive.commands.watch_cmd import cmd_watch
 from code_review_agent.interactive.completers import build_static_completer
 from code_review_agent.interactive.session import SessionState
+from code_review_agent.news.commands import cmd_news, cmd_read_news
 
 if TYPE_CHECKING:
     from code_review_agent.config import Settings
@@ -86,6 +87,8 @@ _COMMANDS: dict[str, CommandHandler] = {
     "agents": cmd_agents,
     "version": cmd_version,
     "clear": cmd_clear,
+    "news": cmd_news,
+    "read-news": cmd_read_news,
 }
 
 _VERSION = __import__("code_review_agent").__version__
@@ -908,6 +911,8 @@ _IMMEDIATE_COMMANDS: set[str] = {
     "version",
     "clear",
     "usage",
+    "news",
+    "read-news",
 }
 
 
