@@ -241,6 +241,9 @@ def _print_welcome() -> None:
         "    [bold cyan]findings[/bold cyan]                  Browse, triage, and post findings"
     )
     console.print(
+        "    [bold cyan]news hackernews[/bold cyan]           Read tech news in the terminal"
+    )
+    console.print(
         "    [bold cyan]config edit[/bold cyan]               Open the interactive config editor"
     )
     console.print(
