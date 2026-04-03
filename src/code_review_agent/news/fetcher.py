@@ -15,20 +15,34 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
-def fetch_news(domain_name: str, *, max_items: int = 30) -> list[Article]:
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+
+def fetch_news(
+    domain_name: str,
+    *,
+    max_items: int = 30,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> list[Article]:
     """Fetch articles from a domain name (or meta-domain).
 
     Resolves the domain, dispatches to the appropriate adapter,
     and returns a merged list of articles sorted by score.
+
+    ``on_progress(done, total, feed_name)`` is called after each feed completes.
     """
     configs = resolve_domain(domain_name)
     if not configs:
         logger.warning(f"unknown domain: {domain_name}")
         return []
 
+    total = len(configs)
     all_articles: list[Article] = []
-    for config in configs:
+    for i, config in enumerate(configs):
         articles = fetch_rss(config, max_items=max_items)
         all_articles.extend(articles)
+        if on_progress is not None:
+            on_progress(i + 1, total, config.name)
 
     return sorted(all_articles, key=lambda a: a.score, reverse=True)
