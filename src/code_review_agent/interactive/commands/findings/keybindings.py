@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 
 from .actions import (
     copy_finding,
@@ -246,14 +247,14 @@ def build_key_bindings(viewer: FindingsViewer) -> KeyBindings:
 
     # -- Mouse scroll support --
 
-    @kb.add("scroll-up")
+    @kb.add(Keys.ScrollUp)
     def on_scroll_up(_event: KeyPressEvent) -> None:
         if viewer.mode in (ViewerMode.NAVIGATE, ViewerMode.DETAIL):
             viewer.move_up()
             viewer.move_up()
             viewer.move_up()
 
-    @kb.add("scroll-down")
+    @kb.add(Keys.ScrollDown)
     def on_scroll_down(_event: KeyPressEvent) -> None:
         if viewer.mode in (ViewerMode.NAVIGATE, ViewerMode.DETAIL):
             viewer.move_down()

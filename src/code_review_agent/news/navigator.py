@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from prompt_toolkit import Application
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout.containers import HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
@@ -281,13 +282,13 @@ def run_news_navigator(
         viewer.mark_read()
         viewer.move_down()
 
-    @kb.add("scroll-up")
+    @kb.add(Keys.ScrollUp)
     def on_scroll_up(_event: KeyPressEvent) -> None:
         viewer.move_up()
         viewer.move_up()
         viewer.move_up()
 
-    @kb.add("scroll-down")
+    @kb.add(Keys.ScrollDown)
     def on_scroll_down(_event: KeyPressEvent) -> None:
         viewer.move_down()
         viewer.move_down()
