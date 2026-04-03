@@ -354,7 +354,7 @@ class ConfigEditor:
         # Account for header lines (2 lines) + category headers
         screen_row = 0
         for i in range(visible_start, visible_end):
-            name, kind = self.rows[i]
+            _name, kind = self.rows[i]
             if kind == "header":
                 screen_row += 2  # blank + header
             else:
