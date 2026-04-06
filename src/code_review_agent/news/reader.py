@@ -55,22 +55,28 @@ class ArticleReader:
 
     def _fetch_content(self) -> None:
         """Fetch and cache article content."""
+        from code_review_agent.news.content import is_valid_content
+
         a = self.article
-        if a.content_text:
+
+        # Use cached content if valid
+        if a.content_text and is_valid_content(a.content_text):
             self.content_lines = a.content_text.splitlines()
             self.is_loading = False
             self._restore_position()
             return
+
+        # Cached content is garbled or missing -- fetch fresh
         try:
             from code_review_agent.news.content import fetch_article_content
 
-            html, text = fetch_article_content(a.url)
-            if text:
+            fetched_html, text = fetch_article_content(a.url)
+            if text and is_valid_content(text):
                 self.content_lines = text.splitlines()
                 if self.store:
-                    self.store.update_content(a.id, html, text)
+                    self.store.update_content(a.id, fetched_html, text)
                     self.article = a.model_copy(
-                        update={"content_text": text, "content_html": html},
+                        update={"content_text": text, "content_html": fetched_html},
                     )
             else:
                 self._use_fallback()

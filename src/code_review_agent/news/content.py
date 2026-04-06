@@ -6,6 +6,7 @@ rich terminal text with formatting preserved.
 
 from __future__ import annotations
 
+import html as html_mod
 import re
 
 import httpx
@@ -15,13 +16,21 @@ logger = structlog.get_logger(__name__)
 
 _USER_AGENT = "CRA-NewsReader/1.0 (+https://github.com/minhtribk12/code-review-ai)"
 _FETCH_TIMEOUT = 15
+_REDDIT_URL_PATTERN = re.compile(r"https?://(?:www\.)?reddit\.com/r/\w+/comments/")
+_MAX_CONTROL_CHAR_RATIO = 0.05
 
 
 def fetch_article_content(url: str) -> tuple[str, str]:
     """Fetch and parse article content.
 
+    For Reddit URLs, uses the JSON API to get selftext + comments.
+    For other URLs, fetches HTML and converts to terminal text.
     Returns (html, plain_text). On failure returns empty strings.
     """
+    # Reddit: use JSON API (HTML is a JS shell, not readable)
+    if _REDDIT_URL_PATTERN.search(url):
+        return _fetch_reddit_content(url)
+
     try:
         response = httpx.get(
             url,
@@ -34,9 +43,95 @@ def fetch_article_content(url: str) -> tuple[str, str]:
         logger.debug(f"failed to fetch article content from {url}")
         return "", ""
 
-    html = response.text
-    text = html_to_terminal_text(html)
-    return html, text
+    raw_html = response.text
+    text = html_to_terminal_text(raw_html)
+
+    # Validate content quality (reject garbled data)
+    if not is_valid_content(text):
+        logger.debug(f"content validation failed for {url}")
+        return "", ""
+
+    return raw_html, text
+
+
+def _fetch_reddit_content(url: str) -> tuple[str, str]:
+    """Fetch Reddit post content via the JSON API.
+
+    Returns selftext + top comments as plain text.
+    """
+    json_url = url.rstrip("/") + ".json"
+    try:
+        response = httpx.get(
+            json_url,
+            headers={"User-Agent": _USER_AGENT},
+            timeout=_FETCH_TIMEOUT,
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        logger.debug(f"failed to fetch Reddit JSON from {json_url}")
+        return "", ""
+
+    if not isinstance(data, list) or len(data) < 1:
+        return "", ""
+
+    # Extract post selftext
+    try:
+        post = data[0]["data"]["children"][0]["data"]
+        selftext = html_mod.unescape(post.get("selftext", ""))
+    except (KeyError, IndexError):
+        return "", ""
+
+    lines: list[str] = []
+    if selftext:
+        lines.append(selftext)
+
+    # Extract top comments
+    if len(data) > 1:
+        try:
+            comment_children = data[1]["data"]["children"]
+            comments: list[tuple[int, str]] = []
+            for child in comment_children[:10]:
+                if child.get("kind") != "t1":
+                    continue
+                cdata = child.get("data", {})
+                body = html_mod.unescape(cdata.get("body", ""))
+                ups = cdata.get("ups", 0)
+                if body and len(body) > 20:
+                    comments.append((ups, body))
+
+            comments.sort(key=lambda c: c[0], reverse=True)
+            if comments:
+                lines.append("")
+                lines.append("## Top Comments")
+                lines.append("")
+                for ups, body in comments[:5]:
+                    # Truncate long comments
+                    preview = body[:300]
+                    if len(body) > 300:
+                        preview += "..."
+                    lines.append(f"({ups} upvotes) {preview}")
+                    lines.append("")
+        except (KeyError, IndexError):
+            pass
+
+    text = "\n".join(lines)
+    return "", text  # no HTML for Reddit JSON content
+
+
+def is_valid_content(text: str) -> bool:
+    """Check if content is valid readable text (not garbled binary).
+
+    Rejects text with >5% non-printable/control characters.
+    """
+    if not text:
+        return False
+    if len(text) < 10:
+        return False
+    control_count = sum(1 for c in text[:1000] if ord(c) < 32 and c not in ("\n", "\r", "\t"))
+    ratio = control_count / min(len(text), 1000)
+    return ratio < _MAX_CONTROL_CHAR_RATIO
 
 
 def html_to_terminal_text(html: str) -> str:
@@ -71,7 +166,8 @@ def html_to_terminal_text(html: str) -> str:
         result.append(line)
         prev_blank = is_blank
 
-    return "\n".join(result)
+    # Final pass: decode any remaining HTML entities
+    return html_mod.unescape("\n".join(result))
 
 
 def _process_element(element: object, lines: list[str], depth: int) -> None:
