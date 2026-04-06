@@ -29,6 +29,7 @@ class Article(BaseModel, frozen=True):
     fetched_at: datetime = Field(default_factory=datetime.now)
     score: int = 0
     comment_count: int = 0
+    comments_url: str | None = None
     tags: tuple[str, ...] = ()
     summary: str = ""
     content_html: str = ""
