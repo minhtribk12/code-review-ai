@@ -141,6 +141,35 @@ class ArticleStore:
                 (html, text, article_id),
             )
 
+    def delete_article(self, article_id: str) -> None:
+        """Delete a single article by ID."""
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM articles WHERE id = ?", (article_id,))
+
+    def delete_articles(self, article_ids: list[str]) -> int:
+        """Delete multiple articles by ID. Returns count deleted."""
+        if not article_ids:
+            return 0
+        with self._get_connection() as conn:
+            placeholders = ",".join("?" for _ in article_ids)
+            cursor = conn.execute(
+                f"DELETE FROM articles WHERE id IN ({placeholders})",  # noqa: S608
+                article_ids,
+            )
+        return cursor.rowcount
+
+    def mark_all_read(self, domain: str | None = None) -> int:
+        """Mark all articles as read, optionally filtered by domain."""
+        with self._get_connection() as conn:
+            if domain:
+                cursor = conn.execute(
+                    "UPDATE articles SET is_read = 1 WHERE domain = ? AND is_read = 0",
+                    (domain,),
+                )
+            else:
+                cursor = conn.execute("UPDATE articles SET is_read = 1 WHERE is_read = 0")
+        return cursor.rowcount
+
     def get_unread_count(self, domain: str | None = None) -> int:
         with self._get_connection() as conn:
             if domain:
