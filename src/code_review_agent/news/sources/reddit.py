@@ -6,6 +6,7 @@ Rate limit: ~1 request per 2 seconds.
 
 from __future__ import annotations
 
+import html
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -123,13 +124,13 @@ def _search_reddit(
             url = comments_url or ""
 
         subreddit = post.get("subreddit", "")
-        selftext = post.get("selftext", "")[:300]
+        selftext = html.unescape(post.get("selftext", ""))[:300]
 
         items.append(
             RawNewsItem(
                 source="reddit",
                 external_id=post.get("id", ""),
-                title=post.get("title", ""),
+                title=html.unescape(post.get("title", "")),
                 url=url,
                 author=post.get("author"),
                 published_at=published,

@@ -170,6 +170,14 @@ class ArticleStore:
                 cursor = conn.execute("UPDATE articles SET is_read = 1 WHERE is_read = 0")
         return cursor.rowcount
 
+    def clear_content(self, article_id: str) -> None:
+        """Reset cached content for an article (force re-fetch)."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE articles SET content_html = '', content_text = '' WHERE id = ?",
+                (article_id,),
+            )
+
     def get_unread_count(self, domain: str | None = None) -> int:
         with self._get_connection() as conn:
             if domain:

@@ -54,7 +54,11 @@ def cmd_news(args: list[str], session: SessionState) -> None:
         return
 
     # news 30days <topic> -- deep research mode
-    if subcmd == "30days" and len(args) >= 2:
+    if subcmd == "30days":
+        if len(args) < 2:
+            console.print("  Usage: news 30days <topic>")
+            console.print("  Example: news 30days rust, news 30days Claude Code")
+            return
         topic = " ".join(args[1:])
         _fetch_topic(topic, session=session, depth="deep")
         return

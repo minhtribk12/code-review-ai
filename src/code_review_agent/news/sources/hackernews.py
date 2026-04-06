@@ -6,6 +6,7 @@ Comment enrichment: hn.algolia.com/api/v1/items/{id}
 
 from __future__ import annotations
 
+import html as html_mod
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -105,7 +106,7 @@ def _search_stories(q: str, *, timeout: int = 30) -> list[RawNewsItem]:
             RawNewsItem(
                 source="hackernews",
                 external_id=str(hit.get("objectID", "")),
-                title=hit.get("title", ""),
+                title=html_mod.unescape(hit.get("title", "")),
                 url=url,
                 author=hit.get("author"),
                 published_at=published,
@@ -136,7 +137,7 @@ def _enrich_with_comments(items: list[RawNewsItem], *, timeout: int = 10) -> Non
             for child in children[:_MAX_COMMENTS_PER_ITEM]:
                 text = child.get("text", "")
                 if text:
-                    clean = _strip_html(text)[:200]
+                    clean = html_mod.unescape(_strip_html(text))[:200]
                     if clean:
                         comments.append(clean)
 
