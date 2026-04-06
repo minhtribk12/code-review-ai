@@ -30,11 +30,19 @@ if TYPE_CHECKING:
     from code_review_agent.news.query import ProcessedQuery
     from code_review_agent.news.scoring import ScoredItem
     from code_review_agent.news.sources import RawNewsItem
+    from code_review_agent.news.storage import ArticleStore as ArticleStore
 
 logger = structlog.get_logger(__name__)
 
 _SPINNER_FRAMES = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
 _DEFAULT_DB = Path("~/.cra/reviews.db").expanduser()
+
+# Depth profiles (from Last30Days): timeout + item limits per source
+DEPTH_PROFILES: dict[str, dict[str, int]] = {
+    "quick": {"timeout": 15, "max_items": 15},
+    "default": {"timeout": 30, "max_items": 30},
+    "deep": {"timeout": 60, "max_items": 60},
+}
 
 
 class BackgroundNewsFetch:
@@ -44,9 +52,16 @@ class BackgroundNewsFetch:
     Pipeline phases: query -> fetch(parallel) -> score -> dedup -> curate -> save
     """
 
-    def __init__(self, domain: str, session: SessionState) -> None:
+    def __init__(
+        self,
+        domain: str,
+        session: SessionState,
+        depth: str = "default",
+    ) -> None:
         self.domain = domain
         self._session = session
+        self._depth = depth
+        self._profile = DEPTH_PROFILES.get(depth, DEPTH_PROFILES["default"])
         self._fetch_id = uuid.uuid4().hex[:8]
         self._done = threading.Event()
         self._lock = threading.Lock()
@@ -76,9 +91,22 @@ class BackgroundNewsFetch:
     def _worker(self) -> None:
         """Execute the full pipeline."""
         bound_logger = logger.bind(fetch_id=self._fetch_id)
-        bound_logger.info("news_pipeline_started", domain=self.domain)
+        bound_logger.info("news_pipeline_started", domain=self.domain, depth=self._depth)
 
         try:
+            # Phase 0: Check cache (24h TTL)
+            from code_review_agent.news.storage import ArticleStore
+
+            store = ArticleStore(db_path=_DEFAULT_DB)
+            cached = self._check_cache(store)
+            if cached is not None:
+                with self._lock:
+                    self._result = cached
+                    self._curated_count = len(cached)
+                    self._phase = "done"
+                bound_logger.info("news_cache_hit", domain=self.domain, count=len(cached))
+                return
+
             # Phase 1: Preprocess query
             from code_review_agent.news.query import preprocess_query
 
@@ -158,19 +186,50 @@ class BackgroundNewsFetch:
             self._done.set()
             self._interrupt_prompt()
 
+    def _check_cache(self, store: ArticleStore) -> list[Article] | None:
+        """Return cached articles if fresh (< 24h). None if stale/empty."""
+        from datetime import datetime, timedelta
+
+        try:
+            articles = store.load_articles(domain=None, limit=50)
+        except Exception:
+            return None
+
+        if not articles:
+            return None
+
+        # Check if any articles for this domain were fetched in last 24h
+        now = datetime.now()
+        cutoff = now - timedelta(hours=24)
+        recent = [
+            a
+            for a in articles
+            if a.domain in ("hackernews", "reddit", "web") and a.fetched_at > cutoff
+        ]
+        if len(recent) >= 5:
+            logger.debug(
+                "cache_fresh",
+                domain=self.domain,
+                cached_count=len(recent),
+            )
+            return recent
+        return None
+
     def _fetch_sources(self, query: ProcessedQuery) -> list[RawNewsItem]:
         """Fetch from all available sources in parallel."""
         from code_review_agent.news.sources import hackernews, reddit
         from code_review_agent.news.sources import web as web_source
 
+        t = self._profile["timeout"]
+
         def _hn() -> list[RawNewsItem]:
-            return hackernews.fetch(query, timeout=30)
+            return hackernews.fetch(query, timeout=t)
 
         def _reddit() -> list[RawNewsItem]:
-            return reddit.fetch(query, timeout=30)
+            return reddit.fetch(query, timeout=t)
 
         def _web() -> list[RawNewsItem]:
-            return web_source.fetch(query, timeout=30)
+            return web_source.fetch(query, timeout=t)
 
         source_fns: dict[str, Callable[[], list[RawNewsItem]]] = {
             "hackernews": _hn,
@@ -287,6 +346,12 @@ class BackgroundNewsFetch:
         return articles
 
     # --- Status for toolbar ---
+
+    @property
+    def source_status(self) -> dict[str, str]:
+        """Per-source fetch status for quality nudge display."""
+        with self._lock:
+            return dict(self._source_status)
 
     @property
     def is_running(self) -> bool:
