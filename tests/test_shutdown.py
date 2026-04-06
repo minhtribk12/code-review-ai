@@ -31,26 +31,32 @@ class TestGracefulShutdown:
             mock_stdout.write.side_effect = OSError("broken pipe")
             _reset_terminal()  # should not raise
 
-    def test_run_with_timeout_completes(self) -> None:
-        from code_review_agent.interactive.shutdown import _run_with_timeout
+    def test_save_state_uses_pre_imported_fn(self) -> None:
+        import code_review_agent.interactive.shutdown as mod
 
-        called = []
-        _run_with_timeout(lambda: called.append(1), timeout=1.0, phase="test")
-        assert called == [1]
+        mock_session = MagicMock()
+        mock_save = MagicMock()
 
-    def test_run_with_timeout_handles_slow_fn(self) -> None:
-        import time
+        old_ref = mod._session_ref
+        old_fn = mod._save_fn
+        try:
+            mod._session_ref = mock_session
+            mod._save_fn = mock_save
+            mod._save_state()
+            mock_save.assert_called_once_with(mock_session)
+        finally:
+            mod._session_ref = old_ref
+            mod._save_fn = old_fn
 
-        from code_review_agent.interactive.shutdown import _run_with_timeout
+    def test_save_state_skips_when_no_session(self) -> None:
+        import code_review_agent.interactive.shutdown as mod
 
-        def slow() -> None:
-            time.sleep(10)
-
-        # Should return quickly despite slow function
-        start = time.monotonic()
-        _run_with_timeout(slow, timeout=0.1, phase="test")
-        elapsed = time.monotonic() - start
-        assert elapsed < 1.0
+        old_ref = mod._session_ref
+        try:
+            mod._session_ref = None
+            mod._save_state()  # should not crash
+        finally:
+            mod._session_ref = old_ref
 
     def test_register_shutdown_idempotent(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
