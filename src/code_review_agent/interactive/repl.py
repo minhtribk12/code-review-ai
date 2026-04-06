@@ -636,7 +636,7 @@ def _confirm_exit(session: SessionState) -> bool:
             if saved:
                 console.print(f"  [green]{saved} setting(s) saved.[/green]")
             else:
-                console.print("  [red]Failed to save settings.[/red]")
+                console.print("  [dim]No settings to save.[/dim]")
         except Exception:
             console.print("  [red]Failed to save settings.[/red]")
         return True
