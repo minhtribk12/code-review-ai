@@ -17,6 +17,7 @@ logger = structlog.get_logger(__name__)
 _USER_AGENT = "CRA-NewsReader/1.0 (+https://github.com/minhtribk12/code-review-ai)"
 _FETCH_TIMEOUT = 15
 _REDDIT_URL_PATTERN = re.compile(r"https?://(?:www\.)?reddit\.com/r/\w+/comments/")
+_HN_URL_PATTERN = re.compile(r"https?://news\.ycombinator\.com/item\?id=(\d+)")
 _MAX_CONTROL_CHAR_RATIO = 0.05
 
 
@@ -30,6 +31,11 @@ def fetch_article_content(url: str) -> tuple[str, str]:
     # Reddit: use JSON API (HTML is a JS shell, not readable)
     if _REDDIT_URL_PATTERN.search(url):
         return _fetch_reddit_content(url)
+
+    # HN comment page: fetch threaded comments via Algolia API
+    hn_match = _HN_URL_PATTERN.search(url)
+    if hn_match:
+        return _fetch_hn_content(hn_match.group(1))
 
     try:
         response = httpx.get(
@@ -118,6 +124,95 @@ def _fetch_reddit_content(url: str) -> tuple[str, str]:
 
     text = "\n".join(lines)
     return "", text  # no HTML for Reddit JSON content
+
+
+def _fetch_hn_content(item_id: str) -> tuple[str, str]:
+    """Fetch HN story + threaded comments via Algolia API."""
+    api_url = f"https://hn.algolia.com/api/v1/items/{item_id}"
+    try:
+        response = httpx.get(
+            api_url,
+            headers={"User-Agent": _USER_AGENT},
+            timeout=_FETCH_TIMEOUT,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        logger.debug(f"failed to fetch HN item {item_id}")
+        return "", ""
+
+    lines: list[str] = []
+    title = html_mod.unescape(data.get("title", ""))
+    story_url = data.get("url", "")
+    text_content = html_mod.unescape(_strip_html_tags(data.get("text") or ""))
+
+    if title:
+        lines.append(f"# {title}")
+        lines.append("")
+    if story_url:
+        lines.append(f"Link: {story_url}")
+        lines.append("")
+    if text_content:
+        lines.append(text_content)
+        lines.append("")
+
+    # Threaded comments with indentation
+    children = data.get("children", [])
+    if children:
+        lines.append("---")
+        lines.append("## Discussion")
+        lines.append("")
+        _render_hn_comments(children, lines, depth=0, max_depth=3, max_comments=15)
+
+    text = "\n".join(lines)
+    return "", text
+
+
+def _render_hn_comments(
+    children: list[dict[str, object]],
+    lines: list[str],
+    depth: int,
+    max_depth: int,
+    max_comments: int,
+) -> int:
+    """Render HN comments with threaded indentation. Returns count rendered."""
+    count = 0
+    indent = "  " * depth
+    for child in children:
+        if count >= max_comments:
+            break
+        author = child.get("author", "")
+        text = html_mod.unescape(_strip_html_tags(str(child.get("text", ""))))
+        if not text or len(text) < 10:
+            continue
+
+        # Truncate long comments
+        preview = text[:400]
+        if len(text) > 400:
+            preview += "..."
+
+        lines.append(f"{indent}> {author}:")
+        for line in preview.splitlines():
+            lines.append(f"{indent}  {line}")
+        lines.append("")
+        count += 1
+
+        # Recurse into replies
+        sub_children: list[dict[str, object]] = child.get("children", [])  # type: ignore[assignment]
+        if sub_children and depth < max_depth:
+            count += _render_hn_comments(
+                sub_children,
+                lines,
+                depth + 1,
+                max_depth,
+                max_comments - count,  # type: ignore[arg-type]
+            )
+    return count
+
+
+def _strip_html_tags(text: str) -> str:
+    """Strip HTML tags from text."""
+    return re.sub(r"<[^>]+>", " ", text).strip()
 
 
 def is_valid_content(text: str) -> bool:

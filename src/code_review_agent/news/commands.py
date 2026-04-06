@@ -173,6 +173,16 @@ def _show_stats() -> None:
     console.print(f"\n  Total: {total_all} articles | DB size: {size_str}")
     console.print(f"  Unread: {store.get_unread_count()}")
 
+    # Weekly summary
+    weekly = store.get_weekly_summary()
+    w_read = weekly["read_this_week"]
+    w_saved = weekly["saved_this_week"]
+    w_domain = weekly["top_domain"]
+    w_count = weekly["top_domain_count"]
+    console.print(f"\n  This week: {w_read} read, {w_saved} saved")
+    if w_domain:
+        console.print(f"  Most read: {w_domain} ({w_count} articles)")
+
 
 def _add_custom_feed(
     name: str,

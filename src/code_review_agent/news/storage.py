@@ -226,6 +226,35 @@ class ArticleStore:
             for row in rows
         }
 
+    def get_weekly_summary(self) -> dict[str, object]:
+        """Return reading stats for the last 7 days."""
+        from datetime import timedelta
+
+        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        with self._get_connection() as conn:
+            read_row = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE is_read = 1 AND fetched_at >= ?",
+                (cutoff,),
+            ).fetchone()
+            saved_row = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE is_saved = 1 AND fetched_at >= ?",
+                (cutoff,),
+            ).fetchone()
+            domain_row = conn.execute(
+                """
+                SELECT domain, COUNT(*) as cnt FROM articles
+                WHERE is_read = 1 AND fetched_at >= ?
+                GROUP BY domain ORDER BY cnt DESC LIMIT 1
+                """,
+                (cutoff,),
+            ).fetchone()
+        return {
+            "read_this_week": read_row[0] if read_row else 0,
+            "saved_this_week": saved_row[0] if saved_row else 0,
+            "top_domain": domain_row["domain"] if domain_row else None,
+            "top_domain_count": domain_row["cnt"] if domain_row else 0,
+        }
+
     @staticmethod
     def _row_to_article(row: sqlite3.Row) -> Article:
         tags_str = row["tags"] or ""
