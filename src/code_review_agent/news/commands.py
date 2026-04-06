@@ -1,10 +1,11 @@
 """REPL commands for the news reader.
 
-news <domain>     -- fetch latest from domain
-news add <url>    -- add custom RSS feed
-news list         -- list configured domains
-news stats        -- show read/saved/unread counts
-read-news         -- open saved news navigator
+news <topic>          -- multi-source intelligence brief (HN + Reddit + Web)
+news 30days <topic>   -- deep 30-day research across all sources
+news list             -- list available preset domains
+news stats            -- show read/saved/unread counts
+news add <name> <url> -- add custom RSS feed
+read-news [domain]    -- open saved news navigator
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import TYPE_CHECKING
 import structlog
 from rich.console import Console
 
-from code_review_agent.news.domains import list_domains, resolve_domain
+from code_review_agent.news.domains import list_domains
 from code_review_agent.news.storage import ArticleStore
 
 if TYPE_CHECKING:
@@ -30,8 +31,12 @@ _DEFAULT_DB = Path("~/.cra/reviews.db").expanduser()
 def cmd_news(args: list[str], session: SessionState) -> None:
     """Handle the 'news' command and its subcommands."""
     if not args:
-        console.print("  Usage: news <domain> | news list | news stats")
-        console.print("  Example: news hackernews, news ai, news tech")
+        console.print("  Usage: news <topic> | news 30days <topic> | news list | news stats")
+        console.print("  Examples:")
+        console.print("    news ai                  Multi-source brief (HN + Reddit + Web)")
+        console.print("    news 30days rust         Deep 30-day research across all sources")
+        console.print("    news hackernews          Fetch from specific domain")
+        console.print("    news list                Show available domains")
         return
 
     subcmd = args[0]
@@ -48,8 +53,15 @@ def cmd_news(args: list[str], session: SessionState) -> None:
         _add_custom_feed(args[1], args[2])
         return
 
-    # Treat as domain name
-    _fetch_domain(subcmd, session=session)
+    # news 30days <topic> -- deep research mode
+    if subcmd == "30days" and len(args) >= 2:
+        topic = " ".join(args[1:])
+        _fetch_topic(topic, session=session, depth="deep")
+        return
+
+    # Any topic -- use wide multi-source pipeline
+    topic = " ".join(args)
+    _fetch_topic(topic, session=session, depth="default")
 
 
 def cmd_read_news(args: list[str], session: SessionState) -> None:
@@ -61,51 +73,52 @@ def cmd_read_news(args: list[str], session: SessionState) -> None:
     articles = store.load_articles(domain=domain, limit=200)
 
     if not articles:
-        console.print("  No articles found. Fetch some first: news hackernews")
+        console.print("  No articles found. Fetch some first: news ai")
         return
 
     run_news_navigator(articles, store=store)
 
 
-def _fetch_domain(domain_name: str, session: SessionState | None = None) -> None:
-    """Launch background news fetch + LLM curation.
+def _fetch_topic(
+    topic: str,
+    *,
+    session: SessionState | None = None,
+    depth: str = "default",
+) -> None:
+    """Launch background multi-source news pipeline.
 
-    Runs in a daemon thread so the REPL stays responsive.
-    Progress is shown in the toolbar status bar.
+    Searches HN + Reddit + Web for the topic, scores, deduplicates,
+    then optionally synthesizes with LLM. Non-blocking.
+
+    depth:
+      "default" -- 30s per source, top 30 items per source
+      "deep"    -- 60s per source, top 60 items, wider query expansion
     """
-    configs = resolve_domain(domain_name)
-    if not configs:
-        console.print(f"  Unknown domain: {domain_name}")
-        console.print("  Use 'news list' to see available domains.")
-        return
-
     if session is None:
-        console.print("  Session required for background fetch.")
+        console.print("  Session required for news fetch.")
         return
 
     # Check if a fetch is already running
     existing = getattr(session, "_news_fetch", None)
     if existing is not None and existing.is_running:
-        console.print(f"  Already fetching {existing.domain}. Wait or use 'read-news'.")
+        console.print(f"  Already fetching '{existing.domain}'. Wait or use 'read-news'.")
         return
 
     from code_review_agent.news.background import BackgroundNewsFetch
 
-    bg = BackgroundNewsFetch(domain=domain_name, session=session)
+    bg = BackgroundNewsFetch(domain=topic, session=session)
 
-    # Store on session so toolbar can read status and completion can be detected
     session._news_fetch = bg  # type: ignore[attr-defined]
 
-    # Wire up prompt app for toolbar refresh (same pattern as background review)
     prompt_app = getattr(session, "_prompt_session", None)
     if prompt_app is not None:
         bg._prompt_app = prompt_app.app
 
     bg.start()
-    console.print(
-        f"  Fetching {domain_name} in background. "
-        f"Status shown in toolbar. Use 'read-news' when done."
-    )
+
+    mode = "30-day deep research" if depth == "deep" else "multi-source brief"
+    console.print(f"  {mode}: '{topic}' (HN + Reddit + Web)")
+    console.print("  Progress in toolbar. Use 'read-news' when done.")
 
 
 def _show_stats() -> None:

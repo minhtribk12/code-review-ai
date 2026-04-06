@@ -23,8 +23,11 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from code_review_agent.interactive.session import SessionState
     from code_review_agent.news.models import Article
+    from code_review_agent.news.query import ProcessedQuery
     from code_review_agent.news.scoring import ScoredItem
     from code_review_agent.news.sources import RawNewsItem
 
@@ -155,23 +158,34 @@ class BackgroundNewsFetch:
             self._done.set()
             self._interrupt_prompt()
 
-    def _fetch_sources(self, query: object) -> list[RawNewsItem]:
-        """Fetch from HN + Reddit in parallel with per-source timeouts."""
+    def _fetch_sources(self, query: ProcessedQuery) -> list[RawNewsItem]:
+        """Fetch from all available sources in parallel."""
         from code_review_agent.news.sources import hackernews, reddit
+        from code_review_agent.news.sources import web as web_source
 
-        sources = {
-            "hackernews": lambda: hackernews.fetch(query, timeout=30),  # type: ignore[arg-type]
-            "reddit": lambda: reddit.fetch(query, timeout=30),  # type: ignore[arg-type]
+        def _hn() -> list[RawNewsItem]:
+            return hackernews.fetch(query, timeout=30)
+
+        def _reddit() -> list[RawNewsItem]:
+            return reddit.fetch(query, timeout=30)
+
+        def _web() -> list[RawNewsItem]:
+            return web_source.fetch(query, timeout=30)
+
+        source_fns: dict[str, Callable[[], list[RawNewsItem]]] = {
+            "hackernews": _hn,
+            "reddit": _reddit,
+            "web": _web,
         }
 
         with self._lock:
-            self._sources_total = len(sources)
+            self._sources_total = len(source_fns)
 
         all_items: list[RawNewsItem] = []
 
-        with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+        with ThreadPoolExecutor(max_workers=len(source_fns)) as pool:
             future_to_source: dict[Future[list[RawNewsItem]], str] = {
-                pool.submit(fn): name for name, fn in sources.items()
+                pool.submit(fn): name for name, fn in source_fns.items()
             }
 
             for future in as_completed(future_to_source, timeout=60):

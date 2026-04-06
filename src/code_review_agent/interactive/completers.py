@@ -144,6 +144,7 @@ def build_static_completer() -> _ReplCompleter:
             },
             "findings": None,
             "news": {
+                "30days": None,
                 "list": None,
                 "stats": None,
                 "add": None,
