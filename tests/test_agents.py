@@ -377,9 +377,9 @@ class TestFormatUserPrompt:
             previous_findings=previous,
         )
 
-        assert "--- PREVIOUS FINDINGS ---" in prompt
+        assert "PREVIOUS FINDINGS" in prompt
         assert "--- PREVIOUS FINDINGS END ---" in prompt
-        assert "[high] SQL injection found" in prompt
+        assert "SQL injection found" in prompt
         assert "Do NOT repeat the findings above" in prompt
 
     def test_no_previous_findings_section_when_empty(

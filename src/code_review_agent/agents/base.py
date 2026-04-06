@@ -209,6 +209,32 @@ class BaseAgent(ABC):
         """
         parts: list[str] = []
 
+        # Inject persistent memory (facts from previous sessions)
+        try:
+            from pathlib import Path
+
+            from code_review_agent.memory.fact_store import FactStore, format_facts_for_prompt
+
+            db_path = Path("~/.cra/reviews.db").expanduser()
+            if db_path.is_file():
+                fact_store = FactStore(db_path=db_path)
+                facts = fact_store.get_top_facts(limit=10)
+                memory_prompt = format_facts_for_prompt(facts)
+                if memory_prompt:
+                    parts.append(memory_prompt)
+        except Exception:  # noqa: S110 - memory injection is optional
+            pass
+
+        # Inject active review skills
+        try:
+            from code_review_agent.skills.loader import format_skills_for_prompt
+
+            skills_prompt = format_skills_for_prompt([])
+            if skills_prompt:
+                parts.append(skills_prompt)
+        except Exception:  # noqa: S110 - skill injection is optional
+            pass
+
         if review_input.pr_title is not None:
             parts.append(f"PR Title: {review_input.pr_title}")
         if review_input.pr_description:
@@ -241,10 +267,21 @@ class BaseAgent(ABC):
         )
 
         if previous_findings:
-            parts.append("\n--- PREVIOUS FINDINGS ---")
-            for finding in previous_findings:
-                parts.append(f"- [{finding.severity}] {finding.title}: {finding.description}")
-            parts.append("--- PREVIOUS FINDINGS END ---")
+            # Use context summarization to save tokens in deepening rounds
+            try:
+                from code_review_agent.context_summary import summarize_findings_for_deepening
+
+                summary = summarize_findings_for_deepening(previous_findings)
+                if summary:
+                    parts.append("\n--- PREVIOUS FINDINGS (SUMMARIZED) ---")
+                    parts.append(summary)
+                    parts.append("--- PREVIOUS FINDINGS END ---")
+            except Exception:
+                # Fallback to full listing
+                parts.append("\n--- PREVIOUS FINDINGS ---")
+                for finding in previous_findings:
+                    parts.append(f"- [{finding.severity}] {finding.title}: {finding.description}")
+                parts.append("--- PREVIOUS FINDINGS END ---")
             parts.append("\nLook for issues you missed. Do NOT repeat the findings above.")
 
         return "\n".join(parts)
