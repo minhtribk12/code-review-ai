@@ -51,6 +51,7 @@ class NewsViewer:
         self.is_detail_open: bool = False
         self.status_message: str = ""
         self.wants_reader: bool = False
+        self.selected: set[int] = set()  # indices of multi-selected articles
 
     def move_up(self) -> None:
         if self.cursor > 0:
@@ -63,13 +64,30 @@ class NewsViewer:
     def toggle_detail(self) -> None:
         self.is_detail_open = not self.is_detail_open
 
+    def toggle_select(self) -> None:
+        """Toggle multi-select on current article (Space key)."""
+        if not self.articles:
+            return
+        if self.cursor in self.selected:
+            self.selected.discard(self.cursor)
+        else:
+            self.selected.add(self.cursor)
+
+    def select_all(self) -> None:
+        """Select all visible articles."""
+        self.selected = set(range(len(self.articles)))
+        self.status_message = f"Selected all {len(self.articles)}"
+
+    def clear_selection(self) -> None:
+        """Clear multi-selection."""
+        self.selected.clear()
+
     def toggle_save(self) -> None:
         if not self.articles or self.store is None:
             return
         article = self.articles[self.cursor]
         new_saved = not article.is_saved
         self.store.mark_saved(article.id, saved=new_saved)
-        # Update local state (create new frozen article)
         self.articles[self.cursor] = article.model_copy(update={"is_saved": new_saved})
         self.status_message = "Saved" if new_saved else "Unsaved"
 
@@ -81,15 +99,65 @@ class NewsViewer:
             self.store.mark_read(article.id)
             self.articles[self.cursor] = article.model_copy(update={"is_read": True})
 
+    def mark_selected_read(self) -> None:
+        """Mark all selected (or current) articles as read."""
+        if not self.articles or self.store is None:
+            return
+        targets = self.selected if self.selected else {self.cursor}
+        count = 0
+        for idx in targets:
+            if 0 <= idx < len(self.articles) and not self.articles[idx].is_read:
+                self.store.mark_read(self.articles[idx].id)
+                self.articles[idx] = self.articles[idx].model_copy(update={"is_read": True})
+                count += 1
+        self.selected.clear()
+        self.status_message = f"Marked {count} as read"
+
+    def delete_current(self) -> None:
+        """Delete the current article."""
+        if not self.articles or self.store is None:
+            return
+        article = self.articles[self.cursor]
+        self.store.delete_article(article.id)
+        self.articles.pop(self.cursor)
+        self.selected.discard(self.cursor)
+        # Reindex selections above removed item
+        self.selected = {i - 1 if i > self.cursor else i for i in self.selected}
+        self.cursor = min(self.cursor, max(0, len(self.articles) - 1))
+        self.status_message = "Deleted"
+
+    def delete_selected(self) -> None:
+        """Delete all selected articles (or current if none selected)."""
+        if not self.articles or self.store is None:
+            return
+        targets = sorted(self.selected, reverse=True) if self.selected else [self.cursor]
+        ids = [self.articles[i].id for i in targets if 0 <= i < len(self.articles)]
+        self.store.delete_articles(ids)
+        for idx in sorted(targets, reverse=True):
+            if 0 <= idx < len(self.articles):
+                self.articles.pop(idx)
+        self.selected.clear()
+        self.cursor = min(self.cursor, max(0, len(self.articles) - 1))
+        self.status_message = f"Deleted {len(ids)}"
+
+    def mark_all_read(self) -> None:
+        """Mark ALL articles as read."""
+        if not self.articles or self.store is None:
+            return
+        count = self.store.mark_all_read()
+        for i in range(len(self.articles)):
+            if not self.articles[i].is_read:
+                self.articles[i] = self.articles[i].model_copy(update={"is_read": True})
+        self.status_message = f"Marked {count} as read"
+
     def open_in_browser(self) -> None:
         if not self.articles:
             return
-        article = self.articles[self.cursor]
         try:
-            webbrowser.open(article.url)
-            self.status_message = f"Opened: {article.url}"
+            webbrowser.open(self.articles[self.cursor].url)
+            self.status_message = "Opened in browser"
         except Exception:
-            self.status_message = "! Failed to open browser"
+            self.status_message = "Failed to open browser"
 
     @property
     def current_article(self) -> Article | None:
@@ -105,6 +173,10 @@ class NewsViewer:
     def saved_count(self) -> int:
         return sum(1 for a in self.articles if a.is_saved)
 
+    @property
+    def selected_count(self) -> int:
+        return len(self.selected)
+
 
 def _render(viewer: NewsViewer) -> FormattedText:
     """Render the complete navigator screen."""
@@ -114,12 +186,10 @@ def _render(viewer: NewsViewer) -> FormattedText:
     # Header
     total = len(viewer.articles)
     lines.append((_STYLE_HEADER, " News Reader\n"))
-    lines.append(
-        (
-            _STYLE_MUTED,
-            f" {total} articles | {viewer.unread_count} unread | {viewer.saved_count} saved\n",
-        )
-    )
+    stats = f" {total} articles | {viewer.unread_count} unread | {viewer.saved_count} saved"
+    if viewer.selected_count > 0:
+        stats += f" | {viewer.selected_count} selected"
+    lines.append((_STYLE_MUTED, stats + "\n"))
     if viewer.status_message:
         lines.append(("green", f" {viewer.status_message}\n"))
         viewer.status_message = ""
@@ -146,21 +216,24 @@ def _render(viewer: NewsViewer) -> FormattedText:
 
     for i in range(v_start, v_end):
         article = viewer.articles[i]
-        is_selected = i == viewer.cursor
-        is_read = article.is_read
-        is_saved = article.is_saved
+        is_cursor = i == viewer.cursor
+        is_multi_sel = i in viewer.selected
 
-        # Prefix
-        if is_selected:
+        # Prefix: cursor + selection indicator
+        if is_cursor:
             lines.append((_STYLE_HIGHLIGHT, " > "))
+        elif is_multi_sel:
+            lines.append((_STYLE_SAVED, " x "))
         else:
             lines.append(("", "   "))
 
         # Score
         score = article.score_display.rjust(5)
-        base_style = _STYLE_READ if is_read else ""
-        if is_selected:
+        base_style = _STYLE_READ if article.is_read else ""
+        if is_cursor:
             base_style = "bold"
+        elif is_multi_sel:
+            base_style = "bold green"
 
         lines.append((base_style, f"{score}  "))
 
@@ -183,12 +256,14 @@ def _render(viewer: NewsViewer) -> FormattedText:
         lines.append((_STYLE_MUTED, f" {cmts:>5}"))
 
         # Status indicators
-        flags: list[str] = []
-        if is_saved:
-            flags.append("*")
-        if is_read:
-            flags.append(".")
-        lines.append((_STYLE_SAVED if is_saved else _STYLE_MUTED, " " + "".join(flags)))
+        flags = ""
+        if article.is_saved:
+            flags += "*"
+        if article.is_read:
+            flags += "."
+        if is_multi_sel:
+            flags += "x"
+        lines.append((_STYLE_SAVED if article.is_saved else _STYLE_MUTED, f" {flags}"))
         lines.append(("", "\n"))
 
     # Detail panel
@@ -197,9 +272,20 @@ def _render(viewer: NewsViewer) -> FormattedText:
 
     # Footer
     lines.append(("", "\n"))
-    lines.append(
-        (_STYLE_MUTED, " j/k nav | Enter detail | r read | s save | o browser | q quit\n")
-    )
+    if viewer.selected_count > 0:
+        lines.append(
+            (
+                _STYLE_MUTED,
+                " Space select | D delete sel | R read sel | a all | c clear | q quit\n",
+            )
+        )
+    else:
+        lines.append(
+            (
+                _STYLE_MUTED,
+                " j/k nav | Enter detail | r read | s save | d del | Space select | q quit\n",
+            )
+        )
 
     return FormattedText(lines)
 
@@ -302,6 +388,42 @@ def run_news_navigator(
     def on_next(_event: KeyPressEvent) -> None:
         viewer.mark_read()
         viewer.move_down()
+
+    @kb.add("d")
+    def on_delete(_event: KeyPressEvent) -> None:
+        """Delete current article."""
+        viewer.delete_current()
+
+    @kb.add("D")
+    def on_delete_selected(_event: KeyPressEvent) -> None:
+        """Delete all selected (or current if none selected)."""
+        viewer.delete_selected()
+
+    @kb.add("space")
+    def on_toggle_select(_event: KeyPressEvent) -> None:
+        """Toggle multi-select on current article."""
+        viewer.toggle_select()
+        viewer.move_down()
+
+    @kb.add("a")
+    def on_select_all(_event: KeyPressEvent) -> None:
+        """Select all articles."""
+        viewer.select_all()
+
+    @kb.add("c")
+    def on_clear_selection(_event: KeyPressEvent) -> None:
+        """Clear multi-selection."""
+        viewer.clear_selection()
+
+    @kb.add("R")
+    def on_mark_selected_read(_event: KeyPressEvent) -> None:
+        """Mark selected (or current) as read."""
+        viewer.mark_selected_read()
+
+    @kb.add("A")
+    def on_mark_all_read(_event: KeyPressEvent) -> None:
+        """Mark ALL articles as read."""
+        viewer.mark_all_read()
 
     @kb.add(Keys.ScrollUp)
     def on_scroll_up(_event: KeyPressEvent) -> None:
