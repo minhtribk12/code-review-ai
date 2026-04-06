@@ -50,6 +50,7 @@ class NewsViewer:
         self.cursor: int = 0
         self.is_detail_open: bool = False
         self.status_message: str = ""
+        self.wants_reader: bool = False
 
     def move_up(self) -> None:
         if self.cursor > 0:
@@ -137,9 +138,9 @@ def _render(viewer: NewsViewer) -> FormattedText:
     )
     lines.append((_STYLE_MUTED, "   " + "-" * min(tw - 4, 76) + "\n"))
 
-    # Viewport
-    detail_h = 10 if viewer.is_detail_open else 0
-    vp = max(8, 25 - detail_h)
+    # Viewport -- shrink list when detail is open
+    detail_h = 18 if viewer.is_detail_open else 0
+    vp = max(5, 25 - detail_h)
     v_start = max(0, viewer.cursor - vp // 2)
     v_end = min(len(viewer.articles), v_start + vp)
 
@@ -197,53 +198,63 @@ def _render(viewer: NewsViewer) -> FormattedText:
     # Footer
     lines.append(("", "\n"))
     lines.append(
-        (
-            _STYLE_MUTED,
-            " j/k navigate | Enter detail | s save | o browser | n next(mark read) | q quit\n",
-        )
+        (_STYLE_MUTED, " j/k nav | Enter detail | r read | s save | o browser | q quit\n")
     )
 
     return FormattedText(lines)
 
 
 def _render_detail(article: Article, tw: int) -> _Lines:
-    """Render the detail panel for the selected article."""
+    """Enhanced detail panel: summary, comments, convergence."""
     lines: _Lines = []
     sep = "=" * min(tw - 6, 70)
+    wrap_w = max(40, tw - 10)
+
     lines.append(("", "\n"))
     lines.append((_STYLE_MUTED, f"   {sep}\n"))
     lines.append((_STYLE_HEADER, f"   {article.title}\n"))
 
-    meta_parts: list[str] = []
+    # Metadata
+    meta: list[str] = []
     if article.author:
-        meta_parts.append(f"by {article.author}")
-    meta_parts.append(article.domain)
+        meta.append(f"by {article.author}")
+    meta.append(article.domain)
     if article.age_display:
-        meta_parts.append(f"{article.age_display} ago")
+        meta.append(f"{article.age_display} ago")
     if article.score > 0:
-        meta_parts.append(f"{article.score_display} points")
+        meta.append(f"{article.score_display} pts")
     if article.comment_count > 0:
-        meta_parts.append(f"{article.comment_count} comments")
-    lines.append((_STYLE_MUTED, f"   {' | '.join(meta_parts)}\n"))
+        meta.append(f"{article.comment_count} comments")
+    lines.append((_STYLE_MUTED, f"   {' | '.join(meta)}\n"))
 
     if article.tags:
         lines.append((_STYLE_MUTED, f"   Tags: {', '.join(article.tags)}\n"))
 
-    lines.append(("", "\n"))
-
-    # Summary (LLM-curated intelligence brief)
-    text = article.content_text or article.summary
+    # Summary section
+    text = article.summary or article.content_text
     if text:
-        wrap_width = max(40, tw - 10)
         lines.append(("", "\n"))
-        for line in text.splitlines()[:12]:
-            for wrapped in textwrap.wrap(line, width=wrap_width) or [""]:
-                lines.append(("", f"   {wrapped}\n"))
+        lines.append(("bold underline", "   SUMMARY\n"))
+        # Split on pipe delimiter from pipeline enrichment
+        summary = text.split(" | Top comment:")[0] if " | Top comment:" in text else text
+        for line in summary.splitlines()[:6]:
+            for w in textwrap.wrap(line, width=wrap_w) or [""]:
+                lines.append(("", f"   {w}\n"))
 
-    # Citations and further reading
+    # Top community comment
+    top_comment = ""
+    if " | Top comment:" in (article.summary or ""):
+        top_comment = (article.summary or "").split(" | Top comment:")[1].strip()
+    if top_comment:
+        lines.append(("", "\n"))
+        lines.append(("bold underline", "   TOP DISCUSSION\n"))
+        for w in textwrap.wrap(f'"{top_comment}"', width=wrap_w) or [""]:
+            lines.append(("italic", f"   {w}\n"))
+
+    # Source
     lines.append(("", "\n"))
     lines.append((_STYLE_ACCENT, f"   Source: {article.url}\n"))
-    lines.append((_STYLE_MUTED, "   [o] open in browser | [s] save | [n] next\n"))
+    lines.append((_STYLE_MUTED, "   [r] read full | [o] browser | [s] save | [n] next\n"))
 
     return lines
 
@@ -270,6 +281,14 @@ def run_news_navigator(
     def on_enter(_event: KeyPressEvent) -> None:
         viewer.toggle_detail()
         viewer.mark_read()
+
+    @kb.add("r")
+    def on_read(event: KeyPressEvent) -> None:
+        """Open full-screen reader for current article."""
+        if viewer.current_article:
+            viewer.mark_read()
+            viewer.wants_reader = True
+            event.app.exit()
 
     @kb.add("s")
     def on_save(_event: KeyPressEvent) -> None:
@@ -304,18 +323,35 @@ def run_news_navigator(
         else:
             event.app.exit()
 
-    control = FormattedTextControl(lambda: _render(viewer))
-    window = Window(content=control, wrap_lines=True)
-    layout = Layout(HSplit([window]))
+    # Main loop: navigator -> reader -> navigator
+    while True:
+        viewer.wants_reader = False
 
-    app: Application[None] = Application(
-        layout=layout,
-        key_bindings=kb,
-        full_screen=True,
-        mouse_support=True,
-        refresh_interval=0.1,
-    )
-    app.run()
+        control = FormattedTextControl(lambda: _render(viewer))
+        window = Window(content=control, wrap_lines=True)
+        layout = Layout(HSplit([window]))
+
+        app: Application[None] = Application(
+            layout=layout,
+            key_bindings=kb,
+            full_screen=True,
+            mouse_support=True,
+            refresh_interval=0.1,
+        )
+        app.run()
+
+        if viewer.wants_reader and viewer.current_article:
+            from code_review_agent.news.reader import run_article_reader
+
+            run_article_reader(
+                article=viewer.current_article,
+                store=viewer.store,
+                articles=viewer.articles,
+                article_index=viewer.cursor,
+            )
+            # After reader exits, loop back to navigator
+        else:
+            break  # User pressed q/Esc -> exit
 
     # Post-TUI summary
     from rich.console import Console
