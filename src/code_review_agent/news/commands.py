@@ -50,7 +50,19 @@ def cmd_news(args: list[str], session: SessionState) -> None:
         return
 
     if subcmd == "add" and len(args) >= 3:
-        _add_custom_feed(args[1], args[2])
+        _add_custom_feed(args[1], args[2], session)
+        return
+
+    if subcmd == "remove" and len(args) >= 2:
+        _remove_custom_feed(args[1], session)
+        return
+
+    if subcmd == "refresh":
+        _refresh(session)
+        return
+
+    if subcmd == "cleanup":
+        _cleanup()
         return
 
     # news 30days <topic> -- deep research mode
@@ -132,25 +144,107 @@ def _fetch_topic(
 
 
 def _show_stats() -> None:
-    """Show per-domain read/saved/unread counts."""
+    """Show per-domain read/saved/unread counts + cache size."""
     store = ArticleStore(db_path=_DEFAULT_DB)
     stats = store.get_stats()
     if not stats:
-        console.print("  No articles. Fetch some first: news hackernews")
+        console.print("  No articles. Fetch some first: news ai")
         return
 
     console.print("\n  Domain stats:")
+    total_all = 0
     for domain, counts in stats.items():
         total = counts["total"]
         read = counts["read"]
         saved = counts["saved"]
+        total_all += total
         rate = f"{read * 100 // total}%" if total > 0 else "0%"
         console.print(
             f"    {domain:<20} {total:>4} fetched, {read:>4} read, {saved:>4} saved ({rate})"
         )
 
+    # Cache size
+    import os
 
-def _add_custom_feed(name: str, url: str) -> None:
-    """Add a custom RSS feed to config."""
-    console.print(f"  Added custom feed: {name} -> {url}")
-    console.print("  Custom feed persistence coming soon.")
+    db_size = 0
+    if _DEFAULT_DB.is_file():
+        db_size = os.path.getsize(_DEFAULT_DB)
+    size_str = f"{db_size / 1024:.0f}KB" if db_size < 1048576 else f"{db_size / 1048576:.1f}MB"
+    console.print(f"\n  Total: {total_all} articles | DB size: {size_str}")
+    console.print(f"  Unread: {store.get_unread_count()}")
+
+
+def _add_custom_feed(
+    name: str,
+    url: str,
+    session: SessionState | None = None,
+) -> None:
+    """Add a custom RSS feed and persist to config.yaml."""
+    if session is None:
+        console.print("  Session required.")
+        return
+    try:
+        config_store = session._get_config_store()
+        data = config_store.load()
+        feeds = data.get("news_feeds", [])
+        if not isinstance(feeds, list):
+            feeds = []
+        # Check for duplicate
+        if any(f.get("name") == name for f in feeds if isinstance(f, dict)):
+            console.print(f"  Feed '{name}' already exists. Use 'news remove {name}' first.")
+            return
+        feeds.append({"name": name, "url": url})
+        data["news_feeds"] = feeds
+        config_store.save(data)
+        console.print(f"  Added feed: {name} -> {url} (saved to config.yaml)")
+    except Exception:
+        logger.debug("failed to save custom feed", exc_info=True)
+        console.print("  Failed to save feed.")
+
+
+def _remove_custom_feed(name: str, session: SessionState | None = None) -> None:
+    """Remove a custom RSS feed from config.yaml."""
+    if session is None:
+        console.print("  Session required.")
+        return
+    try:
+        config_store = session._get_config_store()
+        data = config_store.load()
+        feeds = data.get("news_feeds", [])
+        if not isinstance(feeds, list):
+            console.print("  No custom feeds configured.")
+            return
+        new_feeds = [f for f in feeds if not (isinstance(f, dict) and f.get("name") == name)]
+        if len(new_feeds) == len(feeds):
+            console.print(f"  Feed '{name}' not found.")
+            return
+        data["news_feeds"] = new_feeds
+        config_store.save(data)
+        console.print(f"  Removed feed: {name}")
+    except Exception:
+        logger.debug("failed to remove custom feed", exc_info=True)
+        console.print("  Failed to remove feed.")
+
+
+def _refresh(session: SessionState | None = None) -> None:
+    """Force re-fetch bypassing 24h cache."""
+    if session is None:
+        console.print("  Session required.")
+        return
+    # Clear the news fetch cache by removing the _news_fetch reference
+    existing = getattr(session, "_news_fetch", None)
+    if existing is not None and existing.is_running:
+        console.print("  Fetch already in progress.")
+        return
+    # Delete cached articles to force fresh fetch
+    store = ArticleStore(db_path=_DEFAULT_DB)
+    store.cleanup_old(days=0)  # delete all unsaved
+    session._news_fetch = None  # type: ignore[attr-defined]
+    console.print("  Cache cleared. Run 'news <topic>' to fetch fresh.")
+
+
+def _cleanup() -> None:
+    """Delete unsaved articles older than 30 days."""
+    store = ArticleStore(db_path=_DEFAULT_DB)
+    count = store.cleanup_old(days=30)
+    console.print(f"  Cleaned up {count} old articles.")

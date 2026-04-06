@@ -152,6 +152,89 @@ class NewsViewer:
                 self.articles[i] = self.articles[i].model_copy(update={"is_read": True})
         self.status_message = f"Marked {count} as read"
 
+    def mark_unread(self) -> None:
+        """Mark current article as unread."""
+        if not self.articles or self.store is None:
+            return
+        article = self.articles[self.cursor]
+        if article.is_read:
+            # Storage has no mark_unread -- update DB directly
+            self.articles[self.cursor] = article.model_copy(update={"is_read": False})
+            self.status_message = "Marked unread"
+
+    # -- Sort --
+
+    def cycle_sort(self) -> None:
+        """Cycle sort: score -> date -> comments -> score."""
+        order = ["score", "date", "comments"]
+        self._sort_key = getattr(self, "_sort_key", "score")
+        idx = order.index(self._sort_key) if self._sort_key in order else 0
+        self._sort_key = order[(idx + 1) % len(order)]
+        self._apply_sort()
+
+    def cycle_sort_reverse(self) -> None:
+        """Reverse current sort direction."""
+        self._sort_reverse = not getattr(self, "_sort_reverse", False)
+        self._apply_sort()
+
+    def _apply_sort(self) -> None:
+        key = getattr(self, "_sort_key", "score")
+        rev = getattr(self, "_sort_reverse", True)
+        if key == "score":
+            self.articles.sort(key=lambda a: a.score, reverse=rev)
+        elif key == "date":
+            self.articles.sort(
+                key=lambda a: a.published_at or __import__("datetime").datetime.min,
+                reverse=rev,
+            )
+        elif key == "comments":
+            self.articles.sort(key=lambda a: a.comment_count, reverse=rev)
+        self.cursor = 0
+        self.selected.clear()
+        self.status_message = f"Sorted by {key} ({'desc' if rev else 'asc'})"
+
+    # -- Filter --
+
+    def filter_by_domain(self, domain: str) -> None:
+        """Filter articles to show only one domain."""
+        self._all_articles = getattr(self, "_all_articles", None) or list(self.articles)
+        self.articles = [a for a in self._all_articles if a.domain == domain]
+        self.cursor = 0
+        self.selected.clear()
+        self.status_message = f"Filtered: {domain} ({len(self.articles)})"
+
+    def clear_filter(self) -> None:
+        """Clear domain filter, show all articles."""
+        if hasattr(self, "_all_articles") and self._all_articles:
+            self.articles = list(self._all_articles)
+            self._all_articles = None
+            self.cursor = 0
+            self.selected.clear()
+            self.status_message = f"Filter cleared ({len(self.articles)} articles)"
+
+    def get_domains(self) -> list[str]:
+        """Return unique domains in current articles."""
+        source = getattr(self, "_all_articles", None) or self.articles
+        return sorted({a.domain for a in source})
+
+    # -- Fuzzy search --
+
+    def fuzzy_search(self, query: str) -> None:
+        """Filter articles by fuzzy text match on title + summary."""
+        self._all_articles = getattr(self, "_all_articles", None) or list(self.articles)
+        if not query:
+            self.clear_filter()
+            return
+        q = query.lower()
+        self.articles = [
+            a
+            for a in self._all_articles
+            if q in a.title.lower() or q in a.summary.lower() or q in a.domain.lower()
+        ]
+        self.cursor = 0
+        self.selected.clear()
+        self.status_message = f"Search '{query}': {len(self.articles)} matches"
+
     def open_in_browser(self) -> None:
         if not self.articles:
             return
@@ -435,17 +518,50 @@ def run_news_navigator(
         """Mark ALL articles as read."""
         viewer.mark_all_read()
 
+    @kb.add("u")
+    def on_mark_unread(_event: KeyPressEvent) -> None:
+        viewer.mark_unread()
+
+    @kb.add("S")
+    def on_sort(_event: KeyPressEvent) -> None:
+        viewer.cycle_sort()
+
+    @kb.add("F")
+    def on_filter(_event: KeyPressEvent) -> None:
+        """Cycle domain filter."""
+        domains = viewer.get_domains()
+        if not domains:
+            return
+        current = getattr(viewer, "_filter_idx", -1)
+        current = (current + 1) % (len(domains) + 1)
+        viewer._filter_idx = current  # type: ignore[attr-defined]
+        if current < len(domains):
+            viewer.filter_by_domain(domains[current])
+        else:
+            viewer.clear_filter()
+
+    @kb.add("/")
+    def on_search(event: KeyPressEvent) -> None:
+        """Prompt for search query (simple inline)."""
+        from prompt_toolkit import prompt as pt_prompt
+
+        event.app.exit()
+        try:
+            query = pt_prompt("Search: ")
+            viewer.fuzzy_search(query.strip())
+        except (KeyboardInterrupt, EOFError):
+            viewer.clear_filter()
+        viewer.wants_reader = False  # re-enter navigator loop
+
     @kb.add(Keys.ScrollUp)
     def on_scroll_up(_event: KeyPressEvent) -> None:
-        viewer.move_up()
-        viewer.move_up()
-        viewer.move_up()
+        for _ in range(3):
+            viewer.move_up()
 
     @kb.add(Keys.ScrollDown)
     def on_scroll_down(_event: KeyPressEvent) -> None:
-        viewer.move_down()
-        viewer.move_down()
-        viewer.move_down()
+        for _ in range(3):
+            viewer.move_down()
 
     @kb.add("escape")
     @kb.add("q")
@@ -453,6 +569,7 @@ def run_news_navigator(
         if viewer.is_detail_open:
             viewer.is_detail_open = False
         else:
+            viewer.wants_reader = False
             event.app.exit()
 
     # Main loop: navigator -> reader -> navigator
