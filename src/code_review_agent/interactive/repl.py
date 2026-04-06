@@ -796,6 +796,11 @@ def _run_repl_loop(settings: Settings) -> None:
 
     register_shutdown(session)
 
+    # Initialize middleware chain
+    from code_review_agent.interactive.middleware import build_default_chain
+
+    session._middleware = build_default_chain()  # type: ignore[attr-defined]
+
     completer = build_static_completer()
 
     prompt_str = settings.interactive_prompt
@@ -990,8 +995,17 @@ def _dispatch(text: str, session: SessionState) -> None:
         )
         return
 
+    # Middleware: pre-command hooks
+    middleware = getattr(session, "_middleware", None)
+    if middleware is not None and not middleware.run_pre(command, args, session):
+        return
+
     try:
         handler(args, session)
     except Exception as exc:
         print_error(classify_exception(exc, context=command), console=console)
         logger.debug("command failed", command=command, error=str(exc), exc_info=True)
+
+    # Middleware: post-command hooks
+    if middleware is not None:
+        middleware.run_post(command, args, session)

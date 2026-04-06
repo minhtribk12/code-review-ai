@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.1.14] - 2026-04-06
+## [0.1.14] - 2026-04-06 (Phase 8: DeerFlow Patterns)
 
 ### Added
 
@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **News commands**: `news <topic>` multi-source brief, `news 30days <topic>` deep research, `news add/remove` custom feeds (persisted to config.yaml), `news refresh` (clear cache), `news cleanup` (delete old articles), `news stats` (weekly summary + cache size).
 - **Source diversity**: interleave_sources() guarantees min 3 items from each source in results.
 - **Depth profiles**: quick (15s), default (30s), deep (60s) per-source timeouts.
+- **Middleware chain**: pre/post command hooks in REPL dispatch (HookMiddleware, UsageMiddleware, NewsCleanupMiddleware).
+- **Persistent memory**: SQLite fact store with LLM extraction, confidence decay, `<memory>` tag injection into agent prompts.
+- **Review skills**: 4 built-in (strict-security, api-design, performance-deep-dive, test-quality), SKILL.md format, `<skills>` tag injection.
+- **Pre-finding guardrails**: confidence threshold filter, test file exclusion, suppressed title filter, wired into orchestrator.
+- **Context summarization**: compact previous findings for deepening rounds, saving tokens while preserving key info.
 - **24h cache**: skip pipeline when fresh articles exist in SQLite.
 - **Quality nudge**: source status (ok/failed) shown in navigator header.
 - **Reddit JSON content**: fetch selftext + threaded comments via .json API (fixes garbled reader).

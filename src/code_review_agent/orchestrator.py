@@ -268,6 +268,9 @@ class Orchestrator:
                 self._emit(ReviewEvent.VALIDATION_COMPLETED, "validation")
                 logger.exception("validation failed, returning unfiltered results")
 
+        # Guardrails: filter low-quality findings
+        all_agent_results = self._apply_guardrails(all_agent_results)
+
         validated_risk = self._validate_risk_level(
             synthesis.risk_level,
             all_agent_results,
@@ -855,6 +858,42 @@ class Orchestrator:
             )
 
         return filtered_results
+
+    def _apply_guardrails(
+        self,
+        agent_results: list[AgentResult],
+    ) -> list[AgentResult]:
+        """Apply pre-finding guardrails to filter noise."""
+        try:
+            from code_review_agent.guardrails import apply_guardrails
+
+            filtered_results: list[AgentResult] = []
+            total_removed = 0
+            for result in agent_results:
+                if not result.findings:
+                    filtered_results.append(result)
+                    continue
+                gr = apply_guardrails(result.findings)
+                total_removed += len(gr.filtered)
+                if len(gr.kept) != len(result.findings):
+                    filtered_results.append(
+                        AgentResult(
+                            agent_name=result.agent_name,
+                            findings=gr.kept,
+                            summary=result.summary,
+                            execution_time_seconds=result.execution_time_seconds,
+                            status=result.status,
+                            error_message=result.error_message,
+                        )
+                    )
+                else:
+                    filtered_results.append(result)
+            if total_removed > 0:
+                logger.info("guardrails_total_filtered", removed=total_removed)
+            return filtered_results
+        except Exception:
+            logger.debug("guardrails_skipped", exc_info=True)
+            return agent_results
 
     def _validate_risk_level(
         self,
