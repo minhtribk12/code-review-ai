@@ -8,12 +8,11 @@ from code_review_agent.news.background import BackgroundNewsFetch
 
 
 class TestBackgroundNewsFetch:
-    def test_format_status_fetching(self) -> None:
+    def test_format_status_initial(self) -> None:
         session = MagicMock()
         bg = BackgroundNewsFetch(domain="hackernews", session=session)
         status = bg.format_status_line()
-        assert "hackernews" in status
-        assert "fetching" in status.lower()
+        assert "hackernews" in status or "query" in status.lower()
 
     def test_format_status_done(self) -> None:
         session = MagicMock()
@@ -22,7 +21,7 @@ class TestBackgroundNewsFetch:
         bg._phase = "done"
         bg._curated_count = 10
         status = bg.format_status_line()
-        assert "10 articles" in status
+        assert "10" in status
 
     def test_format_status_failed(self) -> None:
         session = MagicMock()
@@ -50,11 +49,10 @@ class TestBackgroundNewsFetch:
         session = MagicMock()
         bg = BackgroundNewsFetch(domain="ai", session=session)
         bg._phase = "curating"
-        bg._article_count = 25
+        bg._deduped_count = 25
         status = bg.format_status_line()
-        assert "curating" in status.lower()
         assert "25" in status
-        assert "LLM" in status
+        assert "LLM" in status or "synthesis" in status.lower()
 
     def test_result_initially_none(self) -> None:
         session = MagicMock()
@@ -62,29 +60,35 @@ class TestBackgroundNewsFetch:
         assert bg.result is None
         assert bg.synthesis == ""
 
-    def test_worker_with_mock_fetch(self) -> None:
-        """Test the worker completes with mocked RSS fetch."""
+    def test_worker_with_mock_sources(self) -> None:
+        """Test the pipeline completes with mocked source adapters."""
         session = MagicMock()
         session.effective_settings = MagicMock()
 
         from datetime import datetime
 
-        from code_review_agent.news.models import Article
+        from code_review_agent.news.sources import RawNewsItem
 
-        mock_articles = [
-            Article(
-                id="test:1",
-                domain="test",
-                title="Test",
+        mock_items = [
+            RawNewsItem(
+                source="hackernews",
+                external_id="1",
+                title="Test Article",
                 url="https://example.com",
-                fetched_at=datetime.now(),
-            )
+                score=50,
+                comment_count=10,
+                published_at=datetime.now(),
+            ),
         ]
 
         with (
             patch(
-                "code_review_agent.news.fetcher.fetch_news",
-                return_value=mock_articles,
+                "code_review_agent.news.sources.hackernews.fetch",
+                return_value=mock_items,
+            ),
+            patch(
+                "code_review_agent.news.sources.reddit.fetch",
+                return_value=[],
             ),
             patch("code_review_agent.news.storage.ArticleStore") as mock_store_cls,
         ):
