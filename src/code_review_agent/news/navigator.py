@@ -44,14 +44,16 @@ class NewsViewer:
         self,
         articles: list[Article],
         store: ArticleStore | None = None,
+        source_status: dict[str, str] | None = None,
     ) -> None:
         self.articles = articles
         self.store = store
+        self.source_status = source_status or {}
         self.cursor: int = 0
         self.is_detail_open: bool = False
         self.status_message: str = ""
         self.wants_reader: bool = False
-        self.selected: set[int] = set()  # indices of multi-selected articles
+        self.selected: set[int] = set()
 
     def move_up(self) -> None:
         if self.cursor > 0:
@@ -193,6 +195,13 @@ def _render(viewer: NewsViewer) -> FormattedText:
     if viewer.status_message:
         lines.append(("green", f" {viewer.status_message}\n"))
         viewer.status_message = ""
+    # Source status (quality nudge)
+    if viewer.source_status:
+        parts = []
+        for src, status in sorted(viewer.source_status.items()):
+            icon = "+" if status.startswith("ok") else "-"
+            parts.append(f"{icon}{src}: {status}")
+        lines.append((_STYLE_MUTED, f" Sources: {' | '.join(parts)}\n"))
     lines.append(("", "\n"))
 
     if not viewer.articles:
@@ -348,9 +357,10 @@ def _render_detail(article: Article, tw: int) -> _Lines:
 def run_news_navigator(
     articles: list[Article],
     store: ArticleStore | None = None,
+    source_status: dict[str, str] | None = None,
 ) -> None:
     """Launch the full-screen news navigator."""
-    viewer = NewsViewer(articles, store=store)
+    viewer = NewsViewer(articles, store=store, source_status=source_status)
     kb = KeyBindings()
 
     @kb.add("up")

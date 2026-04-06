@@ -358,6 +358,9 @@ def score_all(
         )
         return scored[:3]
 
+    # Source-balanced interleaving: ensure diversity across sources
+    scored = interleave_sources(scored)
+
     logger.info(
         "scoring_complete",
         total_items=len(items),
@@ -366,3 +369,41 @@ def score_all(
     )
 
     return scored
+
+
+_MIN_PER_SOURCE = 3
+
+
+def interleave_sources(scored: list[ScoredItem]) -> list[ScoredItem]:
+    """Interleave top items from each source to ensure diversity.
+
+    Guarantees at least _MIN_PER_SOURCE items from each source appear
+    in the top results (if available). Prevents a single high-engagement
+    source from dominating the entire list.
+    """
+    if not scored:
+        return scored
+
+    sources: dict[str, list[ScoredItem]] = {}
+    for item in scored:
+        sources.setdefault(item.item.source, []).append(item)
+
+    if len(sources) <= 1:
+        return scored
+
+    # Take top _MIN_PER_SOURCE from each source
+    guaranteed: list[ScoredItem] = []
+    guaranteed_ids: set[str] = set()
+    for source_items in sources.values():
+        for item in source_items[:_MIN_PER_SOURCE]:
+            guaranteed.append(item)
+            guaranteed_ids.add(item.item.external_id)
+
+    # Fill remaining with score-sorted items not already included
+    remaining = [s for s in scored if s.item.external_id not in guaranteed_ids]
+
+    # Merge: guaranteed first (sorted by score), then remaining
+    guaranteed.sort(key=lambda s: s.overall, reverse=True)
+    result = guaranteed + remaining
+
+    return result

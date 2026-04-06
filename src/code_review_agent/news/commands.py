@@ -80,7 +80,13 @@ def cmd_read_news(args: list[str], session: SessionState) -> None:
         console.print("  No articles found. Fetch some first: news ai")
         return
 
-    run_news_navigator(articles, store=store)
+    # Pass source status from last fetch if available
+    source_status: dict[str, str] | None = None
+    news_bg = getattr(session, "_news_fetch", None)
+    if news_bg is not None and news_bg.is_done:
+        source_status = news_bg.source_status
+
+    run_news_navigator(articles, store=store, source_status=source_status)
 
 
 def _fetch_topic(
@@ -110,7 +116,7 @@ def _fetch_topic(
 
     from code_review_agent.news.background import BackgroundNewsFetch
 
-    bg = BackgroundNewsFetch(domain=topic, session=session)
+    bg = BackgroundNewsFetch(domain=topic, session=session, depth=depth)
 
     session._news_fetch = bg  # type: ignore[attr-defined]
 
