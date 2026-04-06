@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.14] - 2026-04-06
+
+### Added
+
+- **News intelligence pipeline**: multi-source fetching (HN Algolia + Reddit JSON + DuckDuckGo Web), composite scoring (token-overlap relevance + recency + engagement), trigram/token Jaccard deduplication with cross-source convergence detection, LLM synthesis on pre-scored data.
+- **Full-screen article reader**: fetch content on demand, rich text rendering (headings, code blocks, blockquotes), scroll (j/k/d/u/g/G), progress bar, page indicator, reading time, save/resume position, next/prev article navigation.
+- **Enhanced news navigator**: multi-select (Space), batch delete (d/D), batch mark-read (R/A), sort cycling (S: score/date/comments), fuzzy search (/), domain filter (F), mark unread (u).
+- **News commands**: `news <topic>` multi-source brief, `news 30days <topic>` deep research, `news add/remove` custom feeds (persisted to config.yaml), `news refresh` (clear cache), `news cleanup` (delete old articles), `news stats` (weekly summary + cache size).
+- **Source diversity**: interleave_sources() guarantees min 3 items from each source in results.
+- **Depth profiles**: quick (15s), default (30s), deep (60s) per-source timeouts.
+- **24h cache**: skip pipeline when fresh articles exist in SQLite.
+- **Quality nudge**: source status (ok/failed) shown in navigator header.
+- **Reddit JSON content**: fetch selftext + threaded comments via .json API (fixes garbled reader).
+- **HN threaded comments**: fetch + render nested discussion with indentation via Algolia items API.
+- **News tab in Textual TUI**: shows unread count, recent articles, and usage hints.
+- **Content validation**: is_valid_content() rejects garbled binary, re-fetches on invalid cache.
+- **HTML entity decoding**: html.unescape() on all Reddit/HN text fields.
+
+### Fixed
+
+- "Failed to save settings" on exit was a false alarm (0 overrides treated as failure).
+- `scroll-up`/`scroll-down` key bindings now use `Keys.ScrollUp`/`Keys.ScrollDown`.
+- `news 30days` without topic shows usage help instead of searching literal "30days".
+
 ## [0.1.13] - 2026-04-03
 
 ### Added

@@ -21,6 +21,7 @@ from code_review_agent.interactive.tabs.config_tab import ConfigTab
 from code_review_agent.interactive.tabs.findings_tab import FindingsTab
 from code_review_agent.interactive.tabs.git_tab import GitTab
 from code_review_agent.interactive.tabs.more_tab import MoreTab
+from code_review_agent.interactive.tabs.news_tab import NewsTab
 from code_review_agent.interactive.tabs.pr_tab import PrTab
 from code_review_agent.interactive.tabs.repo_tab import RepoTab
 from code_review_agent.interactive.tabs.usage_tab import UsageTab
@@ -67,7 +68,8 @@ class CodeReviewTUI(App[None]):
         Binding("4", "switch_tab('tab-git')", "Git", show=True),
         Binding("5", "switch_tab('tab-config')", "Config", show=True),
         Binding("6", "switch_tab('tab-usage')", "Usage", show=True),
-        Binding("7", "switch_tab('tab-more')", "More", show=True),
+        Binding("7", "switch_tab('tab-news')", "News", show=True),
+        Binding("8", "switch_tab('tab-more')", "More", show=True),
         Binding("r", "refresh_tab", "Refresh", show=True),
         Binding("e", "edit_config", "Edit Config", show=False),
         Binding("enter", "activate_item", "Select", show=False),
@@ -93,7 +95,9 @@ class CodeReviewTUI(App[None]):
                 yield ConfigTab(self._session)
             with TabPane("6:Usage", id="tab-usage"):
                 yield UsageTab(self._session)
-            with TabPane("7:More", id="tab-more"):
+            with TabPane("7:News", id="tab-news"):
+                yield NewsTab(self._session)
+            with TabPane("8:More", id="tab-more"):
                 yield MoreTab(self._session)
         yield Footer()
 
