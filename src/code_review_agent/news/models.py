@@ -37,6 +37,8 @@ class Article(BaseModel, frozen=True):
     is_read: bool = False
     is_saved: bool = False
     read_position: float = 0.0
+    key_takeaways: str = ""
+    structured_brief: str = ""
 
     @property
     def priority(self) -> ArticlePriority:
