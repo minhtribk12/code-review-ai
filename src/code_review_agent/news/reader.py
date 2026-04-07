@@ -54,19 +54,26 @@ class ArticleReader:
         self._fetch_content()
 
     def _fetch_content(self) -> None:
-        """Fetch and cache article content."""
+        """Fetch content. Uses structured brief if cached, else raw content."""
         from code_review_agent.news.content import is_valid_content
 
         a = self.article
 
-        # Use cached content if valid
+        # Priority 1: Use cached structured brief
+        if a.structured_brief:
+            self.content_lines = a.structured_brief.splitlines()
+            self.is_loading = False
+            self._restore_position()
+            return
+
+        # Priority 2: Use cached raw content
         if a.content_text and is_valid_content(a.content_text):
             self.content_lines = a.content_text.splitlines()
             self.is_loading = False
             self._restore_position()
             return
 
-        # Cached content is garbled or missing -- fetch fresh
+        # Priority 3: Fetch fresh content
         try:
             from code_review_agent.news.content import fetch_article_content
 
@@ -84,6 +91,37 @@ class ArticleReader:
             self._use_fallback()
         self.is_loading = False
         self._restore_position()
+
+    def _generate_brief(self, raw_content: str) -> str:
+        """Generate structured brief via LLM. Returns empty on failure."""
+        try:
+            from code_review_agent.config import Settings
+            from code_review_agent.llm_client import LLMClient
+            from code_review_agent.news.summarizer import (
+                fallback_brief,
+                generate_structured_brief,
+            )
+
+            settings = Settings()
+            llm = LLMClient(settings)
+            brief = generate_structured_brief(raw_content, llm)
+            if brief:
+                # Cache the brief
+                if self.store:
+                    self.store.update_structured_brief(self.article.id, brief)
+                self.article = self.article.model_copy(
+                    update={"structured_brief": brief},
+                )
+                return brief
+        except Exception:  # noqa: S110
+            pass
+        # Fallback: basic paragraphing
+        try:
+            from code_review_agent.news.summarizer import fallback_brief
+
+            return fallback_brief(raw_content)
+        except Exception:
+            return ""
 
     def _use_fallback(self) -> None:
         lines = (self.article.summary or "").splitlines()
@@ -300,6 +338,16 @@ def run_article_reader(
     @kb.add(Keys.ScrollDown)
     def _sd(_e: KeyPressEvent) -> None:
         reader.scroll_down(3)
+
+    @kb.add("B")
+    def _gen_brief(_e: KeyPressEvent) -> None:
+        """Generate structured brief via LLM."""
+        brief = reader._generate_brief(
+            reader.article.content_text or reader.article.summary or "",
+        )
+        if brief:
+            reader.content_lines = brief.splitlines()
+            reader.scroll_offset = 0
 
     @kb.add("q")
     @kb.add("escape")

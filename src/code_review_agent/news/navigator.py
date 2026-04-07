@@ -65,6 +65,9 @@ class NewsViewer:
 
     def toggle_detail(self) -> None:
         self.is_detail_open = not self.is_detail_open
+        # Generate takeaways on first detail open (if not cached)
+        if self.is_detail_open:
+            self._ensure_takeaways()
 
     def toggle_select(self) -> None:
         """Toggle multi-select on current article (Space key)."""
@@ -235,6 +238,50 @@ class NewsViewer:
         self.selected.clear()
         self.status_message = f"Search '{query}': {len(self.articles)} matches"
 
+    def _ensure_takeaways(self) -> None:
+        """Generate takeaways for current article if not cached."""
+        if not self.articles:
+            return
+        article = self.articles[self.cursor]
+        if article.key_takeaways:
+            return  # already cached
+
+        content = article.content_text or article.summary
+        if not content:
+            return
+
+        try:
+            from code_review_agent.news.summarizer import (
+                extract_takeaways,
+                fallback_takeaways,
+                format_takeaways,
+            )
+
+            # Try LLM extraction
+            try:
+                from code_review_agent.config import Settings
+                from code_review_agent.llm_client import LLMClient
+
+                settings = Settings()
+                llm = LLMClient(settings)
+                takeaways = extract_takeaways(content, llm)
+            except Exception:
+                takeaways = []
+
+            # Fallback to first sentences
+            if not takeaways:
+                takeaways = fallback_takeaways(content)
+
+            if takeaways:
+                formatted = format_takeaways(takeaways)
+                self.articles[self.cursor] = article.model_copy(
+                    update={"key_takeaways": formatted},
+                )
+                if self.store:
+                    self.store.update_takeaways(article.id, formatted)
+        except Exception:  # noqa: S110
+            pass
+
     def open_in_browser(self) -> None:
         if not self.articles:
             return
@@ -383,7 +430,7 @@ def _render(viewer: NewsViewer) -> FormattedText:
 
 
 def _render_detail(article: Article, tw: int) -> _Lines:
-    """Enhanced detail panel: summary, comments, convergence."""
+    """Enhanced detail panel with key takeaways."""
     lines: _Lines = []
     sep = "=" * min(tw - 6, 70)
     wrap_w = max(40, tw - 10)
@@ -408,16 +455,24 @@ def _render_detail(article: Article, tw: int) -> _Lines:
     if article.tags:
         lines.append((_STYLE_MUTED, f"   Tags: {', '.join(article.tags)}\n"))
 
-    # Summary section
-    text = article.summary or article.content_text
-    if text:
+    # Key takeaways (LLM-generated, cached)
+    if article.key_takeaways:
         lines.append(("", "\n"))
-        lines.append(("bold underline", "   SUMMARY\n"))
-        # Split on pipe delimiter from pipeline enrichment
-        summary = text.split(" | Top comment:")[0] if " | Top comment:" in text else text
-        for line in summary.splitlines()[:6]:
-            for w in textwrap.wrap(line, width=wrap_w) or [""]:
-                lines.append(("", f"   {w}\n"))
+        lines.append(("bold underline", "   KEY TAKEAWAYS\n"))
+        for bullet in article.key_takeaways.splitlines():
+            if bullet.strip():
+                for w in textwrap.wrap(bullet.strip(), width=wrap_w) or [""]:
+                    lines.append(("", f"   {w}\n"))
+    else:
+        # Fallback: show summary
+        text = article.summary or article.content_text
+        if text:
+            lines.append(("", "\n"))
+            lines.append(("bold underline", "   SUMMARY\n"))
+            summary = text.split(" | Top comment:")[0] if " | Top comment:" in text else text
+            for line in summary.splitlines()[:5]:
+                for w in textwrap.wrap(line, width=wrap_w) or [""]:
+                    lines.append(("", f"   {w}\n"))
 
     # Top community comment
     top_comment = ""
@@ -429,10 +484,10 @@ def _render_detail(article: Article, tw: int) -> _Lines:
         for w in textwrap.wrap(f'"{top_comment}"', width=wrap_w) or [""]:
             lines.append(("italic", f"   {w}\n"))
 
-    # Source
+    # Source + actions
     lines.append(("", "\n"))
     lines.append((_STYLE_ACCENT, f"   Source: {article.url}\n"))
-    lines.append((_STYLE_MUTED, "   [r] read full | [o] browser | [s] save | [n] next\n"))
+    lines.append((_STYLE_MUTED, "   [r] read structured brief | [o] browser | [s] save\n"))
 
     return lines
 

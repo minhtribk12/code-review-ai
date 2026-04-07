@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS articles (
     content_text TEXT DEFAULT '',
     is_read INTEGER DEFAULT 0,
     is_saved INTEGER DEFAULT 0,
-    read_position REAL DEFAULT 0.0
+    read_position REAL DEFAULT 0.0,
+    key_takeaways TEXT DEFAULT '',
+    structured_brief TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_articles_domain ON articles(domain);
 CREATE INDEX IF NOT EXISTS idx_articles_saved ON articles(is_saved);
@@ -56,6 +58,16 @@ class ArticleStore:
     def _init_schema(self) -> None:
         with self._get_connection() as conn:
             conn.executescript(_SCHEMA)
+            # Migrate: add columns if missing (existing DBs)
+            self._migrate_add_column(conn, "key_takeaways", "TEXT DEFAULT ''")
+            self._migrate_add_column(conn, "structured_brief", "TEXT DEFAULT ''")
+
+    @staticmethod
+    def _migrate_add_column(conn: sqlite3.Connection, col: str, col_type: str) -> None:
+        try:
+            conn.execute(f"SELECT {col} FROM articles LIMIT 1")  # noqa: S608
+        except sqlite3.OperationalError:
+            conn.execute(f"ALTER TABLE articles ADD COLUMN {col} {col_type}")
 
     def save_articles(self, articles: list[Article]) -> int:
         """Upsert articles. Returns count of inserted/updated."""
@@ -139,6 +151,22 @@ class ArticleStore:
             conn.execute(
                 "UPDATE articles SET content_html = ?, content_text = ? WHERE id = ?",
                 (html, text, article_id),
+            )
+
+    def update_takeaways(self, article_id: str, takeaways: str) -> None:
+        """Cache extracted key takeaways for an article."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE articles SET key_takeaways = ? WHERE id = ?",
+                (takeaways, article_id),
+            )
+
+    def update_structured_brief(self, article_id: str, brief: str) -> None:
+        """Cache the LLM-structured reading brief for an article."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE articles SET structured_brief = ? WHERE id = ?",
+                (brief, article_id),
             )
 
     def delete_article(self, article_id: str) -> None:
@@ -280,4 +308,6 @@ class ArticleStore:
             is_read=bool(row["is_read"]),
             is_saved=bool(row["is_saved"]),
             read_position=row["read_position"],
+            key_takeaways=row["key_takeaways"] or "",
+            structured_brief=row["structured_brief"] or "",
         )
